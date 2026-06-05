@@ -1,2 +1,2 @@
-export type { ScannedFile, ScanOptions } from './scanner';
+export type { ScannedFile, ScanOptions, RawLink } from './scanner';
 export { scan } from './scanner';
