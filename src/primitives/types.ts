@@ -1,3 +1,20 @@
+/**
+ * The KCD role of an artifact — determines which context dock it belongs to in the UI.
+ * Lens is composite (Know + Care + Do); all others are either informational or procedural.
+ */
+export type KCDRole = 'know' | 'do' | 'lens';
+
+/**
+ * A single issue returned by KCDPrimitive.typeCheck().
+ * Non-throwing equivalent of the constructor validation errors.
+ */
+export interface TypeCheckIssue {
+	severity: 'error' | 'warn';
+	message: string;
+	field?: string;
+	section?: string;
+}
+
 export type ArtifactType =
 	| 'lens'
 	| 'plan'
@@ -5,6 +22,7 @@ export type ArtifactType =
 	| 'generator'
 	| 'analyzer'
 	| 'pipeline'
+	| 'utility'
 	| 'habit'
 	| 'contract'
 	| 'template'
@@ -45,6 +63,15 @@ export interface SerializedArtifact {
 	sections: Record<string, string>;
 	body: string;
 	links: LinkEntry[];
+}
+
+/**
+ * The wire form of a dredged lens: the lens's own SerializedArtifact plus its dredged
+ * children (NOT the lens itself), each serialized. Crosses the bridge whole; the receiver
+ * rebuilds it with LensObject.fromSerialized, which recurses each child's own hydrator.
+ */
+export interface SerializedLens extends SerializedArtifact {
+	nodes: SerializedArtifact[];
 }
 
 /** Flat map of path → artifact. Only dirty objects contribute. Atomic unit for kcd_save. */
