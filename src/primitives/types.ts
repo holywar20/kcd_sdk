@@ -27,6 +27,7 @@ export type ArtifactType =
 	| 'contract'
 	| 'template'
 	| 'framework'
+	| 'index'
 	| 'unknown';
 
 export type LinkType = 'internal' | 'external' | 'anchor';
@@ -63,6 +64,9 @@ export interface SerializedArtifact {
 	sections: Record<string, string>;
 	body: string;
 	links: LinkEntry[];
+	/** Tuned state: whether this artifact contributes to the outbound request.
+	 *  Absent = included (the default). Runtime tuning — never written to disk markdown. */
+	included?: boolean;
 }
 
 /**
@@ -72,6 +76,11 @@ export interface SerializedArtifact {
  */
 export interface SerializedLens extends SerializedArtifact {
 	nodes: SerializedArtifact[];
+	/** Dynamically injected Know context — references/plans dropped onto the agent at
+	 *  session time (the GUI equivalent of pasting context into a chat window). Rides
+	 *  the wire and contributes as always-loaded Know; never written to disk markdown.
+	 *  Absent on a lens that has had nothing injected. */
+	injected?: SerializedArtifact[];
 }
 
 /** Flat map of path → artifact. Only dirty objects contribute. Atomic unit for kcd_save. */

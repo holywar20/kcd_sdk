@@ -23,11 +23,16 @@ export interface ServerManifest {
 	transport:    'stdio';                // SSE/HTTP reserved for the future
 	credentials:  string[];               // vault key names injected as env
 	env?:         Record<string, string>;
+	doc?:         string;                 // the server's own doc-block — its account of what it is, the recursive parent of its tools' docs
+
+
 
 	// ── Lifecycle (system-stamped) ──────────────────────────────────────────────
 	installed:     boolean;               // has been installed into the active app
 	exposed:       boolean;               // is the tool surface exposed to the model's context (the user toggle — NOT a power switch)
-	promoted_at?:  string;                // ISO 8601 — set at promotion; the drift signal
-	installed_at?: string;                // ISO 8601 — set at installation
-	source_repo?:  string;                // breadcrumb back to the draft folder
+	promoted_at?:     string;             // ISO 8601 — set at promotion; the drift signal
+	build?:           string;             // content stamp: <promoted timestamp>+<sha8 of dist/index.js> — changes whenever the bundle does
+	installed_at?:    string;             // ISO 8601 — set at installation
+	source_repo?:     string;             // breadcrumb back to the draft folder
+	bundled_kcd_sdk?: string;             // kcd_sdk version inlined at promote — compared against main's for drift
 }

@@ -3,8 +3,9 @@ import { KCDValidationError } from '../errors';
 import { KCDPrimitive } from './KCDPrimitive';
 import type { SerializedArtifact } from '../types';
 
-/** Sections required on every plan. Edit this list to add or remove enforcement. */
-const REQUIRED_SECTIONS = ['Goal', 'Approach', 'Phases'] as const;
+/** Statuses that mark a plan as still live — these also require a Phases section.
+ *  A completed/retired plan is a record, so it needs only its Goal. (L2) */
+const LIVE_STATUSES = ['draft', 'active', 'paused'];
 
 /**
  * A plan is a Know artifact: a digest of ongoing work, status, and intent.
@@ -32,10 +33,7 @@ export class PlanObject extends KCDPrimitive {
 
 	static fromSerialized( json: SerializedArtifact ): PlanObject {
 		const obj = new PlanObject( json.path );
-		obj.frontmatter = { ...json.frontmatter };
-		obj.sections   = { ...json.sections };
-		obj.body       = json.body;
-		obj.links      = [ ...json.links ];
+		obj.hydrateFrom( json );
 		return obj;
 	}
 
@@ -54,16 +52,14 @@ export class PlanObject extends KCDPrimitive {
 		}
 	}
 
-	protected validateStructure(): void {
-		for ( const section of REQUIRED_SECTIONS ) {
-			if ( !this.sections[section] ) {
-				throw new KCDValidationError(
-					`PlanObject: required section "${section}" is missing`,
-					this.path, `## ${section} section`, null,
-					{ section }
-				);
-			}
-		}
+	/**
+	 * Goal is always required; Phases is required only while the plan is live (L2). `Approach`
+	 * is recommended but no longer enforced — a plan can describe its work without a fixed
+	 * approach section. The base loop reads this list.
+	 */
+	protected requiredSections(): string[] {
+		const live = LIVE_STATUSES.includes( String( this.frontmatter['status'] ?? '' ) );
+		return live ? ['Goal', 'Phases'] : ['Goal'];
 	}
 
 	// getRole: inherits 'know' from KCDPrimitive — plans are informational, not procedural.

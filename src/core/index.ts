@@ -10,3 +10,7 @@
  * side; capabilities are attached at the receiving facade, never imported into the object.
  */
 export * from '../primitives';
+export * from '../agent';
+export * from './FileTypes';
+export * from './TextTypes';
+export * from './Glob';

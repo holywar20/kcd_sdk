@@ -46,7 +46,11 @@ export abstract class StarmindServer {
 	 */
 	protected registerTool( def: ToolDefinition & { spec?: TestSpec[] } ): void {
 		const { spec, ...tool } = def;
-		this.server.registerTool( tool );
+		// House convention: the first verify input doubles as the tool's inspector sample — the
+		// example you prove a tool with is the example a user sees prepopulated. An explicit
+		// `example` on the def wins; otherwise borrow the first spec's input.
+		const example = tool.example ?? spec?.[ 0 ]?.input;
+		this.server.registerTool( example ? { ...tool, example } : tool );
 		this.registrations.push( { def: tool, spec: spec ?? [] } );
 	}
 

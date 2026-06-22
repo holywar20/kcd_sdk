@@ -8,7 +8,8 @@
     "build": "tsc",
     "build:watch": "tsc --watch",
     "test": "vitest run",
-    "test:watch": "vitest"
+    "test:watch": "vitest",
+    "scan": "tsx scripts/scan.ts"
   },
   "dependencies": {
     "js-yaml": "^4.1.0"
@@ -17,6 +18,7 @@
     "typescript": "^5.4.0",
     "vitest": "^1.6.0",
     "@types/node": "^20.0.0",
-    "@types/js-yaml": "^4.0.9"
+    "@types/js-yaml": "^4.0.9",
+    "tsx": "^4.0.0"
   }
 }

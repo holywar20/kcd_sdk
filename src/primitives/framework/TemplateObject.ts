@@ -30,10 +30,7 @@ export class TemplateObject extends KCDPrimitive {
 
 	static fromSerialized( json: SerializedArtifact ): TemplateObject {
 		const obj = new TemplateObject( json.path );
-		obj.frontmatter = { ...json.frontmatter };
-		obj.sections   = { ...json.sections };
-		obj.body       = json.body;
-		obj.links      = [ ...json.links ];
+		obj.hydrateFrom( json );
 		return obj;
 	}
 

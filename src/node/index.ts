@@ -7,3 +7,5 @@ export * from '../core';
 export * from '../scanner';
 export * from '../server';
 export { fsReader, inferProjectRoot, loadLensFromDisk } from './io';
+export { Vault } from './Vault';
+export { SdkFileAccess, LIST_CAP, READ_CAP_BYTES, GLOB_CAP, GLOB_WALK_CAP, type FileWarn } from './SdkFileAccess';

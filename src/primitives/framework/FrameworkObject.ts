@@ -30,10 +30,7 @@ export class FrameworkObject extends KCDPrimitive {
 
 	static fromSerialized( json: SerializedArtifact ): FrameworkObject {
 		const obj = new FrameworkObject( json.path );
-		obj.frontmatter = { ...json.frontmatter };
-		obj.sections   = { ...json.sections };
-		obj.body       = json.body;
-		obj.links      = [ ...json.links ];
+		obj.hydrateFrom( json );
 		return obj;
 	}
 

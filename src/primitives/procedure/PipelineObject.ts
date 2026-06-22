@@ -3,9 +3,6 @@ import { KCDValidationError } from '../errors';
 import { KCDPrimitive } from '../framework/KCDPrimitive';
 import type { SerializedArtifact } from '../types';
 
-/** Sections required on every pipeline. Edit this list to add or remove enforcement. */
-const REQUIRED_SECTIONS = ['Stages'] as const;
-
 /**
  * A pipeline: an ordered sequence of stages that chains generators or analyzers.
  * Must declare `## Stages` — the ordered stage list.
@@ -32,10 +29,7 @@ export class PipelineObject extends KCDPrimitive {
 
 	static fromSerialized( json: SerializedArtifact ): PipelineObject {
 		const obj = new PipelineObject( json.path );
-		obj.frontmatter = { ...json.frontmatter };
-		obj.sections   = { ...json.sections };
-		obj.body       = json.body;
-		obj.links      = [ ...json.links ];
+		obj.hydrateFrom( json );
 		return obj;
 	}
 
@@ -57,19 +51,7 @@ export class PipelineObject extends KCDPrimitive {
 		}
 	}
 
-	protected validateStructure(): void {
-		for ( const section of REQUIRED_SECTIONS ) {
-			if ( !this.sections[section] ) {
-				throw new KCDValidationError(
-					`PipelineObject: required section "${section}" is missing`,
-					this.path,
-					`## ${section} section`,
-					null,
-					{ section }
-				);
-			}
-		}
-	}
+	protected requiredSections(): string[] { return ['Stages']; }
 }
 
 KCDPrimitive.register( 'pipeline', ( markdown, absPath ) => PipelineObject.parse( markdown, absPath ) );

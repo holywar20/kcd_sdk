@@ -1,7 +1,7 @@
 import * as path from 'path';
 import type { ScannedFile } from '../../scanner';
 import { KCDValidationError } from '../errors';
-import { KCDPrimitive, clampDepth, classifyHref } from './KCDPrimitive';
+import { KCDPrimitive, clampDepth, classifyHref, classifyRelPath } from './KCDPrimitive';
 import type { ArtifactType, KCDRole, PolicyEntry, ReaderFn, SerializedArtifact, SerializedLens } from '../types';
 
 const LENS_DEFAULT_DEPTH = 2;
@@ -18,6 +18,15 @@ export interface LensLoadOptions {
 	/** Required — core can't infer it (inferProjectRoot is node-side). Main passes its root. */
 	projectRoot: string;
 	depth?: number;
+	/**
+	 * Eager dredge: follow ALL internal Know links, not only the `always` ones.
+	 * This is the DISPLAY axis, orthogonal to `depth` (the recursion axis). The
+	 * extra (non-`always`) nodes enter the graph marked `setIncluded(false)`, so
+	 * they are inspectable but do NOT contribute to the assembled context —
+	 * `always` stays the auto-load gate, this only widens what the graph SHOWS.
+	 * Default false preserves context-assembly behavior (only `always` is loaded).
+	 */
+	eager?: boolean;
 	/** The injected disk reader. Main supplies fsReader; render never calls load(), so never sets it. */
 	read: ReaderFn;
 }
@@ -43,44 +52,26 @@ export class LensObject extends KCDPrimitive {
 		return path.resolve( projectRoot, href );
 	}
 
+	/** Absolute path → ArtifactType. A thin wrapper: relativize, then the one shared taxonomy. */
 	static classifyByPath( absPath: string, projectRoot: string, docRoot = LensObject.DEFAULT_DOC_ROOT ): ArtifactType {
-		const rel = path.relative( projectRoot, absPath ).replace( /\\/g, '/' );
-
-		if ( !rel.startsWith( docRoot + '/' ) ) return 'unknown';
-
-		// Index files are organisational metadata, not typed primitives — skip classification.
-		if ( path.basename( absPath ) === 'index.md' ) return 'unknown';
-
-		const sub = rel.slice( docRoot.length + 1 );
-
-		if ( sub.startsWith( 'lenses/' ) ) {
-			// Only the lens file itself and direct per-lens dirs are type lens.
-			// Anything nested deeper (context/, support docs) is reference material.
-			const parts = sub.split( '/' );
-			if ( parts.length <= 3 ) return 'lens';
-			return 'reference';
-		}
-		if ( sub.startsWith( 'plans_complete/' ) ) return 'plan';
-		if ( sub.startsWith( 'plans/' ) )          return 'plan';
-		if ( sub.startsWith( 'references/' ) )     return 'reference';
-		if ( sub.startsWith( 'generators/' ) )     return 'generator';
-		if ( sub.startsWith( 'analyzers/' ) )      return 'analyzer';
-		if ( sub.startsWith( 'pipelines/' ) )      return 'pipeline';
-		if ( sub.startsWith( 'utilities/' ) )      return 'utility';
-		if ( sub.startsWith( 'habits/' ) )         return 'habit';
-		if ( sub.startsWith( 'contracts/' ) )      return 'contract';
-		if ( sub.startsWith( 'kcd/templates/' ) )  return 'template';
-		if ( sub.startsWith( 'kcd/' ) )            return 'framework';
-
-		return 'unknown';
+		return classifyRelPath( path.relative( projectRoot, absPath ), docRoot );
 	}
 
 	// ── Spine state ───────────────────────────────────────────────────────────
 
 	protected policy: PolicyEntry[] = [];
 	protected nodes: KCDPrimitive[] = [];
+	/** Dynamically injected Know nodes — dropped onto the agent at session time (the
+	 *  GUI equivalent of pasting context into a chat window). NOT dredged from the lens
+	 *  markdown; kept apart from `nodes` so a re-dredge never clobbers them and so they
+	 *  serialize distinctly (they ride the wire but never reach disk). They contribute
+	 *  as always-loaded Know — see getNodes / addInjected. */
+	protected injected: KCDPrimitive[] = [];
 	protected projectRoot?: string;
 	protected dredgeDepth = LENS_DEFAULT_DEPTH;
+	/** When set, the dredge follows conditional (non-`always`) links too, marking
+	 *  them not-included. See LensLoadOptions.eager — the display-vs-context axis. */
+	protected eager = false;
 	/** Injected disk capability (Strategy). Default throws — main attaches a real reader at load(). */
 	protected read: ReaderFn = DISK_IS_MAIN_ONLY;
 
@@ -95,6 +86,7 @@ export class LensObject extends KCDPrimitive {
 		const lens = new LensObject( abs );
 		lens.projectRoot = opts.projectRoot;
 		lens.read        = opts.read;
+		lens.eager       = opts.eager ?? false;
 		lens.runInit( lens.read( abs ) );
 
 		const depth = clampDepth( opts.depth ?? lens.dredgeDepth );
@@ -122,20 +114,24 @@ export class LensObject extends KCDPrimitive {
 	 */
 	static fromSerialized( json: SerializedArtifact ): LensObject {
 		const obj = new LensObject( json.path );
-		obj.frontmatter = { ...json.frontmatter };
-		obj.sections    = { ...json.sections };
-		obj.body        = json.body;
-		obj.links       = [ ...json.links ];
-		obj.policy      = obj.parseKnowPolicy();
-		const children  = ( json as SerializedLens ).nodes ?? [];
-		obj.nodes       = children.map( ( n ) => KCDPrimitive.fromSerialized( n ) );
+		obj.hydrateFrom( json );
+		obj.policy     = obj.parseKnowPolicy();
+		const children = ( json as SerializedLens ).nodes ?? [];
+		obj.nodes      = children.map( ( n ) => KCDPrimitive.fromSerialized( n ) );
+		const injected = ( json as SerializedLens ).injected ?? [];
+		obj.injected   = injected.map( ( n ) => KCDPrimitive.fromSerialized( n ) );
 		return obj;
 	}
 
-	/** The wire form for crossing the bridge: this lens plus its dredged children (each serialized,
-	 *  children only — the lens isn't its own child). The receiver rebuilds via fromSerialized. */
+	/** The wire form for crossing the bridge: this lens plus its dredged children and any
+	 *  injected nodes (each serialized, children only — the lens isn't its own child). The
+	 *  receiver rebuilds via fromSerialized. */
 	serializeForWire(): SerializedLens {
-		return { ...this.serialize(), nodes: this.nodes.map( ( n ) => n.serialize() ) };
+		return {
+			...this.serialize(),
+			nodes:    this.nodes.map( ( n ) => n.serialize() ),
+			injected: this.injected.map( ( n ) => n.serialize() ),
+		};
 	}
 
 	// ── Dredge orchestration ──────────────────────────────────────────────────
@@ -145,7 +141,11 @@ export class LensObject extends KCDPrimitive {
 		if ( remaining <= 1 ) return out;
 
 		for ( const entry of node.getPolicy() ) {
-			if ( !entry.always || entry.type !== 'internal' ) continue;
+			if ( entry.type !== 'internal' ) continue;
+			// `always` gates context auto-loading. Eager mode also follows the
+			// conditional links — for display — but marks them not-included below,
+			// so the assembled context never widens past the `always` set.
+			if ( !entry.always && !this.eager ) continue;
 
 			const childAbs = LensObject.resolveHref( entry.href, this.projectRoot! );
 			if ( visited.has( childAbs ) ) continue;
@@ -158,6 +158,10 @@ export class LensObject extends KCDPrimitive {
 			} catch {
 				continue;
 			}
+
+			// Conditional (non-`always`) nodes are available-on-request: present in
+			// the graph for inspection, but excluded from the outbound context.
+			if ( !entry.always ) child.setIncluded( false );
 
 			out.push( ...this.dredgeFrom( child, remaining - 1, visited ) );
 		}
@@ -200,7 +204,26 @@ export class LensObject extends KCDPrimitive {
 	}
 
 	getPolicy(): PolicyEntry[]  { return [ ...this.policy ]; }
-	getNodes(): KCDPrimitive[]  { return [ ...this.nodes ];  }
+
+	/** The full Know graph: dredged children plus any session-injected nodes. The single
+	 *  percolation point — the spiral, the count, Composition, and contribute() all read
+	 *  through here, so injected context appears everywhere with no per-consumer wiring. */
+	getNodes(): KCDPrimitive[]  { return [ ...this.nodes, ...this.injected ]; }
+
+	/** The context contributors in order: the lens itself, then every node (dredged + injected). */
+	getContributors(): KCDPrimitive[] { return [ this, ...this.getNodes() ]; }
+
+	/**
+	 * Inject a Know node at session time — the GUI "drop context onto the agent" hook
+	 * (equivalent to pasting context into a chat window). The node joins the Know graph
+	 * as always-loaded context: it shows in the spiral/count and rides contribute(). Not
+	 * dredged, not written to disk — it lives only on the live object and its wire form.
+	 * Forces included on; a dropped item is an intent to load.
+	 */
+	addInjected( node: KCDPrimitive ): void {
+		node.setIncluded( true );
+		this.injected.push( node );
+	}
 
 	getRole(): KCDRole { return 'lens'; }
 
@@ -209,8 +232,7 @@ export class LensObject extends KCDPrimitive {
 	serializeForContext(): string {
 		if ( !this.projectRoot ) throw new Error( 'serializeForContext requires a loaded lens (no projectRoot)' );
 
-		// nodes is children-only now, so the lens itself leads the context list explicitly.
-		const list        = [ this as KCDPrimitive, ...this.nodes ];
+		const list        = this.getContributors();
 		const loadedPaths = new Set( list.map( n => n.getPath() ) );
 		const out         = list.map( n => n.toContextBlock() );
 
@@ -248,17 +270,7 @@ export class LensObject extends KCDPrimitive {
 		}
 	}
 
-	protected validateStructure(): void {
-		for ( const section of ['Know', 'Care', 'Do'] ) {
-			if ( !this.sections[section] ) {
-				throw new KCDValidationError(
-					`LensObject: required section "${section}" is missing`,
-					this.path, `## ${section} section`, null,
-					{ section }
-				);
-			}
-		}
-	}
+	protected requiredSections(): string[] { return ['Know', 'Care', 'Do']; }
 }
 
 KCDPrimitive.register( 'lens', ( markdown, absPath ) => LensObject.parse( markdown, absPath ) );

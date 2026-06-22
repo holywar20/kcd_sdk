@@ -3,9 +3,6 @@ import { KCDValidationError } from '../errors';
 import { KCDPrimitive } from '../framework/KCDPrimitive';
 import type { SerializedArtifact } from '../types';
 
-/** Sections required on every generator. Edit this list to add or remove enforcement. */
-const REQUIRED_SECTIONS = ['Do'] as const;
-
 /**
  * A generator: a mechanical, manifest-driven builder procedure.
  * Must declare `## Do` — the step-by-step execution procedure.
@@ -32,10 +29,7 @@ export class GeneratorObject extends KCDPrimitive {
 
 	static fromSerialized( json: SerializedArtifact ): GeneratorObject {
 		const obj = new GeneratorObject( json.path );
-		obj.frontmatter = { ...json.frontmatter };
-		obj.sections   = { ...json.sections };
-		obj.body       = json.body;
-		obj.links      = [ ...json.links ];
+		obj.hydrateFrom( json );
 		return obj;
 	}
 
@@ -57,19 +51,7 @@ export class GeneratorObject extends KCDPrimitive {
 		}
 	}
 
-	protected validateStructure(): void {
-		for ( const section of REQUIRED_SECTIONS ) {
-			if ( !this.sections[section] ) {
-				throw new KCDValidationError(
-					`GeneratorObject: required section "${section}" is missing`,
-					this.path,
-					`## ${section} section`,
-					null,
-					{ section }
-				);
-			}
-		}
-	}
+	protected requiredSections(): string[] { return ['Do']; }
 }
 
 KCDPrimitive.register( 'generator', ( markdown, absPath ) => GeneratorObject.parse( markdown, absPath ) );

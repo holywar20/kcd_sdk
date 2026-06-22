@@ -30,7 +30,7 @@ export function inferProjectRoot( startPath: string, docRoot = LensObject.DEFAUL
  * Dredge a lens from disk with the real fs reader injected — the node-side convenience so
  * main never hand-wires `fs` into LensObject.load. projectRoot is inferred if not given.
  */
-export function loadLensFromDisk( lensPath: string, opts?: { projectRoot?: string; depth?: number } ): LensObject {
+export function loadLensFromDisk( lensPath: string, opts?: { projectRoot?: string; depth?: number; eager?: boolean } ): LensObject {
 	const projectRoot = opts?.projectRoot ?? inferProjectRoot( lensPath );
-	return LensObject.load( lensPath, { projectRoot, depth: opts?.depth, read: fsReader } );
+	return LensObject.load( lensPath, { projectRoot, depth: opts?.depth, eager: opts?.eager, read: fsReader } );
 }

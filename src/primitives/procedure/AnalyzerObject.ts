@@ -3,9 +3,6 @@ import { KCDValidationError } from '../errors';
 import { KCDPrimitive } from '../framework/KCDPrimitive';
 import type { SerializedArtifact } from '../types';
 
-/** Sections required on every analyzer. Edit this list to add or remove enforcement. */
-const REQUIRED_SECTIONS = ['Do'] as const;
-
 /**
  * An analyzer: a judgment pass that reads broadly and writes a report.
  * Must declare `## Do` — the execution procedure.
@@ -32,10 +29,7 @@ export class AnalyzerObject extends KCDPrimitive {
 
 	static fromSerialized( json: SerializedArtifact ): AnalyzerObject {
 		const obj = new AnalyzerObject( json.path );
-		obj.frontmatter = { ...json.frontmatter };
-		obj.sections   = { ...json.sections };
-		obj.body       = json.body;
-		obj.links      = [ ...json.links ];
+		obj.hydrateFrom( json );
 		return obj;
 	}
 
@@ -57,19 +51,7 @@ export class AnalyzerObject extends KCDPrimitive {
 		}
 	}
 
-	protected validateStructure(): void {
-		for ( const section of REQUIRED_SECTIONS ) {
-			if ( !this.sections[section] ) {
-				throw new KCDValidationError(
-					`AnalyzerObject: required section "${section}" is missing`,
-					this.path,
-					`## ${section} section`,
-					null,
-					{ section }
-				);
-			}
-		}
-	}
+	protected requiredSections(): string[] { return ['Do']; }
 }
 
 KCDPrimitive.register( 'analyzer', ( markdown, absPath ) => AnalyzerObject.parse( markdown, absPath ) );

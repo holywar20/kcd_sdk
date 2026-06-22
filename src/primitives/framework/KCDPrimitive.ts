@@ -67,6 +67,10 @@ export class KCDPrimitive {
 	protected sections: Record<string, string>;
 	protected frontmatter: Record<string, unknown>;
 	protected isDirty: boolean;
+	/** Tuned state: whether this artifact contributes to the next outbound request.
+	 *  Runtime tuning, not document content — rides serialization so both process
+	 *  copies agree, but never reaches the markdown on disk. */
+	protected isIncluded = true;
 
 	protected constructor( path: string, type: ArtifactType ) {
 		this.path        = path;
@@ -111,14 +115,21 @@ export class KCDPrimitive {
 		return KCDPrimitive.hydrateBase( json );
 	}
 
-	/** The typeless hydration body — the fallback, and the base every subclass hydrator mirrors. */
+	/** The typeless hydration body — the fallback for types with no registered hydrator. */
 	static hydrateBase( json: SerializedArtifact ): KCDPrimitive {
 		const obj = new KCDPrimitive( json.path, json.type );
-		obj.frontmatter = { ...json.frontmatter };
-		obj.sections    = { ...json.sections };
-		obj.body        = json.body;
-		obj.links       = [ ...json.links ];
+		obj.hydrateFrom( json );
 		return obj;
+	}
+
+	/** Copy the common wire fields onto a freshly-constructed instance. Every subclass
+	 *  hydrator runs through here — a new serialized field lands once, not ten times. */
+	protected hydrateFrom( json: SerializedArtifact ): void {
+		this.frontmatter = { ...json.frontmatter };
+		this.sections    = { ...json.sections };
+		this.body        = json.body;
+		this.links       = [ ...json.links ];
+		this.isIncluded  = json.included ?? true;
 	}
 
 	static collectWrites( objects: KCDPrimitive[] ): WriteMap {
@@ -189,7 +200,24 @@ export class KCDPrimitive {
 		}
 	}
 
-	protected validateStructure(): void {}
+	/**
+	 * The H2 sections this artifact must declare. Subclasses override to demand structure;
+	 * the base requires none. `validateStructure` runs the same missing-section check for
+	 * every type from this one list — a type just names its sections, it never rewrites the loop.
+	 */
+	protected requiredSections(): string[] { return []; }
+
+	protected validateStructure(): void {
+		for ( const section of this.requiredSections() ) {
+			if ( !this.sections[section] ) {
+				throw new KCDValidationError(
+					`${this.type}: required section "${section}" is missing`,
+					this.path, `## ${section} section`, null,
+					{ section }
+				);
+			}
+		}
+	}
 
 	protected extractLinks(): void {
 		this.links = [];
@@ -269,6 +297,7 @@ export class KCDPrimitive {
 			sections:    { ...this.sections },
 			body:        this.body,
 			links:       [ ...this.links ],
+			included:    this.isIncluded,
 		};
 	}
 
@@ -276,7 +305,39 @@ export class KCDPrimitive {
 		return `# [${this.type}] ${this.path}\n\n${this.body.trim()}`;
 	}
 
+	// ── Contribution (tuned state) ───────────────────────────────────────────
+
+	/** This artifact's contribution to the outbound request, per its tuned state.
+	 *  The atom of the recursive context query — an excluded artifact contributes
+	 *  nothing; everything else renders its context block. */
+	contribute(): string {
+		return this.isIncluded ? this.toContextBlock() : '';
+	}
+
+	get included(): boolean { return this.isIncluded; }
+
+	setIncluded( on: boolean ): void { this.isIncluded = on; }
+
 	// ── Getters ──────────────────────────────────────────────────────────────
+
+	/** frontmatter.name if present, otherwise the filename stem. */
+	getName(): string {
+		const fmName = this.frontmatter['name'];
+		if ( typeof fmName === 'string' && fmName ) return fmName;
+		const stem = this.path.split( /[\\/]/ ).pop() ?? 'artifact';
+		return stem.replace( /\.md$/, '' );
+	}
+
+	/** Internal links as typed references — this artifact's outbound edges, classified
+	 *  by the same path taxonomy the dredge uses (hrefs are vault-root-relative). */
+	getBacklinks(): { name: string; type: ArtifactType }[] {
+		const out: { name: string; type: ArtifactType }[] = [];
+		for ( const link of this.links ) {
+			if ( link.type !== 'internal' ) continue;
+			out.push( { name: link.text || link.href, type: classifyRelPath( link.href ) } );
+		}
+		return out;
+	}
 
 	getPath(): string                          { return this.path; }
 	getType(): ArtifactType                    { return this.type; }
@@ -290,6 +351,47 @@ export function classifyHref( href: string ): LinkType {
 	if ( href.startsWith( '#' ) )                                         return 'anchor';
 	if ( href.startsWith( 'http://' ) || href.startsWith( 'https://' ) ) return 'external';
 	return 'internal';
+}
+
+/**
+ * The path taxonomy: a vault-root-relative path (`_Claude/...`) to its ArtifactType.
+ * One switch for every classifier — LensObject.classifyByPath wraps this for absolute
+ * paths; getBacklinks feeds it hrefs directly (link hrefs are vault-root-relative
+ * by project convention).
+ */
+export function classifyRelPath( rel: string, docRoot = '_Claude' ): ArtifactType {
+	const norm = rel.replace( /\\/g, '/' );
+
+	if ( !norm.startsWith( docRoot + '/' ) ) return 'unknown';
+
+	// Index files are first-class navigational primitives, regardless of which folder they sit in.
+	if ( norm.endsWith( '/index.md' ) ) return 'index';
+
+	const sub = norm.slice( docRoot.length + 1 );
+
+	// context/ holds support material for any parent (lens, analyzer, generator) — always reference.
+	if ( sub.includes( '/context/' ) ) return 'reference';
+
+	if ( sub.startsWith( 'lenses/' ) ) {
+		// Only the lens file itself and direct per-lens dirs are type lens.
+		// Anything nested deeper (context/, support docs) is reference material.
+		const parts = sub.split( '/' );
+		if ( parts.length <= 3 ) return 'lens';
+		return 'reference';
+	}
+	if ( sub.startsWith( 'plans_complete/' ) ) return 'plan';
+	if ( sub.startsWith( 'plans/' ) )          return 'plan';
+	if ( sub.startsWith( 'references/' ) )     return 'reference';
+	if ( sub.startsWith( 'generators/' ) )     return 'generator';
+	if ( sub.startsWith( 'analyzers/' ) )      return 'analyzer';
+	if ( sub.startsWith( 'pipelines/' ) )      return 'pipeline';
+	if ( sub.startsWith( 'utilities/' ) )      return 'utility';
+	if ( sub.startsWith( 'habits/' ) )         return 'habit';
+	if ( sub.startsWith( 'contracts/' ) )      return 'contract';
+	if ( sub.startsWith( 'kcd/templates/' ) )  return 'template';
+	if ( sub.startsWith( 'kcd/' ) )            return 'framework';
+
+	return 'unknown';
 }
 
 KCDPrimitive.setFallback( ( markdown, absPath, type ) => KCDPrimitive.createBase( markdown, absPath, type ) );

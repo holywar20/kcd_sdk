@@ -29,10 +29,7 @@ export class HabitObject extends KCDPrimitive {
 
 	static fromSerialized( json: SerializedArtifact ): HabitObject {
 		const obj = new HabitObject( json.path );
-		obj.frontmatter = { ...json.frontmatter };
-		obj.sections   = { ...json.sections };
-		obj.body       = json.body;
-		obj.links      = [ ...json.links ];
+		obj.hydrateFrom( json );
 		return obj;
 	}
 

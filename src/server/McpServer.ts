@@ -28,12 +28,33 @@ export type ToolResult = {
 	isError?: boolean;
 };
 
+/** Client-facing tool hints (no effect on execution) — forwarded verbatim in `tools/list`
+ *  so a client can badge a tool read-only vs. destructive. All optional; mirrors the MCP
+ *  spec's tool annotations. */
+export interface ToolAnnotations {
+	title?:           string;
+	readOnlyHint?:    boolean;
+	destructiveHint?: boolean;
+	idempotentHint?:  boolean;
+	openWorldHint?:   boolean;
+}
+
 /** One registered tool: its wire descriptor plus the handler that runs it. */
 export interface ToolDefinition {
 	name:        string;
 	description: string;
 	/** Plain JSON Schema object — no zod. Sent verbatim in `tools/list`. */
 	inputSchema: Record<string, unknown>;
+	/** Optional client hints (read-only / destructive). Emitted in `tools/list` when present. */
+	annotations?: ToolAnnotations;
+	/** An idiomatic sample input — a ready-to-run example of what this tool expects. Emitted in
+	 *  `tools/list` so an inspector can prepopulate a call. StarmindServer fills it from the first
+	 *  verify spec by default (the example you test with is the example a user sees). */
+	example?: Record<string, unknown>;
+	/** The expanded doc-block — the tool's own account of its capacity (params, returns, edge cases),
+	 *  the rich half of the two-tier model. `description` is the one-liner on the wire; `doc` is the
+	 *  full read a surface fetches on demand. Emitted in `tools/list` when present. */
+	doc?:        string;
 	handler:     ( args: Record<string, unknown> ) => Promise<ToolResult>;
 }
 
@@ -158,6 +179,10 @@ export class McpServer {
 			name:        t.name,
 			description: t.description,
 			inputSchema: t.inputSchema,
+			// Only emit the key when a tool declares hints — a client sees `annotations` or nothing.
+			...( t.annotations ? { annotations: t.annotations } : {} ),
+			...( t.example ? { example: t.example } : {} ),
+			...( t.doc ? { doc: t.doc } : {} ),
 		} ) );
 		return { tools };
 	}

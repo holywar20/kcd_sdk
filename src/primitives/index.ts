@@ -23,6 +23,7 @@ export type {
 import { KCDPrimitive } from './framework/KCDPrimitive';
 import { LensObject } from './framework/LensObject';
 import { PlanObject } from './framework/PlanObject';
+import { IndexObject } from './framework/IndexObject';
 import { ReferenceObject } from './framework/ReferenceObject';
 import { FrameworkObject } from './framework/FrameworkObject';
 import { TemplateObject } from './framework/TemplateObject';
@@ -34,6 +35,7 @@ import { PipelineObject } from './procedure/PipelineObject';
 
 KCDPrimitive.registerHydrator( 'lens', LensObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'plan', PlanObject.fromSerialized );
+KCDPrimitive.registerHydrator( 'index', IndexObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'reference', ReferenceObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'framework', FrameworkObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'template', TemplateObject.fromSerialized );
