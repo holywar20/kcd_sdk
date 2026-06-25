@@ -70,11 +70,12 @@ export interface ModelStatus {
 }
 
 /**
- * One roster row — a descriptor joined with its live status. The single shape the picker
- * (descriptor fields) and the context-window gauge (`status`) both read from ONE pull, so
- * the renderer never hand-joins a separate registry + server-state read again.
+ * One roster row — a descriptor joined with its live status and its tier prose (`doc`, the model's
+ * connector self-description, attached main-side). The single shape the picker (descriptor fields),
+ * the context-window gauge (`status`), and the Models config surface (`doc`) all read from ONE pull,
+ * so the renderer never hand-joins a separate registry + server-state read again.
  */
-export type ModelRosterEntry = ModelDescriptor & { status: ModelStatus };
+export type ModelRosterEntry = ModelDescriptor & { status: ModelStatus; doc: string };
 
 /**
  * The fallback model key. `Agent.create` / `fromSerialized` default to it

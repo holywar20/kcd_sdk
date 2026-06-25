@@ -11,6 +11,7 @@
  */
 export * from '../primitives';
 export * from '../agent';
+export * from '../constellation';
 export * from './FileTypes';
 export * from './TextTypes';
 export * from './Glob';
