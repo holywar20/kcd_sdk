@@ -3,9 +3,13 @@ import * as path from 'path';
 import * as yaml from 'js-yaml';
 
 export interface ScanOptions {
-	/** Substring filter applied to relativePath. Omit to return all .md files. */
+	/** Substring filter applied to relativePath. Omit to return all scanned files. */
 	filter?: string;
 }
+
+/** The file extensions the scanner indexes — markdown artifacts plus `.js` utilities (the canonical
+ *  registered-tool form, metadata in a `/*--- … ---*\/` comment block). */
+const SCAN_EXTS = [ '.md', '.js' ];
 
 export interface RawLink {
 	text: string;
@@ -29,20 +33,24 @@ export interface ScannedFile {
 // \r? throughout so it works on Windows CRLF files.
 const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
 
+// JS comment-frontmatter: /*---\n<yaml>\n---*/ — the canonical form for `.js` utilities (a tool
+// carries its metadata in a leading block comment parsed exactly like markdown frontmatter).
+const JS_FRONTMATTER_RE = /^\/\*---\r?\n([\s\S]*?)\r?\n---\s*\*\/\r?\n?([\s\S]*)$/;
+
 // Inline markdown links: [text](href)
 // Deliberately simple — KCD files don't use nested brackets or parens in links.
 const LINK_RE = /\[([^\]]*)\]\(([^)]+)\)/g;
 
 export function scan(root: string, opts?: ScanOptions): ScannedFile[] {
 	const absRoot = path.resolve(root);
-	const files = walkMd(absRoot);
+	const files = walkFiles(absRoot);
 
 	return files
 		.map(absPath => parseFile(absPath, absRoot))
 		.filter(f => !opts?.filter || f.relativePath.includes(opts.filter));
 }
 
-function walkMd(dir: string): string[] {
+function walkFiles(dir: string): string[] {
 	const results: string[] = [];
 	let entries: fs.Dirent[];
 
@@ -55,8 +63,8 @@ function walkMd(dir: string): string[] {
 	for (const entry of entries) {
 		const fullPath = path.join(dir, entry.name);
 		if (entry.isDirectory()) {
-			results.push(...walkMd(fullPath));
-		} else if (entry.isFile() && entry.name.endsWith('.md')) {
+			results.push(...walkFiles(fullPath));
+		} else if (entry.isFile() && SCAN_EXTS.some(ext => entry.name.endsWith(ext))) {
 			results.push(fullPath);
 		}
 	}
@@ -74,7 +82,7 @@ function parseFile(absPath: string, absRoot: string): ScannedFile {
 }
 
 function parseFrontmatter(content: string): { frontmatter: Record<string, unknown>; body: string } {
-	const match = content.match(FRONTMATTER_RE);
+	const match = content.match(FRONTMATTER_RE) ?? content.match(JS_FRONTMATTER_RE);
 
 	if (!match) {
 		return { frontmatter: {}, body: content };

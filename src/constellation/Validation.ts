@@ -19,4 +19,6 @@ export const ConstellationError = {
 	agentNoRef:       ( id: string ) => `Agent node "${ id }" references no agent.`,
 	branchNoContract: ( id: string ) => `Branch node "${ id }" has no contract.`,
 	branchDeadPorts:  ( id: string ) => `Branch node "${ id }" wires neither a pass nor a fail port.`,
+	utilityNoCode:    ( id: string ) => `Utility node "${ id }" has no code to run.`,
+	boolBranchDead:   ( id: string ) => `Boolean-branch node "${ id }" wires neither a pass nor a fail port.`,
 } as const;

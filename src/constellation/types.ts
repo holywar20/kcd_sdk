@@ -49,6 +49,35 @@ export interface BranchNode {
 	fail:     ConNode[] | null;      // sub-sequence; null = terminate (failed); often loops back
 }
 
+/**
+ * A utility node — runs a deterministic code utility (vanilla JS for now) with NODE-set arguments,
+ * captures its output, AND self-evaluates to a boolean verdict. The exit surface is the crux: a utility
+ * is not arbitrary code, it is code that JUDGES itself — `code` returns the boolean a downstream
+ * Boolean Branch routes on (a richer `{ pass, output }` return is also honoured). `args` are configured
+ * by the user/node and are NEVER set by an agent — that is the security barrier (an agent-set parameter
+ * would reach across the wall). Single exit. The "AI-call → declarative utility" thesis, made concrete.
+ */
+export interface UtilityNode {
+	kind:     'utility';
+	id:       string;
+	language: 'javascript';      // the box's language selector — only vanilla JS for now
+	code:     string;            // the utility body — returns the boolean verdict (output captured too)
+	args:     unknown[];         // node-configured arguments (untyped); never agent-set (the security barrier)
+}
+
+/**
+ * A boolean branch — the routing primitive, DECOUPLED from evaluation. The upstream node (a utility, a
+ * contract) PRODUCES the boolean verdict; this node only ROUTES the read head on it. Two ports: a null
+ * port terminates that path (pass unwired = success, fail unwired = failed). Named "boolean" so the
+ * interface it expects — a boolean verdict on the prior result — is explicit at the call site.
+ */
+export interface BooleanBranchNode {
+	kind: 'boolean-branch';
+	id:   string;
+	pass: ConNode[] | null;      // sub-sequence; null = terminate (success)
+	fail: ConNode[] | null;      // sub-sequence; null = terminate (failed); often loops back to re-evaluate
+}
+
 /** A parallel node — fan out across lanes, then join. Each lane is its own sub-sequence. */
 export interface ParallelNode {
 	kind:  'parallel';
@@ -69,7 +98,7 @@ export interface NestedNode {
 	ref:  string;
 }
 
-export type ConNode = StartNode | AgentNode | StepNode | BranchNode | ParallelNode | MapNode | NestedNode;
+export type ConNode = StartNode | AgentNode | StepNode | UtilityNode | BranchNode | BooleanBranchNode | ParallelNode | MapNode | NestedNode;
 
 /**
  * The wire form — mirrors `SerializedAgent`. A Constellation only ever serializes once committed,

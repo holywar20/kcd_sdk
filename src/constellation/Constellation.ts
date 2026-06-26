@@ -1,5 +1,5 @@
 import { ConstellationError, type ConstellationValidation } from './Validation';
-import type { ConNode, BranchNode, SerializedConstellation } from './types';
+import type { ConNode, BranchNode, BooleanBranchNode, SerializedConstellation } from './types';
 
 /**
  * A Constellation — many Steps wired into one named, runnable pattern. The root primitive of the
@@ -57,6 +57,37 @@ export class Constellation {
 	}
 
 	/**
+	 * Append a Utility — a self-evaluating code node. `language` selects the runtime (vanilla JS only,
+	 * for now); `code` is the body that returns the boolean verdict; `args` are node-set (never agent-set
+	 * — the security barrier). Single exit; pair it with a `.booleanBranch()` to route on its verdict.
+	 */
+	utility( spec: { language?: 'javascript'; code: string; args?: unknown[] } ): this {
+		this._guardOpen();
+		this._cursor.push( {
+			kind:     'utility',
+			id:       this._mint( 'utility' ),
+			language: spec.language ?? 'javascript',
+			code:     spec.code,
+			args:     spec.args ?? [],
+		} );
+		return this;
+	}
+
+	/**
+	 * Append a Boolean Branch — routes the head on the PRIOR node's boolean verdict (decoupled from
+	 * evaluation: the upstream utility/contract produced the boolean; this only routes it). `pass` / `fail`
+	 * are sub-builders; an omitted port terminates that path (pass = success, fail = failed).
+	 */
+	booleanBranch( ports: { pass?: ( w: Constellation ) => void; fail?: ( w: Constellation ) => void } ): this {
+		this._guardOpen();
+		const node: BooleanBranchNode = { kind: 'boolean-branch', id: this._mint( 'boolbranch' ), pass: null, fail: null };
+		if ( ports.pass ) node.pass = this._sub( ports.pass );
+		if ( ports.fail ) node.fail = this._sub( ports.fail );
+		this._cursor.push( node );
+		return this;
+	}
+
+	/**
 	 * Append a branch that routes on a contract. `pass` / `fail` are sub-builders (`w => w.then(…)`)
 	 * authored against a fresh cursor; an omitted port stays null (= terminate that path). The
 	 * contract is stored now; routing on it lands in Phase 3.
@@ -99,10 +130,12 @@ export class Constellation {
 		this._walk( this._nodes, ( n ) => {
 			if ( seen.has( n.id ) ) errors.push( ConstellationError.duplicateId( n.id ) );
 			seen.add( n.id );
-			if ( n.kind === 'step'   && !n.ref )             errors.push( ConstellationError.emptyStepRef( n.id ) );
-			if ( n.kind === 'agent'  && !n.agent )           errors.push( ConstellationError.agentNoRef( n.id ) );
-			if ( n.kind === 'branch' && !n.contract )        errors.push( ConstellationError.branchNoContract( n.id ) );
-			if ( n.kind === 'branch' && !n.pass && !n.fail ) errors.push( ConstellationError.branchDeadPorts( n.id ) );
+			if ( n.kind === 'step'    && !n.ref )             errors.push( ConstellationError.emptyStepRef( n.id ) );
+			if ( n.kind === 'agent'   && !n.agent )          errors.push( ConstellationError.agentNoRef( n.id ) );
+			if ( n.kind === 'utility' && !n.code.trim() )    errors.push( ConstellationError.utilityNoCode( n.id ) );
+			if ( n.kind === 'branch'  && !n.contract )       errors.push( ConstellationError.branchNoContract( n.id ) );
+			if ( n.kind === 'branch'  && !n.pass && !n.fail ) errors.push( ConstellationError.branchDeadPorts( n.id ) );
+			if ( n.kind === 'boolean-branch' && !n.pass && !n.fail ) errors.push( ConstellationError.boolBranchDead( n.id ) );
 		} );
 		return errors;
 	}
@@ -142,7 +175,7 @@ export class Constellation {
 	private _walk( nodes: ConNode[], visit: ( n: ConNode ) => void ): void {
 		for ( const n of nodes ) {
 			visit( n );
-			if ( n.kind === 'branch' ) {
+			if ( n.kind === 'branch' || n.kind === 'boolean-branch' ) {
 				if ( n.pass ) this._walk( n.pass, visit );
 				if ( n.fail ) this._walk( n.fail, visit );
 			} else if ( n.kind === 'parallel' ) {
