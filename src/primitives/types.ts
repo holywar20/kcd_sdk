@@ -5,6 +5,26 @@
 export type KCDRole = 'know' | 'do' | 'lens';
 
 /**
+ * ContextSegment — one block of an assembled request's context, broken out by SOURCE for inspection.
+ * The flat system string a model sees is `Σ` of these joined; kept structured so the telemetry/transcript
+ * can show WHAT each source contributed and what it COST.
+ *
+ *  - `source` — the bucket: `'system'` (the agent's systemPrompt / above-lens layer), `'lens'` (a lens
+ *    header block), an artifact type (`'reference' | 'plan' | 'habit' | 'index' | …`), or `'instruction'`
+ *    (the task body). Drives the per-source grouping + colour. A plain string (not a tight union) — a new
+ *    artifact type slots in without a type change at this glue seam.
+ *  - `tokens` — the REAL count from the model's own tokenizer, filled at RUN time (main-side, where the
+ *    connector lives). `null` when not yet counted or the connector can't count — no estimate is ever
+ *    substituted (the ruling: real values, never guesses).
+ */
+export interface ContextSegment {
+	source: string;
+	label:  string;          // human label — the artifact name, or the lens path
+	text:   string;          // the actual content that went into the request
+	tokens: number | null;   // real model-tokenizer count, filled at run; null = uncounted / uncountable
+}
+
+/**
  * A single issue returned by KCDPrimitive.typeCheck().
  * Non-throwing equivalent of the constructor validation errors.
  */

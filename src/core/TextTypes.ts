@@ -16,6 +16,8 @@ export const TextTypes = {
 		'txt', 'md', 'markdown', 'mdx', 'rst', 'adoc',
 		// data / config
 		'json', 'jsonc', 'json5', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'env', 'properties',
+		// insight documents — JSON under our own extension ( the SIG / starmind_insight substrate )
+		'sig',
 		// web / scripts
 		'js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'vue', 'svelte',
 		'html', 'htm', 'xml', 'svg', 'css', 'scss', 'sass', 'less',

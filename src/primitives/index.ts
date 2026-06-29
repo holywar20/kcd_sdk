@@ -3,6 +3,7 @@ export * from './procedure';
 export { KCDParseError, KCDValidationError } from './errors';
 export type {
 	ArtifactType,
+	ContextSegment,
 	KCDRole,
 	LinkType,
 	LinkEntry,

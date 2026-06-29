@@ -1,5 +1,5 @@
-import { readdirSync, statSync, readFileSync, existsSync } from 'fs'
-import { join, extname, relative, resolve, sep } from 'path'
+import { readdirSync, statSync, readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, cpSync, rmSync } from 'fs'
+import { join, extname, relative, resolve, sep, dirname, basename } from 'path'
 import { homedir } from 'os'
 import { TextTypes } from '../core/TextTypes'
 import { Glob } from '../core/Glob'
@@ -156,15 +156,128 @@ export class SdkFileAccess {
 		return out
 	}
 
+	// ── writes ───────────────────────────────────────────────────────────────────────
+	// The mutation half: pure `fs`, framework-free, the same degrade-and-default contract as the reads
+	// but with a BOOLEAN currency — a write the caller must know succeeded, not a value that folds to
+	// null. Every op guards-and-warns: a denied / colliding / failed write returns `false` and pings
+	// `onWarn`, never a throw. Collision POLICY lives in the caller (MainFileService) — these are the
+	// raw levers, exact-path-in. The Electron-only ops (recycle-bin trash, OS reveal) are NOT here:
+	// they need `shell`, which would couple this framework-free core to one host — they live on the
+	// service instead. NOTE: this is filesystem MANAGEMENT (mkdir/touch/move/copy/rename); writing file
+	// CONTENT (the editor save) is a separate, later lever.
+
+	/** Make a directory ( recursive — parents created as needed ). */
+	mkdir( path: string ): boolean {
+		try {
+			mkdirSync( path, { recursive: true } )
+			return true
+		} catch( err ) {
+			this._warn( 'mkdir_failed', { path, message: this._msg( err ) } )
+			return false
+		}
+	}
+
+	/** Create a new EMPTY file. The `wx` flag refuses to clobber an existing file (a fresh touch only,
+	 *  never an overwrite) — the caller de-collides the name first, so a collision here is a real fault. */
+	createFile( path: string ): boolean {
+		try {
+			writeFileSync( path, '', { flag: 'wx' } )
+			return true
+		} catch( err ) {
+			this._warn( 'create_failed', { path, message: this._msg( err ) } )
+			return false
+		}
+	}
+
+	/** Save text CONTENT to a file ( the editor save ) — the parent dir is created if missing, and an
+	 *  existing file is OVERWRITTEN ( unlike createFile's no-clobber touch; overwriting is the point of a
+	 *  save ). Boolean + warn like its siblings; the consumer surfaces the failure to the user ( a toast ),
+	 *  this core just reports it and routes the OS reason to the warn hook. */
+	write( path: string, content: string ): boolean {
+		try {
+			mkdirSync( dirname( path ), { recursive: true } )
+			writeFileSync( path, content, 'utf-8' )
+			return true
+		} catch( err ) {
+			this._warn( 'write_failed', { path, message: this._msg( err ) } )
+			return false
+		}
+	}
+
+	/** Rename / move by exact paths — the raw lever. `from` → `to`, no collision check (the caller owns
+	 *  that policy). A cross-volume move surfaces as EXDEV; for that, use `move`, which falls back. */
+	rename( from: string, to: string ): boolean {
+		try {
+			renameSync( from, to )
+			return true
+		} catch( err ) {
+			this._warn( 'rename_failed', { from, to, message: this._msg( err ) } )
+			return false
+		}
+	}
+
+	/** Recursively copy `from` to the exact path `to` ( file or whole directory ). */
+	copy( from: string, to: string ): boolean {
+		try {
+			cpSync( from, to, { recursive: true } )
+			return true
+		} catch( err ) {
+			this._warn( 'copy_failed', { from, to, message: this._msg( err ) } )
+			return false
+		}
+	}
+
+	/** Move `from` to the exact path `to`. A plain rename first ( atomic, same-volume ); on a cross-volume
+	 *  EXDEV failure, fall back to copy-then-remove so a move across drives still works. */
+	move( from: string, to: string ): boolean {
+		try {
+			renameSync( from, to )
+			return true
+		} catch( err ) {
+			if( ( err as NodeJS.ErrnoException )?.code === 'EXDEV' ) {
+				try {
+					cpSync( from, to, { recursive: true } )
+					rmSync( from, { recursive: true, force: true } )
+					return true
+				} catch( err2 ) {
+					this._warn( 'move_failed', { from, to, message: this._msg( err2 ) } )
+					return false
+				}
+			}
+			this._warn( 'move_failed', { from, to, message: this._msg( err ) } )
+			return false
+		}
+	}
+
+	/** A non-colliding variant of `desired`: the path itself if it's free, else the same name with a
+	 *  numeric suffix ( "report.md" → "report 2.md", "Notes" → "Notes 2" ) — files keep their extension.
+	 *  Pure: `existsSync` only, no mutation. The caller writes to the returned path. */
+	uniquePath( desired: string ): string {
+		if( !existsSync( desired ) ) return desired
+		const dir  = dirname( desired )
+		const ext  = extname( desired )
+		const stem = basename( desired, ext )
+		for( let n = 2; n < 10000; n += 1 ) {
+			const candidate = join( dir, `${ stem } ${ n }${ ext }` )
+			if( !existsSync( candidate ) ) return candidate
+		}
+		return desired
+	}
+
 	/** Pure path containment — resolve `path` and return it iff it sits inside one of `roots`, else
 	 *  null. No fs touch, no instance state (static). `..` segments resolve away first, so an escaping
 	 *  path lands outside every root and returns null; the `sep` boundary stops `/foo/bar` from matching
 	 *  a `/foo/ba` root. The primitive `WhitelistGuard` turns a null into a loud GuardError. */
 	static jail( path: string, roots: string[] ): string | null {
 		const target = resolve( path )
+		// Windows filesystems are case-INSENSITIVE — compare case-folded there, so a target whose casing
+		// differs from the whitelisted root (a lowercased drive letter, a model that re-cased the path, …)
+		// still resolves as contained. The RETURNED path keeps its real resolved casing for the fs op.
+		const fold = process.platform === 'win32' ? ( s: string ) => s.toLowerCase() : ( s: string ) => s
+		const t    = fold( target )
 		for( const root of roots ) {
-			const base = resolve( root )
-			if( target === base || target.startsWith( base + sep ) ) return target
+			const base = fold( resolve( root ) )
+			if( t === base || t.startsWith( base + sep ) ) return target
 		}
 		return null
 	}

@@ -9,12 +9,24 @@
  * the board can point at WHERE a thing is.
  */
 
+import type { ContextSegment } from '../primitives/types';
+
 /**
  * A start node — the entry the read head (Navigator) begins at. Single exit, and the board enforces
  * that it can only connect to an agent. The board's repurposed gray "Start" box.
  */
 export interface StartNode {
 	kind: 'start';
+	id:   string;
+}
+
+/**
+ * An end node — a terminal marker. When the read head reaches one, the run is DONE: the walk stops and
+ * the board signals completion (the toast). No parameters — the mirror of Start (Start is the single
+ * entry; End is a single exit). A pass port that wires into an End is the explicit "work complete here".
+ */
+export interface EndNode {
+	kind: 'end';
 	id:   string;
 }
 
@@ -29,11 +41,25 @@ export interface AgentNode {
 	agent: string;         // the agent id this node executes as
 }
 
-/** A step node — runs one registered Step (resolved by `ref` in the main-side StepRegistry). */
+/**
+ * A step node — one unit of agent work. Resolved two ways, in order: a code Step in the main-side
+ * registry (`ref` → a pure/code fixture), else the AUTHORED ARTIFACT at `source` (the artifact IS the
+ * registration — no hand-registry for user-defined work; the vault-relative path is its identity, and
+ * its composed body becomes the agent's instruction). `source` is absent only for code-step refs.
+ */
 export interface StepNode {
-	kind: 'step';
-	id:   string;          // node id — unique within this constellation
-	ref:  string;          // the registry Step id this node runs
+	kind:    'step';
+	id:      string;          // node id — unique within this constellation
+	ref:     string;          // human stem — the registry id, the head/log label, the result key
+	source?: string;          // vault-relative artifact path — identity + what the loader composes
+	model?:  string;          // operational model KEY (node override ?? staffed agent's model); absent → the Step's default
+	// ── Commit-time SNAPSHOT (frozen at compile; the run uses these, not live state — re-commit to refresh) ──
+	agentId?:     string;     // the staffed agent's id — rides the turn so telemetry can key the run by agent
+	agentName?:   string;     // the staffed agent's display NAME — surfaced in the transcript / telemetry ("basic tester")
+	identity?:    string;     // the "who" — the staffed agent's frozen IDENTITY (systemPrompt + contribute())
+	identitySegments?: ContextSegment[]; // the same identity BROKEN OUT by source — the structured form, for telemetry
+	instruction?: string;     // the "what" — the artifact body (the task). TWO separate frozen blocks; framing is a run-time knob
+	toolNames?:   string[];   // the agent's included tool NAMES; schemas resolve at run (never baked — wire stays lean)
 }
 
 /**
@@ -45,6 +71,7 @@ export interface BranchNode {
 	kind:     'branch';
 	id:       string;
 	contract: string;                // routing contract id (evaluated in Phase 3)
+	model?:   string;                // the EVALUATOR's operational model KEY (the contract node's staffed eval agent); absent → the eval default
 	pass:     ConNode[] | null;      // sub-sequence; null = terminate (success)
 	fail:     ConNode[] | null;      // sub-sequence; null = terminate (failed); often loops back
 }
@@ -98,7 +125,7 @@ export interface NestedNode {
 	ref:  string;
 }
 
-export type ConNode = StartNode | AgentNode | StepNode | UtilityNode | BranchNode | BooleanBranchNode | ParallelNode | MapNode | NestedNode;
+export type ConNode = StartNode | EndNode | AgentNode | StepNode | UtilityNode | BranchNode | BooleanBranchNode | ParallelNode | MapNode | NestedNode;
 
 /**
  * The wire form — mirrors `SerializedAgent`. A Constellation only ever serializes once committed,

@@ -42,6 +42,13 @@ export class Constellation {
 		return this;
 	}
 
+	/** Append an End node — a terminal marker; the head reaching one ends the run as done. */
+	end(): this {
+		this._guardOpen();
+		this._cursor.push( { kind: 'end', id: this._mint( 'end' ) } );
+		return this;
+	}
+
 	/** Append an Agent node — the executor the head runs the chained work as. */
 	agent( agentId: string ): this {
 		this._guardOpen();

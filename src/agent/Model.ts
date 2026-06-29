@@ -38,6 +38,17 @@ export interface ModelDescriptor {
 		multimodal?:    boolean;
 		contextLength?: number;
 	};
+	/**
+	 * Per-MILLION-token price in USD, split input/output (providers bill the two at different rates).
+	 * Drives the run cost meter — the orchestrator multiplies the turn's real token counts by these.
+	 * Optional by design: a local/self-hosted model has no per-token cost (absent → $0), and a
+	 * hand-edited descriptor that omits it never crashes — cost simply reads zero. Frontier rates are
+	 * declared on the cloud fixtures; tune them as the published prices move.
+	 */
+	price?: {
+		inputPerMTok:  number;
+		outputPerMTok: number;
+	};
 }
 
 /**
@@ -70,12 +81,24 @@ export interface ModelStatus {
 }
 
 /**
- * One roster row — a descriptor joined with its live status and its tier prose (`doc`, the model's
- * connector self-description, attached main-side). The single shape the picker (descriptor fields),
- * the context-window gauge (`status`), and the Models config surface (`doc`) all read from ONE pull,
- * so the renderer never hand-joins a separate registry + server-state read again.
+ * One display-ready model-configuration fact — a label over its already-formatted value. The list of
+ * these (`ModelRosterEntry.config`) is the model's static manifest configuration surfaced read-only
+ * for display (family, license, quant, engine, …): provider-shaped and sparse (a hosted model carries
+ * none), pre-formatted main-side so a consumer renders it generically without knowing the fields.
  */
-export type ModelRosterEntry = ModelDescriptor & { status: ModelStatus; doc: string };
+export interface ModelConfigField {
+	label: string;
+	value: string;
+}
+
+/**
+ * One roster row — a descriptor joined with its live status, its tier prose (`doc`, the model's
+ * connector self-description), and its static config sheet (`config`), all attached main-side. The
+ * single shape the picker (descriptor fields), the context-window gauge (`status`), the Models config
+ * surface (`doc`), and the session deck (`config`) read from ONE pull, so the renderer never
+ * hand-joins a separate registry + server-state read again.
+ */
+export type ModelRosterEntry = ModelDescriptor & { status: ModelStatus; doc: string; config: ModelConfigField[] };
 
 /**
  * The fallback model key. `Agent.create` / `fromSerialized` default to it

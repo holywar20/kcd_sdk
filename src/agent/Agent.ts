@@ -1,6 +1,6 @@
 import { LensObject } from '../primitives/framework/LensObject';
 import type { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
-import type { ArtifactType, PolicyEntry, SerializedLens } from '../primitives/types';
+import type { ArtifactType, ContextSegment, PolicyEntry, SerializedLens } from '../primitives/types';
 import { DEFAULT_MODEL_KEY } from './Model';
 
 export type AgentStatus = 'idle' | 'thinking';
@@ -308,6 +308,51 @@ export class Agent {
 				if ( block ) parts.push( block );
 			}
 		}
-		return parts.join( '\n\n---\n\n' );
+		return parts.join( Agent.SYSTEM_SEP );
+	}
+
+	/** The separator between system-prompt layers — the one place the live turn and the Constellation
+	 *  commit-bake agree on how the layers join, so they can never drift apart. */
+	static readonly SYSTEM_SEP = '\n\n---\n\n';
+
+	/**
+	 * Join system layers in order, dropping empties, with the canonical separator. The ONE formula shared
+	 * by the live turn (the orchestrator's per-round system assembly) and the Constellation commit-bake —
+	 * extract-once so the two surfaces can't drift.
+	 */
+	static assembleSystem( parts: ( string | null | undefined )[] ): string {
+		return parts.filter( Boolean ).join( Agent.SYSTEM_SEP );
+	}
+
+	/**
+	 * This agent's frozen IDENTITY — the "who": its `systemPrompt` over its recursive lens contribution
+	 * (Know/Care/Do). The Constellation bakes this onto a work node at commit, so the run carries the
+	 * agent's whole KCD framework rather than a bare model. (The live session interleaves the — currently
+	 * empty — above-lens layer between the two; here there is nothing between them.)
+	 */
+	identity(): string {
+		return Agent.assembleSystem( [ this.systemPrompt, this.contribute() ] );
+	}
+
+	/**
+	 * The agent's identity BROKEN OUT by source — the structured twin of `identity()`. Same content, same
+	 * order (systemPrompt, then per lens its header block + each contributing node), just kept as labelled
+	 * segments instead of one joined string, so the telemetry/transcript can show what each context source
+	 * contributed. Joining the segment texts with the canonical separator reproduces `identity()` exactly,
+	 * so the structured and flat forms can't drift. Token counts are filled at run time (null here — the
+	 * tokenizer lives main-side, on the connector).
+	 */
+	identitySegments(): ContextSegment[] {
+		const segs: ContextSegment[] = [];
+		if ( this.systemPrompt ) segs.push( { source: 'system', label: 'system prompt', text: this.systemPrompt, tokens: null } );
+		for ( const lens of this.lenses ) {
+			const block = lens.toContextBlock();
+			if ( block ) segs.push( { source: 'lens', label: lens.getPath() ?? 'lens', text: block, tokens: null } );
+			for ( const node of lens.getNodes() ) {
+				const text = node.contribute();
+				if ( text ) segs.push( { source: node.getType(), label: node.getName(), text, tokens: null } );
+			}
+		}
+		return segs;
 	}
 }
