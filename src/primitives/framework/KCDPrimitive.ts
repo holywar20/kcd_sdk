@@ -1,11 +1,8 @@
-import * as yaml from 'js-yaml';
-import type { ScannedFile } from '../../scanner';
-import { KCDParseError, KCDValidationError } from '../errors';
+import { KcdParse } from '../../core/html/KcdParse';
 import type { ArtifactType, KCDRole, LinkEntry, LinkType, PolicyEntry, SerializedArtifact, TypeCheckIssue, WriteMap } from '../types';
 
 export const DREDGE_MAX = 4;
 
-export type FactoryFn = ( markdown: string, absPath: string, type: ArtifactType ) => KCDPrimitive;
 export type HydratorFn = ( json: SerializedArtifact ) => KCDPrimitive;
 
 /** Clamp a requested dredge depth into the legal [1, DREDGE_MAX] range. */
@@ -13,35 +10,21 @@ export function clampDepth( depth: number ): number {
 	return Math.max( 1, Math.min( DREDGE_MAX, Math.floor( depth ) ) );
 }
 
-const H2_RE = /^## (.+)$/gm;
-const LINK_RE = /\[([^\]]*)\]\(([^)]+)\)/g;
-const FRONTMATTER_RE = /^---\r?\n([\s\S]*?)\r?\n---\r?\n?([\s\S]*)$/;
-
 /**
- * Base artifact: data + the parse chain + working stubs.
+ * Base artifact: the object model behind every KCD document. HTML is the sole substrate —
+ * a document enters through `fromHtml` ( validate-first via KcdParse ) or `fromSerialized`
+ * ( the wire ). There is no markdown parse path; conformance is enforced once, at parse, by
+ * the shared KcdValidate. Subclasses override `getRole`, `getPolicy`, and `toContextBlock`
+ * to add type-specific behavior; structure/frontmatter rules are no longer per-subclass code.
  *
- * Subclasses override `validateFrontmatter`, `validateStructure`, `parseBody`,
- * `getPolicy`, `getRole`, and `toContextBlock` to add type-specific behavior.
- * Spine concerns (node list, reader, dredge budget) live on LensObject, not here.
- *
- * The factory registry and path utilities live here as static methods so
- * subclasses never need to import a separate utility module.
+ * The hydrator registry and path utilities live here as static methods so subclasses never
+ * need to import a separate utility module.
  */
 export class KCDPrimitive {
 
-	// ── Factory registry ─────────────────────────────────────────────────────
+	// ── Hydrator registry ─────────────────────────────────────────────────────
 
-	private static _factories = new Map<ArtifactType, FactoryFn>();
-	private static _fallback: FactoryFn | null = null;
 	private static _hydrators = new Map<ArtifactType, HydratorFn>();
-
-	static register( type: ArtifactType, fn: FactoryFn ): void {
-		KCDPrimitive._factories.set( type, fn );
-	}
-
-	static setFallback( fn: FactoryFn ): void {
-		KCDPrimitive._fallback = fn;
-	}
 
 	/**
 	 * Register a type's wire-hydrator so `fromSerialized` rebuilds the right subclass
@@ -50,12 +33,6 @@ export class KCDPrimitive {
 	 */
 	static registerHydrator( type: ArtifactType, fn: HydratorFn ): void {
 		KCDPrimitive._hydrators.set( type, fn );
-	}
-
-	static create( type: ArtifactType, markdown: string, absPath: string ): KCDPrimitive {
-		const fn = KCDPrimitive._factories.get( type ) ?? KCDPrimitive._fallback;
-		if ( !fn ) throw new Error( `No factory registered for type "${type}" and no fallback set` );
-		return fn( markdown, absPath, type );
 	}
 
 	// ── Instance state ────────────────────────────────────────────────────────
@@ -69,7 +46,7 @@ export class KCDPrimitive {
 	protected isDirty: boolean;
 	/** Tuned state: whether this artifact contributes to the next outbound request.
 	 *  Runtime tuning, not document content — rides serialization so both process
-	 *  copies agree, but never reaches the markdown on disk. */
+	 *  copies agree, but never reaches disk. */
 	protected isIncluded = true;
 
 	protected constructor( path: string, type: ArtifactType ) {
@@ -84,30 +61,21 @@ export class KCDPrimitive {
 
 	// ── Static entry points ──────────────────────────────────────────────────
 
-	static parse( markdown: string, filePath: string ): KCDPrimitive {
-		const obj = new KCDPrimitive( filePath, 'unknown' );
-		obj.runInit( markdown );
-		return obj;
-	}
-
-	static fromScanned( scanned: ScannedFile ): KCDPrimitive {
-		const obj = new KCDPrimitive( scanned.path, 'unknown' );
-		obj.runInitFromScanned( scanned );
-		return obj;
-	}
-
-	/** Build a base primitive of a given type. Used as the fallback for unregistered types. */
-	static createBase( markdown: string, absPath: string, type: ArtifactType ): KCDPrimitive {
-		const obj = new KCDPrimitive( absPath, type );
-		obj.runInit( markdown );
-		return obj;
+	/**
+	 * The HTML front end ( parser-family row 1 ): validate-first, then hydrate the right subclass.
+	 * The parser produces a `ParsedArtifact` ( a SerializedArtifact superset ), so the existing
+	 * `fromSerialized` dispatch builds the correct prototype with no md parse pipeline. A malformed
+	 * document never reaches here — `KcdParse.parse` throws, all-or-nothing.
+	 */
+	static fromHtml( html: string, absPath: string ): KCDPrimitive {
+		return KCDPrimitive.fromSerialized( KcdParse.parse( html, absPath ) );
 	}
 
 	/**
 	 * Hydrate from wire JSON — dispatched by type to the registered subclass hydrator so a
 	 * serialized habit comes back a HabitObject, a lens a LensObject (with its nodes). Falls
 	 * back to a base primitive for types with no hydrator. Trusts the state as already valid;
-	 * bypasses the parse pipeline.
+	 * this is the seam both the parser ( via fromHtml ) and the bridge cross.
 	 */
 	static fromSerialized( json: SerializedArtifact ): KCDPrimitive {
 		const fn = KCDPrimitive._hydrators.get( json.type );
@@ -140,115 +108,6 @@ export class KCDPrimitive {
 		return writes;
 	}
 
-	// ── Pipeline runners ─────────────────────────────────────────────────────
-
-	protected runInit( markdown: string ): void {
-		const { frontmatter, body } = this.splitFrontmatter( markdown );
-		this.frontmatter = frontmatter;
-		this.validateFrontmatter();
-		this.parseBody( body );
-		this.validateStructure();
-		this.extractLinks();
-	}
-
-	protected runInitFromScanned( scanned: ScannedFile ): void {
-		this.frontmatter = { ...scanned.frontmatter };
-		this.validateFrontmatter();
-		this.parseBody( scanned.body );
-		this.validateStructure();
-		this.extractLinks();
-	}
-
-	private splitFrontmatter( markdown: string ): { frontmatter: Record<string, unknown>; body: string } {
-		const match = markdown.match( FRONTMATTER_RE );
-		if ( !match ) return { frontmatter: {}, body: markdown };
-
-		let frontmatter: Record<string, unknown> = {};
-		try {
-			const parsed = yaml.load( match[1] );
-			if ( parsed && typeof parsed === 'object' && !Array.isArray( parsed ) ) {
-				frontmatter = parsed as Record<string, unknown>;
-			}
-		} catch ( e ) {
-			throw new KCDParseError(
-				`Frontmatter YAML parse failed: ${e instanceof Error ? e.message : String( e )}`,
-				this.path, match[1]
-			);
-		}
-
-		return { frontmatter, body: match[2] ?? '' };
-	}
-
-	// ── Overridable hooks ─────────────────────────────────────────────────────
-
-	protected validateFrontmatter(): void {}
-
-	protected parseBody( body: string ): void {
-		this.body     = body;
-		this.sections = {};
-
-		const parts = body.split( /^## /m );
-		for ( let i = 1; i < parts.length; i++ ) {
-			const nl = parts[i].indexOf( '\n' );
-			if ( nl === -1 ) {
-				this.sections[parts[i].trim()] = '';
-			} else {
-				const name    = parts[i].slice( 0, nl ).trim();
-				const content = parts[i].slice( nl + 1 ).trim();
-				this.sections[name] = content;
-			}
-		}
-	}
-
-	/**
-	 * The H2 sections this artifact must declare. Subclasses override to demand structure;
-	 * the base requires none. `validateStructure` runs the same missing-section check for
-	 * every type from this one list — a type just names its sections, it never rewrites the loop.
-	 */
-	protected requiredSections(): string[] { return []; }
-
-	protected validateStructure(): void {
-		for ( const section of this.requiredSections() ) {
-			if ( !this.sections[section] ) {
-				throw new KCDValidationError(
-					`${this.type}: required section "${section}" is missing`,
-					this.path, `## ${section} section`, null,
-					{ section }
-				);
-			}
-		}
-	}
-
-	protected extractLinks(): void {
-		this.links = [];
-
-		const boundaries: Array<{ name: string; start: number }> = [];
-		H2_RE.lastIndex = 0;
-		let h2: RegExpExecArray | null;
-		while ( ( h2 = H2_RE.exec( this.body ) ) !== null ) {
-			boundaries.push( { name: h2[1].trim(), start: h2.index } );
-		}
-
-		const sectionAt = ( pos: number ): string | undefined => {
-			let current: string | undefined;
-			for ( const b of boundaries ) {
-				if ( b.start <= pos ) current = b.name;
-				else break;
-			}
-			return current;
-		};
-
-		LINK_RE.lastIndex = 0;
-		let m: RegExpExecArray | null;
-		while ( ( m = LINK_RE.exec( this.body ) ) !== null ) {
-			this.links.push( {
-				text: m[1], href: m[2],
-				type: classifyHref( m[2] ),
-				section: sectionAt( m.index ),
-			} );
-		}
-	}
-
 	// ── KCD role & structural validation ─────────────────────────────────────
 
 	/**
@@ -259,35 +118,19 @@ export class KCDPrimitive {
 	getRole(): KCDRole { return 'know'; }
 
 	/**
-	 * Non-throwing structural validation. Re-runs the same checks as the constructor
-	 * but returns issues instead of throwing. Use on fromSerialized objects or after
-	 * mutation before save.
+	 * Non-throwing structural validation. Conformance is enforced at parse time by the shared
+	 * KcdValidate ( a malformed document never becomes an object — `fromHtml` throws ), so a
+	 * hydrated object is valid by construction and has no per-subclass checks left to re-run.
+	 * Kept as the stable seam for callers ( e.g. the MCP health sweep, which already treats a
+	 * parse throw as the error ); returns no issues for a well-formed object.
 	 */
 	typeCheck(): TypeCheckIssue[] {
-		const issues: TypeCheckIssue[] = [];
-
-		const capture = ( e: unknown ) => {
-			if ( e instanceof KCDValidationError ) {
-				issues.push( { severity: 'error', message: e.message, field: e.field, section: e.section } );
-			} else if ( e instanceof KCDParseError ) {
-				issues.push( { severity: 'error', message: e.message } );
-			}
-		};
-
-		try { this.validateFrontmatter(); } catch ( e ) { capture( e ); }
-		try { this.validateStructure();   } catch ( e ) { capture( e ); }
-
-		return issues;
+		return [];
 	}
 
 	getPolicy(): PolicyEntry[] { return []; }
 
 	// ── Serialization ────────────────────────────────────────────────────────
-
-	toMarkdown(): string {
-		const fm = yaml.dump( this.frontmatter, { lineWidth: -1 } ).trimEnd();
-		return `---\n${fm}\n---\n\n${this.body}`;
-	}
 
 	serialize(): SerializedArtifact {
 		return {
@@ -320,12 +163,12 @@ export class KCDPrimitive {
 
 	// ── Getters ──────────────────────────────────────────────────────────────
 
-	/** frontmatter.name if present, otherwise the filename stem. */
+	/** frontmatter.name if present, otherwise the filename stem ( extension stripped ). */
 	getName(): string {
 		const fmName = this.frontmatter['name'];
 		if ( typeof fmName === 'string' && fmName ) return fmName;
 		const stem = this.path.split( /[\\/]/ ).pop() ?? 'artifact';
-		return stem.replace( /\.md$/, '' );
+		return stem.replace( /\.html?$/i, '' );
 	}
 
 	/** Internal links as typed references — this artifact's outbound edges, classified
@@ -357,15 +200,15 @@ export function classifyHref( href: string ): LinkType {
  * The path taxonomy: a vault-root-relative path (`_Claude/...`) to its ArtifactType.
  * One switch for every classifier — LensObject.classifyByPath wraps this for absolute
  * paths; getBacklinks feeds it hrefs directly (link hrefs are vault-root-relative
- * by project convention).
+ * by project convention). HTML is the substrate, so the file form is `.html`.
  */
 export function classifyRelPath( rel: string, docRoot = '_Claude' ): ArtifactType {
 	const norm = rel.replace( /\\/g, '/' );
 
 	if ( !norm.startsWith( docRoot + '/' ) ) return 'unknown';
 
-	// Index files are first-class navigational primitives, regardless of which folder they sit in.
-	if ( norm.endsWith( '/index.md' ) ) return 'index';
+	// Nav-index files are first-class navigational primitives, regardless of which folder they sit in.
+	if ( norm.endsWith( '/nav-index.html' ) ) return 'nav-index';
 
 	const sub = norm.slice( docRoot.length + 1 );
 
@@ -393,5 +236,3 @@ export function classifyRelPath( rel: string, docRoot = '_Claude' ): ArtifactTyp
 
 	return 'unknown';
 }
-
-KCDPrimitive.setFallback( ( markdown, absPath, type ) => KCDPrimitive.createBase( markdown, absPath, type ) );

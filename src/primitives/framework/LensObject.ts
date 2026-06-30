@@ -1,11 +1,8 @@
 import * as path from 'path';
-import type { ScannedFile } from '../../scanner';
-import { KCDValidationError } from '../errors';
-import { KCDPrimitive, clampDepth, classifyHref, classifyRelPath } from './KCDPrimitive';
+import { KCDPrimitive, clampDepth, classifyRelPath } from './KCDPrimitive';
 import type { ArtifactType, KCDRole, PolicyEntry, ReaderFn, SerializedArtifact, SerializedLens } from '../types';
 
 const LENS_DEFAULT_DEPTH = 2;
-const ROW_LINK_RE = /\[([^\]]*)\]\(([^)]+)\)/;
 
 /** The default disk reader — a stub that throws. Core never touches `fs`; the main side injects
  *  a real reader at load(). On the renderer this stays the stub, because render never dredges —
@@ -82,29 +79,22 @@ export class LensObject extends KCDPrimitive {
 	// ── Static entry points ──────────────────────────────────────────────────
 
 	static load( lensPath: string, opts: LensLoadOptions ): LensObject {
-		const abs  = path.resolve( lensPath );
-		const lens = new LensObject( abs );
+		const abs = path.resolve( lensPath );
+		const raw = opts.read( abs );
+
+		// HTML is the substrate: the lens hydrates through the validate-first parser ( a malformed
+		// document throws here, all-or-nothing ). fromHtml yields the right prototype via the
+		// hydrator table, so this is a LensObject with its policy already carried from the parse.
+		const lens = KCDPrimitive.fromHtml( raw, abs ) as LensObject;
+
 		lens.projectRoot = opts.projectRoot;
 		lens.read        = opts.read;
 		lens.eager       = opts.eager ?? false;
-		lens.runInit( lens.read( abs ) );
 
 		const depth = clampDepth( opts.depth ?? lens.dredgeDepth );
 		// dredgeFrom returns [ self, ...descendants ]; nodes holds the children only.
 		lens.nodes  = lens.dredgeFrom( lens, depth, new Set( [abs] ) ).slice( 1 );
 		return lens;
-	}
-
-	static parse( markdown: string, filePath: string ): LensObject {
-		const obj = new LensObject( filePath );
-		obj.runInit( markdown );
-		return obj;
-	}
-
-	static fromScanned( scanned: ScannedFile ): LensObject {
-		const obj = new LensObject( scanned.path );
-		obj.runInitFromScanned( scanned );
-		return obj;
 	}
 
 	/**
@@ -115,12 +105,20 @@ export class LensObject extends KCDPrimitive {
 	static fromSerialized( json: SerializedArtifact ): LensObject {
 		const obj = new LensObject( json.path );
 		obj.hydrateFrom( json );
-		obj.policy     = obj.parseKnowPolicy();
+		// Policy is computed once by the parser ( the HTML front end owns it ) and rides the wire.
+		// A lens whose sections hold inner HTML has no re-parseable table to fall back to.
+		obj.policy     = json.policy ?? [];
 		const children = ( json as SerializedLens ).nodes ?? [];
 		obj.nodes      = children.map( ( n ) => KCDPrimitive.fromSerialized( n ) );
 		const injected = ( json as SerializedLens ).injected ?? [];
 		obj.injected   = injected.map( ( n ) => KCDPrimitive.fromSerialized( n ) );
 		return obj;
+	}
+
+	/** Carry policy on the wire. The receiver prefers it over re-deriving — load-bearing for an
+	 *  HTML lens, whose sections hold inner HTML, not a re-parseable markdown dredge table. */
+	serialize(): SerializedArtifact {
+		return { ...super.serialize(), policy: [ ...this.policy ] };
 	}
 
 	/** The wire form for crossing the bridge: this lens plus its dredged children and any
@@ -153,8 +151,8 @@ export class LensObject extends KCDPrimitive {
 
 			let child: KCDPrimitive;
 			try {
-				const markdown = this.read( childAbs );
-				child = KCDPrimitive.create( LensObject.classifyByPath( childAbs, this.projectRoot! ), markdown, childAbs );
+				const raw = this.read( childAbs );
+				child = KCDPrimitive.fromHtml( raw, childAbs );
 			} catch {
 				continue;
 			}
@@ -169,39 +167,9 @@ export class LensObject extends KCDPrimitive {
 		return out;
 	}
 
-	// ── Parsing ───────────────────────────────────────────────────────────────
-
-	protected parseBody( body: string ): void {
-		super.parseBody( body );
-		this.policy = this.parseKnowPolicy();
-	}
-
-	private parseKnowPolicy(): PolicyEntry[] {
-		const know = this.sections['Know'];
-		if ( !know ) return [];
-
-		const entries: PolicyEntry[] = [];
-		for ( const line of know.split( '\n' ) ) {
-			const trimmed = line.trim();
-			if ( !trimmed.startsWith( '|' ) ) continue;
-
-			const cells = trimmed.split( '|' ).slice( 1, -1 ).map( c => c.trim() );
-			if ( cells.length < 3 ) continue;
-
-			const [what, where, why] = cells;
-			const link = where.match( ROW_LINK_RE );
-			if ( !link ) continue;
-
-			const href = link[2];
-			entries.push( {
-				what, href, why,
-				always:  /^always\b/i.test( why ),
-				type:    classifyHref( href ),
-				section: 'Know',
-			} );
-		}
-		return entries;
-	}
+	// ── Policy ────────────────────────────────────────────────────────────────
+	// The dredge policy is computed by the parser ( know-region slots, the `always` gate ) and
+	// rides the wire; the lens just exposes it. The markdown Know-table parse is gone.
 
 	getPolicy(): PolicyEntry[]  { return [ ...this.policy ]; }
 
@@ -247,30 +215,4 @@ export class LensObject extends KCDPrimitive {
 		return out.join( '\n\n---\n\n' );
 	}
 
-	// ── Validation hooks ─────────────────────────────────────────────────────
-
-	protected validateFrontmatter(): void {
-		super.validateFrontmatter();
-
-		if ( this.frontmatter['type'] !== 'lens' ) {
-			throw new KCDValidationError(
-				`LensObject: frontmatter.type must be "lens"`,
-				this.path, '"lens"',
-				String( this.frontmatter['type'] ?? null ),
-				{ field: 'type' }
-			);
-		}
-
-		if ( !this.frontmatter['command'] ) {
-			throw new KCDValidationError(
-				`LensObject: frontmatter.command is required`,
-				this.path, 'command field present', null,
-				{ field: 'command' }
-			);
-		}
-	}
-
-	protected requiredSections(): string[] { return ['Know', 'Care', 'Do']; }
 }
-
-KCDPrimitive.register( 'lens', ( markdown, absPath ) => LensObject.parse( markdown, absPath ) );

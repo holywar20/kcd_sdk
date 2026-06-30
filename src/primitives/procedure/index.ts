@@ -3,3 +3,4 @@ export { ContractObject } from './ContractObject';
 export { GeneratorObject } from './GeneratorObject';
 export { HabitObject } from './HabitObject';
 export { PipelineObject } from './PipelineObject';
+export { UtilityObject } from './UtilityObject';

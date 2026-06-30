@@ -1,61 +1,61 @@
 import { describe, it, expect } from 'vitest';
 import { classifyRelPath, IndexObject, PlanObject } from '../index';
+import type { SerializedArtifact } from '../types';
 
 // ── B1: context/ → reference, for any parent ─────────────────────────────────
 
 describe( 'classifyRelPath — context/ rule', () => {
 	it( 'classifies a lens context file as reference', () => {
-		expect( classifyRelPath( '_Claude/lenses/render/context/debug-design-layer.md' ) ).toBe( 'reference' );
+		expect( classifyRelPath( '_Claude/lenses/render/context/debug-design-layer.html' ) ).toBe( 'reference' );
 	} );
 
 	it( 'classifies a generator context file as reference (not generator)', () => {
-		expect( classifyRelPath( '_Claude/generators/gen-x/context/idiom-source.md' ) ).toBe( 'reference' );
+		expect( classifyRelPath( '_Claude/generators/gen-x/context/idiom-source.html' ) ).toBe( 'reference' );
 	} );
 
 	it( 'does not sweep in a folder merely named context-notes', () => {
-		expect( classifyRelPath( '_Claude/references/context-notes/foo.md' ) ).toBe( 'reference' );
+		expect( classifyRelPath( '_Claude/references/context-notes/foo.html' ) ).toBe( 'reference' );
 	} );
 } );
 
-// ── B2: index is a first-class type ──────────────────────────────────────────
+// ── B2: nav-index is a first-class type ──────────────────────────────────────
 
-describe( 'classifyRelPath — index rule', () => {
-	it( 'classifies any index.md as index, regardless of folder', () => {
-		expect( classifyRelPath( '_Claude/plans/index.md' ) ).toBe( 'index' );
-		expect( classifyRelPath( '_Claude/references/index.md' ) ).toBe( 'index' );
+describe( 'classifyRelPath — nav-index rule', () => {
+	it( 'classifies any nav-index.html as nav-index, regardless of folder', () => {
+		expect( classifyRelPath( '_Claude/plans/nav-index.html' ) ).toBe( 'nav-index' );
+		expect( classifyRelPath( '_Claude/references/nav-index.html' ) ).toBe( 'nav-index' );
 	} );
+
+	it( 'classifies a non-index file by its folder, not the nav rule', () => {
+		expect( classifyRelPath( '_Claude/plans/some-plan.html' ) ).toBe( 'plan' );
+	} );
+} );
+
+// ── Hydration dispatch — the wire seam rebuilds the right prototype ──────────
+// Conformance ( required frontmatter / sections ) is now enforced at parse time by KcdValidate,
+// not per-subclass; what these subclasses still own is their type + role, reached via the hydrator.
+
+const wire = ( type: string ): SerializedArtifact => ( {
+	path:        `_Claude/x/${ type }.html`,
+	type:        type as SerializedArtifact['type'],
+	frontmatter: { type },
+	sections:    {},
+	body:        '',
+	links:       [],
 } );
 
 describe( 'IndexObject', () => {
-	const INDEX_MD = `---\ntype: index\n---\n\n# Plans Index\n\n| Plan | Lens |\n|---|---|\n`;
-
-	it( 'parses with no required sections', () => {
-		const obj = IndexObject.parse( INDEX_MD, '_Claude/plans/index.md' );
-		expect( obj.getType() ).toBe( 'index' );
+	it( 'hydrates as a nav-index in the know role', () => {
+		const obj = IndexObject.fromSerialized( wire( 'nav-index' ) );
+		expect( obj.getType() ).toBe( 'nav-index' );
 		expect( obj.getRole() ).toBe( 'know' );
-	} );
-
-	it( 'rejects a wrong frontmatter type', () => {
-		const wrong = `---\ntype: plan\n---\n\n# Not an index\n`;
-		expect( () => IndexObject.parse( wrong, '_Claude/plans/index.md' ) ).toThrow();
 	} );
 } );
 
-// ── B3: plan validator relax (status-aware Phases) ───────────────────────────
-
-describe( 'PlanObject — status-aware structure', () => {
-	it( 'accepts a completed plan with only ## Goal', () => {
-		const md = `---\ntype: plan\nstatus: complete\n---\n\n## Goal\nshipped\n`;
-		expect( () => PlanObject.parse( md, '_Claude/plans/plans_complete/x.md' ) ).not.toThrow();
-	} );
-
-	it( 'still requires ## Phases on a live (active) plan', () => {
-		const md = `---\ntype: plan\nstatus: active\n---\n\n## Goal\nin flight\n`;
-		expect( () => PlanObject.parse( md, '_Claude/plans/x.md' ) ).toThrow();
-	} );
-
-	it( 'no longer requires ## Approach', () => {
-		const md = `---\ntype: plan\nstatus: active\n---\n\n## Goal\nin flight\n\n## Phases\n1. go\n`;
-		expect( () => PlanObject.parse( md, '_Claude/plans/x.md' ) ).not.toThrow();
+describe( 'PlanObject', () => {
+	it( 'hydrates as a plan in the know role', () => {
+		const obj = PlanObject.fromSerialized( wire( 'plan' ) );
+		expect( obj.getType() ).toBe( 'plan' );
+		expect( obj.getRole() ).toBe( 'know' );
 	} );
 } );

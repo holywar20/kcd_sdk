@@ -75,7 +75,7 @@ export class Vault {
 			type: this.classify( file.path ),
 			name: typeof file.frontmatter[ 'name' ] === 'string'
 				? file.frontmatter[ 'name' ] as string
-				: path.basename( file.relativePath, '.md' ),
+				: path.basename( file.relativePath, '.html' ),
 		};
 	}
 
@@ -91,7 +91,7 @@ export class Vault {
 		return this.scan().filter( f => Glob.matches( f.relativePath, pattern ) );
 	}
 
-	/** Raw markdown at a vault path. */
+	/** Raw file content at a vault path ( HTML for artifacts ). */
 	read( vaultRelative: string ): string {
 		return fs.readFileSync( this.toAbs( vaultRelative ), 'utf-8' );
 	}

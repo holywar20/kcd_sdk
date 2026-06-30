@@ -6,8 +6,8 @@ const path = require( 'path' );
 // Paths relative to compiled dist/test/ — walking up three levels lands at the
 // ContextManager project root, where _Claude lives.
 const PROJECT_ROOT  = path.resolve( __dirname, '../../..' );
-const LENS_DIR      = path.join( PROJECT_ROOT, '_Claude/lenses/lens_crafter' );
-const LENS_FILE     = path.join( LENS_DIR, 'lens_crafter.md' );
+const LENS_DIR      = path.join( PROJECT_ROOT, '_Claude/lenses/parser' );
+const LENS_FILE     = path.join( LENS_DIR, 'parser.html' );
 
 const { scan, loadLensFromDisk } = require( '../../dist/index.js' );
 

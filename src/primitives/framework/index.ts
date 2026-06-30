@@ -1,5 +1,5 @@
 export { KCDPrimitive, DREDGE_MAX, clampDepth, classifyHref, classifyRelPath } from './KCDPrimitive';
-export type { FactoryFn } from './KCDPrimitive';
+export type { HydratorFn } from './KCDPrimitive';
 export { LensObject } from './LensObject';
 export type { LensLoadOptions } from './LensObject';
 export { FrameworkObject } from './FrameworkObject';

@@ -47,6 +47,9 @@ export type ArtifactType =
 	| 'contract'
 	| 'template'
 	| 'framework'
+	| 'nav-index'
+	// `index` is the pre-vocab-alignment name for `nav-index`, kept until the type union is
+	// reconciled against the locked HTML vocab ( pipeline/utility also pending ). See 05-sub plan.
 	| 'index'
 	| 'unknown';
 
@@ -87,6 +90,10 @@ export interface SerializedArtifact {
 	/** Tuned state: whether this artifact contributes to the outbound request.
 	 *  Absent = included (the default). Runtime tuning — never written to disk markdown. */
 	included?: boolean;
+	/** Dredge policy, parsed once at the HTML front end and carried across the bridge so the
+	 *  receiver never re-derives it. Absent on the md path / non-lens artifacts (LensObject
+	 *  re-derives from its Know table). The parser owns policy; this is where it rides. */
+	policy?: PolicyEntry[];
 }
 
 /**
