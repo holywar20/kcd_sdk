@@ -20,8 +20,8 @@ export type FieldValidator = ( v: string ) => boolean;
 export const KcdAddress = new class KcdAddress {
 
 	// ── The closed sets ( protocol §2, §4 ) ──────────────────────────────────────
-	TYPES        = [ 'lens', 'plan', 'reference', 'framework', 'template', 'nav-index', 'habit', 'contract', 'generator', 'analyzer' ];
-	STATUSES     = [ 'draft', 'active', 'composed', 'disabled', 'deployed', 'complete', 'retired', 'paused' ];
+	TYPES        = [ 'lens', 'plan', 'reference', 'note', 'how-to', 'framework', 'template', 'nav-index', 'habit', 'contract', 'generator', 'analyzer' ];
+	STATUSES     = [ 'draft', 'active', 'observation', 'composed', 'disabled', 'deployed', 'complete', 'retired', 'paused' ];
 	AUDIENCES    = [ 'human', 'agent', 'both' ];
 	MERGES       = [ 'additive', 'declarative', 'union' ];
 	REGIONS      = [ 'know', 'care', 'do' ];

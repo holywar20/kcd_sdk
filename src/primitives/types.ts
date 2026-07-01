@@ -39,6 +39,8 @@ export type ArtifactType =
 	| 'lens'
 	| 'plan'
 	| 'reference'
+	| 'note'
+	| 'how-to'
 	| 'generator'
 	| 'analyzer'
 	| 'pipeline'
