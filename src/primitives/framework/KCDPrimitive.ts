@@ -1,4 +1,5 @@
 import { KcdParse } from '../../core/html/KcdParse';
+import { KcdEmit } from '../../core/html/KcdEmit';
 import type { ArtifactType, KCDRole, LinkEntry, LinkType, PolicyEntry, SerializedArtifact, TypeCheckIssue, WriteMap } from '../types';
 
 export const DREDGE_MAX = 4;
@@ -69,6 +70,16 @@ export class KCDPrimitive {
 	 */
 	static fromHtml( html: string, absPath: string ): KCDPrimitive {
 		return KCDPrimitive.fromSerialized( KcdParse.parse( html, absPath ) );
+	}
+
+	/**
+	 * The HTML back end ( parser-family row 5, the inverse of `fromHtml` ): this instance's current
+	 * state → a full HTML document string. Regenerates frontmatter only — sections/regions/slots ride
+	 * through from `body` untouched ( see KcdEmit's doc comment ). Callers ( `KcdService.save` ) are
+	 * expected to validate the result before writing; this method does not.
+	 */
+	toHtml(): string {
+		return KcdEmit.emit( this.serialize() );
 	}
 
 	/**
