@@ -132,6 +132,10 @@ export const KcdValidate = new class KcdValidate {
 			// validate value against the EXPECTED type ( not just the declared one )
 			if ( !KcdAddress.validates( spec.type, value ) ) err( 'bad-value', `field:${ key }`, `"${ value }" is not a valid ${ spec.type }` );
 
+			// dedicated: slug values are hyphenated — internal underscores ( e.g. lens_crafter ) are a
+			// migration artifact. Reported separately from bad-value so the fix is spelled out.
+			if ( spec.type === 'slug' ) { const fix = this.slugUnderscore( value ); if ( fix ) err( 'underscore-slug', `field:${ key }`, `"${ value }" has internal underscores — slugs are hyphenated ( use "${ fix }" )` ); }
+
 			// per-field extras
 			if ( spec.oneOf && !spec.oneOf.includes( value ) )    err( 'not-allowed', `field:${ key }`, `"${ value }" not in { ${ spec.oneOf.join( ' | ' ) } }` );
 			if ( spec.pattern && !spec.pattern.test( value ) )    err( 'bad-format', `field:${ key }`, `"${ value }" does not match the expected form` );
@@ -210,6 +214,7 @@ export const KcdValidate = new class KcdValidate {
 					const { isLink, value } = KcdAddress.fieldValue( el, declared );
 					if ( isLink && value === '' )                          err( 'empty-link', `cell:${ key }`, `link cell "${ key }" has no href` );
 					else if ( value !== '' && !KcdAddress.validates( declared, value ) ) err( 'bad-value', `cell:${ key }`, `"${ value }" is not a valid ${ declared }` );
+					if ( declared === 'slug' ) { const fix = this.slugUnderscore( value ); if ( fix ) err( 'underscore-slug', `cell:${ key }`, `"${ value }" has internal underscores — slugs are hyphenated ( use "${ fix }" )` ); }
 				}
 			}
 		} );
@@ -226,6 +231,13 @@ export const KcdValidate = new class KcdValidate {
 	}
 
 	nameOk( v: string ): boolean { return v.length <= 64 && KcdAddress.SLUG_RE.test( v ) && !/claude|anthropic/i.test( v ); }
+
+	// slug hygiene: internal underscores ( `lens_crafter` ) are illegal — return the hyphenated
+	// suggestion, or null if clean. The leading `_` sort-prefix ( `_lens-base` ) is preserved.
+	slugUnderscore( value: string ): string | null {
+		if ( !/[a-z0-9]_[a-z0-9]/.test( value ) ) return null;
+		return value.replace( /([a-z0-9])_([a-z0-9])/g, '$1-$2' );
+	}
 
 	isEmptyContainer( el: HtmlEl ): boolean {
 		if ( HtmlTree.textOf( el ).trim() !== '' ) return false;

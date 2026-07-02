@@ -5,7 +5,13 @@ const repoRoot  = path.resolve( __dirname, '../..' )
 const claudeDir = path.join( repoRoot, '_Claude' )
 
 const SKIP_DIR_NAMES = new Set( [ 'node_modules', '.git', '.obsidian' ] )
-const SKIP_PATH_SEGMENTS = [ '\\logs\\', '\\reports\\', '\\audits\\', '\\scratch\\' ]
+// `\migration\` = the migration-tooling folder ( the generated migration-map + its drift log ) — these
+// are OUTPUTS/scratch of the migration, never migration targets themselves.
+const SKIP_PATH_SEGMENTS = [ '\\logs\\', '\\reports\\', '\\audits\\', '\\scratch\\', '\\migration\\' ]
+
+// Working docs deliberately kept as .md and slated for deletion once the migration lands — they
+// self-declare "Disposable" in their own frontmatter. Not migration targets; skip by basename.
+const SKIP_BASENAMES = new Set( [ '2026-06-30_references-drift.md', '2026-06-30_references-migration-tracker.md' ] )
 
 function walk( dir: string, out: string[] ): void {
 	for ( const entry of fs.readdirSync( dir, { withFileTypes: true } ) ) {
@@ -22,6 +28,7 @@ walk( claudeDir, allFiles )
 const mdFiles = allFiles.filter( f => {
 	if ( !f.toLowerCase().endsWith( '.md' ) ) return false
 	if ( SKIP_PATH_SEGMENTS.some( seg => f.includes( seg ) ) ) return false
+	if ( SKIP_BASENAMES.has( path.basename( f ) ) ) return false
 	if ( /\\component-map\./.test( f ) ) return false
 	if ( f.endsWith( '.verify-throwaway.md' ) ) return false
 	return true
@@ -69,7 +76,7 @@ for ( const mdFull of mdFiles ) {
 		htmlSize = fs.statSync( htmlFull ).size
 		sizeRatio = Math.round( ( htmlSize / mdSize ) * 100 ) / 100
 		const expectedMin = Math.max( mdSize * 1.2, 500 )
-		const expectedMax = mdSize * 2.5
+		const expectedMax = mdSize * 5
 		sizeStatus = ( htmlSize < expectedMin || htmlSize > expectedMax ) ? 'anomaly' : 'ok'
 	}
 

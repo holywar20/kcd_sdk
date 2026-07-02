@@ -22,8 +22,15 @@ walk( claudeDir, files )
 interface Row { file: string; ok: boolean; type: string | null; name: string | null; errorCodes: string[]; errors: { where: string; msg: string }[] }
 const rows: Row[] = []
 
+// A KCD document announces itself with at least one `data-kcd*` marker. Files with none are
+// not documents at all ( interactive mockups, prototypes, hand-authored HTML apps ) — they are
+// not the validator's concern. A truncated document that lost its <article> still carries
+// data-kcd-* remnants, so this skip does not mask a real botched migration.
+const NON_DOCUMENT = ( html: string ) => !/data-kcd/.test( html )
+
 for ( const f of files ) {
 	const html = fs.readFileSync( f, 'utf-8' )
+	if ( NON_DOCUMENT( html ) ) continue
 	let report
 	try {
 		report = KcdValidate.validate( html )
