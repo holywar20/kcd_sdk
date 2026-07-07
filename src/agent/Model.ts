@@ -13,10 +13,20 @@ export interface ModelDescriptor {
 	/** UI display name. */
 	label: string;
 	/** Which connector family serves this model. */
-	provider: 'anthropic' | 'test' | 'local' | 'remote';
+	provider: 'anthropic' | 'test' | 'local' | 'remote' | 'claude_code_max';
 	/** The wire id sent to the provider's API. */
 	modelId: string;
 	maxTokens: number;
+	/**
+	 * How a turn on this model is actually paid for — orthogonal to `price` (which is the
+	 * per-token rate WHEN metered). `'subscription'` means the turn draws against a flat-rate
+	 * plan the user already pays for outside Starmind (e.g. a Claude Max login) — `price` is
+	 * absent/zero for these, but that must never read as "free" in the UI: it's prepaid, not
+	 * costless. Absent for every existing provider (local/remote/test have no billing model
+	 * worth naming; anthropic is the metered default) — only a subscription-backed tier
+	 * declares this.
+	 */
+	billing?: 'subscription' | 'metered';
 	/**
 	 * Working tier — how heavy the model is / where it runs. Orthogonal to provider:
 	 * a 'remote' connector may front a remote-tier self-host OR a frontier endpoint,

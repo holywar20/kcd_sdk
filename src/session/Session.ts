@@ -14,6 +14,10 @@
 
 export type SessionStatus = 'active' | 'archived';
 
+/** The generic font stacks a session's chat surface can pick between — the render side owns
+ *  the actual CSS stacks; this is just the closed key set a session persists. */
+export type FontFamilyKey = 'sans' | 'serif' | 'mono';
+
 /** The wire / DB-seed form of a Session. Flat and declarative — everything a session IS. */
 export interface SerializedSession {
 	id: string;
@@ -27,6 +31,11 @@ export interface SerializedSession {
 	/** Epoch ms of the last turn (or last touch) — the recency sort for a session switcher. */
 	lastActive: number;
 	status: SessionStatus;
+	/** This session's chat-surface text zoom. Null → the render side's default (1). Scoped to
+	 *  the chat panel itself, not the app window — set via the chat header's A-/A+ control. */
+	zoom: number | null;
+	/** This session's chat-surface font family. Null → the render side's default ('sans'). */
+	fontFamily: FontFamilyKey | null;
 }
 
 export interface SessionOptions {
@@ -37,6 +46,8 @@ export interface SessionOptions {
 	createdAt?: number;
 	lastActive?: number;
 	status?: SessionStatus;
+	zoom?: number | null;
+	fontFamily?: FontFamilyKey | null;
 }
 
 /**
@@ -52,6 +63,8 @@ export class Session {
 	readonly createdAt: number;
 	lastActive: number;
 	status: SessionStatus;
+	zoom: number | null;
+	fontFamily: FontFamilyKey | null;
 
 	private constructor(
 		id: string,
@@ -61,6 +74,8 @@ export class Session {
 		createdAt: number,
 		lastActive: number,
 		status: SessionStatus,
+		zoom: number | null,
+		fontFamily: FontFamilyKey | null,
 	) {
 		this.id         = id;
 		this.agentId    = agentId;
@@ -69,6 +84,8 @@ export class Session {
 		this.createdAt  = createdAt;
 		this.lastActive = lastActive;
 		this.status     = status;
+		this.zoom       = zoom;
+		this.fontFamily = fontFamily;
 	}
 
 	// ── Static entry points ──────────────────────────────────────────────────
@@ -84,6 +101,8 @@ export class Session {
 			opts.createdAt ?? now,
 			opts.lastActive ?? now,
 			opts.status ?? 'active',
+			opts.zoom ?? null,
+			opts.fontFamily ?? null,
 		);
 	}
 
@@ -97,6 +116,8 @@ export class Session {
 			json.createdAt,
 			json.lastActive ?? json.createdAt,
 			json.status ?? 'active',
+			json.zoom ?? null,
+			json.fontFamily ?? null,
 		);
 	}
 
@@ -110,6 +131,8 @@ export class Session {
 			createdAt:  this.createdAt,
 			lastActive: this.lastActive,
 			status:     this.status,
+			zoom:       this.zoom,
+			fontFamily: this.fontFamily,
 		};
 	}
 
@@ -130,6 +153,13 @@ export class Session {
 
 	removeTag( tag: string ): void {
 		this.tags = this.tags.filter( ( t ) => t !== tag );
+	}
+
+	/** Set this session's chat-surface zoom + font family ( either may be null to fall back to
+	 *  the render side's default ). The chat header's A-/A+ and font controls call this. */
+	setDisplay( zoom: number | null, fontFamily: FontFamilyKey | null ): void {
+		this.zoom = zoom;
+		this.fontFamily = fontFamily;
 	}
 
 	/** A display title even when none was set — the explicit title, else a stamp-derived fallback. */
