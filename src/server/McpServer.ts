@@ -174,8 +174,14 @@ export class McpServer {
 		};
 	}
 
-	private onToolsList(): unknown {
-		const tools = [ ...this.tools.values() ].map( ( t ) => ( {
+	/**
+	 * The wire tool surface — the exact array `tools/list` sends, exposed publicly so tooling can read a
+	 * built server's surface WITHOUT spawning it over stdio (the promotion script regenerates the committed
+	 * `tools.snapshot.json` from this — authoritative by construction, since it is the same projection the
+	 * wire uses). No handlers, no protocol framing: just the descriptors a client sees.
+	 */
+	listTools(): Record<string, unknown>[] {
+		return [ ...this.tools.values() ].map( ( t ) => ( {
 			name:        t.name,
 			description: t.description,
 			inputSchema: t.inputSchema,
@@ -184,7 +190,10 @@ export class McpServer {
 			...( t.example ? { example: t.example } : {} ),
 			...( t.doc ? { doc: t.doc } : {} ),
 		} ) );
-		return { tools };
+	}
+
+	private onToolsList(): unknown {
+		return { tools: this.listTools() };
 	}
 
 	private async onToolsCall( params?: Record<string, unknown> ): Promise<ToolResult> {

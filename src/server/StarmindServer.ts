@@ -60,6 +60,16 @@ export abstract class StarmindServer {
 		return runVerify( this.registrations, this.ownManifest() );
 	}
 
+	/**
+	 * The built wire tool surface — the exact `tools/list` array, without spawning the server. Builds
+	 * first (idempotent), then reads it off the underlying McpServer. The promotion script uses this to
+	 * regenerate the committed tool snapshot authoritatively (the cache the app boots dormant from).
+	 */
+	wireTools(): Record<string, unknown>[] {
+		this.ensureBuilt();
+		return this.server.listTools();
+	}
+
 	/** Build the tool surface, then serve it on stdio until the client disconnects. */
 	async run(): Promise<void> {
 		this.ensureBuilt();
