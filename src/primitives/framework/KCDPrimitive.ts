@@ -124,7 +124,7 @@ export class KCDPrimitive {
 	/**
 	 * This artifact's KCD role — determines which context dock it belongs to.
 	 * Default is 'know'. Do-role artifacts (Habit, Contract, Generator, Analyzer,
-	 * Pipeline) override to return 'do'. LensObject overrides to return 'lens'.
+	 * Utility) override to return 'do'. LensObject overrides to return 'lens'.
 	 */
 	getRole(): KCDRole { return 'know'; }
 
@@ -238,7 +238,6 @@ export function classifyRelPath( rel: string, docRoot = '_Claude' ): ArtifactTyp
 	if ( sub.startsWith( 'references/' ) )     return 'reference';
 	if ( sub.startsWith( 'generators/' ) )     return 'generator';
 	if ( sub.startsWith( 'analyzers/' ) )      return 'analyzer';
-	if ( sub.startsWith( 'pipelines/' ) )      return 'pipeline';
 	if ( sub.startsWith( 'utilities/' ) )      return 'utility';
 	if ( sub.startsWith( 'habits/' ) )         return 'habit';
 	if ( sub.startsWith( 'contracts/' ) )      return 'contract';

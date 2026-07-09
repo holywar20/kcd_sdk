@@ -8,4 +8,8 @@ export * from '../scanner';
 export * from '../server';
 export { fsReader, inferProjectRoot, loadLensFromDisk } from './io';
 export { Vault } from './Vault';
-export { SdkFileAccess, LIST_CAP, READ_CAP_BYTES, GLOB_CAP, GLOB_WALK_CAP, type FileWarn } from './SdkFileAccess';
+export {
+	SdkFileAccess, LIST_CAP, READ_CAP_BYTES, GLOB_CAP, GLOB_WALK_CAP,
+	SEARCH_MATCH_CAP, SEARCH_WALK_CAP, SEARCH_YIELD_EVERY, SEARCH_ES_TIMEOUT_MS,
+	type FileWarn, type SearchToken
+} from './SdkFileAccess';

@@ -32,7 +32,6 @@ import { HabitObject } from './procedure/HabitObject';
 import { ContractObject } from './procedure/ContractObject';
 import { GeneratorObject } from './procedure/GeneratorObject';
 import { AnalyzerObject } from './procedure/AnalyzerObject';
-import { PipelineObject } from './procedure/PipelineObject';
 import { UtilityObject } from './procedure/UtilityObject';
 
 KCDPrimitive.registerHydrator( 'lens', LensObject.fromSerialized );
@@ -48,5 +47,4 @@ KCDPrimitive.registerHydrator( 'habit', HabitObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'contract', ContractObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'generator', GeneratorObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'analyzer', AnalyzerObject.fromSerialized );
-KCDPrimitive.registerHydrator( 'pipeline', PipelineObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'utility', UtilityObject.fromSerialized );

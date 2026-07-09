@@ -16,4 +16,6 @@ export * from '../constellation';
 export * from './FileTypes';
 export * from './TextTypes';
 export * from './Glob';
+export * from './NameMatch';
+export * from './EsCsv';
 export * from './html';

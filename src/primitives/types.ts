@@ -43,7 +43,6 @@ export type ArtifactType =
 	| 'how-to'
 	| 'generator'
 	| 'analyzer'
-	| 'pipeline'
 	| 'utility'
 	| 'habit'
 	| 'contract'
@@ -51,7 +50,7 @@ export type ArtifactType =
 	| 'framework'
 	| 'nav-index'
 	// `index` is the pre-vocab-alignment name for `nav-index`, kept until the type union is
-	// reconciled against the locked HTML vocab ( pipeline/utility also pending ). See 05-sub plan.
+	// reconciled against the locked HTML vocab ( utility also pending ). See 05-sub plan.
 	| 'index'
 	| 'unknown';
 

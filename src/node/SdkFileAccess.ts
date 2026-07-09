@@ -1,9 +1,15 @@
 import { readdirSync, statSync, readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, cpSync, rmSync } from 'fs'
 import { join, extname, relative, resolve, sep, dirname, basename } from 'path'
 import { homedir } from 'os'
+import { execFile } from 'child_process'
+import { promisify } from 'util'
 import { TextTypes } from '../core/TextTypes'
 import { Glob } from '../core/Glob'
+import { NameMatch } from '../core/NameMatch'
+import { EsCsv } from '../core/EsCsv'
 import type { FileEntry, FileStat, FileRoots } from '../core/FileTypes'
+
+const _execFile = promisify( execFile )
 
 // Caps — guard the wire AND the heap, identically for every reader. A directory returns at most
 // LIST_CAP entries (no pagination by design — a 50k folder shows its first 1000, navigate inward).
@@ -14,6 +20,33 @@ export const LIST_CAP       = 1000
 export const READ_CAP_BYTES = 1_048_576   // 1 MiB
 export const GLOB_CAP       = 1000
 export const GLOB_WALK_CAP  = 50_000
+
+// search()'s own caps — sized for a user-initiated, cancelable, whole-DRIVE walk rather than a
+// bounded project-scoped glob, so they're deliberately much larger than GLOB_CAP/GLOB_WALK_CAP
+// above: SEARCH_WALK_CAP is a backstop against a runaway walk (a symlink cycle, a truly enormous
+// drive), not the primary control — the Cancel token is. SEARCH_YIELD_EVERY is how often the walk
+// hands control back to the event loop; without this a whole-drive search would block the ENTIRE
+// Electron main process (not just this feature) until it finished, and a cancel could never land.
+export const SEARCH_MATCH_CAP   = 2000
+export const SEARCH_WALK_CAP    = 2_000_000
+export const SEARCH_YIELD_EVERY = 500
+
+// The es.exe fast path's own timeout — spawn-and-parse a real Everything query, which the live
+// benchmark clocked at 19-32ms even for a pathological single-letter whole-drive query. 5s is a
+// generous ceiling for a call that should never realistically approach it; a hang here (not just a
+// miss) still falls through to the walk rather than hanging the caller.
+export const SEARCH_ES_TIMEOUT_MS = 5000
+
+/** Cooperative-cancel handle for `search()` — the caller flips `cancelled` from elsewhere (a new
+ *  query, an explicit Cancel click) and the walk notices it at its next yield point. Plain mutable
+ *  data, not an AbortController: this needs to cross the IPC pull lane, which AbortController can't. */
+export type SearchToken = { cancelled: boolean }
+
+/** Yield one tick of the event loop — the walk's cooperative-cancellation + main-process-responsiveness
+ *  seam. `setImmediate` (not a Promise microtask) so pending IPC/UI work actually gets a turn. */
+function _tick(): Promise<void> {
+	return new Promise( ( resolve ) => setImmediate( resolve ) )
+}
 
 /** A degrade observer — the consumer's tracer, INJECTED, never imported. This copies the SDK's
  *  established capability-injection idiom (see `LensObject`'s disk-reader strategy in `node/io.ts`):
@@ -39,7 +72,16 @@ export type FileWarn = ( event: string, detail: Record<string, unknown> ) => voi
  */
 export class SdkFileAccess {
 
-	constructor( private readonly onWarn?: FileWarn ) {}
+	constructor(
+		private readonly onWarn?: FileWarn,
+		/** Path to a vendored `es.exe` (voidtools' Everything CLI) — search()'s optional fast path.
+		 *  SAME capability-injection idiom as onWarn: the core stays framework-free and doesn't know
+		 *  or care whether it's running under Electron or as the file MCP's separate process — each
+		 *  consumer resolves ITS OWN binary location (dev vs packaged, main vs the MCP child) and
+		 *  hands in the already-resolved path. Omitted/null → search() always uses the walk; never a
+		 *  hard dependency (see _Claude/plans/search-all-files.html, Phase 5). */
+		private readonly esBin?: string | null
+	) {}
 
 	/** The browser's navigation anchors: the user's home dir + every existing drive root. */
 	roots(): FileRoots {
@@ -154,6 +196,121 @@ export class SdkFileAccess {
 		}
 
 		return out
+	}
+
+	/** Recursively find entries whose NAME contains `query` (case-insensitive substring — see
+	 *  NameMatch). `roots` is EITHER a subfolder scope (one entry) OR the whole computer (an EMPTY
+	 *  array — not an enumerated drive list; both this method and _esSearch expand '[]' to every
+	 *  drive themselves, so the caller never has to know how "everywhere" is represented).
+	 *
+	 *  Tries the ES fast path FIRST when a binary was injected (see the constructor) — a real,
+	 *  already-live Everything instance answers in tens of milliseconds instead of walking disk; see
+	 *  _Claude/plans/search-all-files.html Phase 5. Any failure there (missing binary, Everything not
+	 *  running, a timeout, a multi-root call ES's -path can't express) falls through silently to the
+	 *  walk below — the fast path is a pure accelerant, never a hard dependency.
+	 *
+	 *  The walk itself is ASYNC and yields the event loop every SEARCH_YIELD_EVERY visited entries: a
+	 *  whole-drive walk run synchronously would freeze the entire Electron main process, not just this
+	 *  feature, and a cancel could never be noticed mid-walk. Pass a SearchToken and flip `.cancelled`
+	 *  from elsewhere to stop it at its next yield point — it returns what it has so far, never throws.
+	 *  A blank query returns [] immediately (never silently lists the whole machine). Bounded by
+	 *  SEARCH_MATCH_CAP / SEARCH_WALK_CAP, same degrade-and-warn contract as glob(). */
+	async search( roots: string[], query: string, token: SearchToken = { cancelled: false } ): Promise<FileEntry[]> {
+		const q = query.trim()
+		if( !q || token.cancelled ) return []
+
+		if( this.esBin ) {
+			const fast = await this._esSearch( roots, q )
+			if( fast !== null ) return fast
+		}
+
+		const out:   FileEntry[] = []
+		const stack: string[]    = roots.length > 0 ? [ ...roots ] : this._drives()
+		let   visited            = 0
+
+		while( stack.length > 0 ) {
+			const dir = stack.pop() as string
+
+			let dirents: { name: string; isDir: boolean }[]
+			try {
+				dirents = readdirSync( dir, { withFileTypes: true } ).map( ( d ) => ( { name: d.name, isDir: d.isDirectory() } ) )
+			} catch( err ) {
+				this._warn( 'search_walk_failed', { dir, message: this._msg( err ) } )
+				continue
+			}
+
+			for( const d of dirents ) {
+				visited += 1
+				if( visited > SEARCH_WALK_CAP ) {
+					this._warn( 'search_walk_capped', { query, cap: SEARCH_WALK_CAP } )
+					return out
+				}
+
+				if( NameMatch.matches( d.name, q ) ) {
+					const entry = this._entry( dir, d.name, d.isDir )
+					if( entry ) out.push( entry )
+					if( out.length >= SEARCH_MATCH_CAP ) {
+						this._warn( 'search_truncated', { query, cap: SEARCH_MATCH_CAP } )
+						return out
+					}
+				}
+
+				if( d.isDir ) stack.push( join( dir, d.name ) )
+
+				if( visited % SEARCH_YIELD_EVERY === 0 ) {
+					await _tick()
+					if( token.cancelled ) {
+						this._warn( 'search_cancelled', { query, matched: out.length, visited } )
+						return out
+					}
+				}
+			}
+		}
+
+		return out
+	}
+
+	/** The fast path: ask a real, already-live Everything instance instead of walking disk. Returns
+	 *  `null` — never throws — on ANY failure, which `search()` reads as "fall through to the walk":
+	 *  missing binary (ENOENT), Everything not running, a timeout, unparseable output. Only engages
+	 *  for zero or ONE root — es.exe's `-path` takes a single directory, and neither of our own
+	 *  callers (folder scope, whole-computer scope) ever ask for more than that; a genuine multi-root
+	 *  call skips straight to the walk rather than trying to fan out N processes for one query. */
+	private async _esSearch( roots: string[], query: string ): Promise<FileEntry[] | null> {
+		if( !this.esBin || roots.length > 1 ) return null
+
+		let stdout: string
+		try {
+			( { stdout } = await _execFile( this.esBin, SdkFileAccess._esArgs( roots, query ), { timeout: SEARCH_ES_TIMEOUT_MS, maxBuffer: 8 * 1024 * 1024 } ) )
+		} catch( err ) {
+			this._warn( 'search_es_unavailable', { message: this._msg( err ) } )
+			return null
+		}
+
+		try {
+			return EsCsv.parse( stdout )
+		} catch( err ) {
+			this._warn( 'search_es_parse_failed', { message: this._msg( err ) } )
+			return null
+		}
+	}
+
+	/** The es.exe argv for one search — a pure builder ( no spawn, no fs ) so the "-path
+	 *  present/absent" scoping logic is directly testable without a real process. Column order is
+	 *  FIXED by this exact flag order: Name, Filename ( full path ), Attributes, Size, Date Modified
+	 *  — EsCsv.parse relies on it positionally ( -no-header ). -date-format 3 = ISO-8601 UTC,
+	 *  parseable unambiguously regardless of the machine's local timezone. `roots.length === 0` (
+	 *  whole computer ) omits -path entirely rather than enumerating drives — es.exe already searches
+	 *  every indexed volume by default. */
+	static _esArgs( roots: string[], query: string ): string[] {
+		const args = [
+			'-csv', '-no-header',
+			'-name', '-filename-column', '-attributes', '-size', '-date-modified', '-date-format', '3',
+			'-max-results', String( SEARCH_MATCH_CAP )
+		]
+		if( roots.length === 1 && roots[ 0 ] ) args.push( '-path', roots[ 0 ] )
+		args.push( query )
+		return args
 	}
 
 	// ── writes ───────────────────────────────────────────────────────────────────────
