@@ -21,10 +21,16 @@ export type FontFamilyKey = 'sans' | 'serif' | 'mono';
 /** The wire / DB-seed form of a Session. Flat and declarative — everything a session IS. */
 export interface SerializedSession {
 	id: string;
-	/** The agent this session was spawned from — its identity source. Never null. */
+	/** The agent this session was spawned from — its identity source. EMPTY STRING ('') = a DRAFT
+	 *  session not yet bound to an agent (spawned agentless from the roster's "+ session"); it's inert
+	 *  until an agent is assigned. Never null on the wire — the sentinel is '', so the DB's NOT NULL
+	 *  agent_id column stays satisfied without a nullable-column migration. */
 	agentId: string;
 	/** Renamable display title, independent of the agent's name. Null → derive one (agent + stamp). */
 	title: string | null;
+	/** Free-form grouping label ( flat, one level — mirrors the agents' `folder` idiom ). Null =
+	 *  ungrouped. Just a string the roster groups by, not a real container. */
+	folder: string | null;
 	/** Free-form, user-defined tags — a future search + agent-dredge key. */
 	tags: string[];
 	createdAt: number;
@@ -40,8 +46,10 @@ export interface SerializedSession {
 
 export interface SessionOptions {
 	id?: string;
-	agentId: string;
+	/** Omit ( or pass '' ) to spawn a DRAFT session with no agent yet — assigned later via reassign(). */
+	agentId?: string;
 	title?: string | null;
+	folder?: string | null;
 	tags?: string[];
 	createdAt?: number;
 	lastActive?: number;
@@ -57,8 +65,12 @@ export interface SessionOptions {
 export class Session {
 
 	readonly id: string;
-	readonly agentId: string;
+	/** Mutable now ( was readonly ) — a draft session is born agentless ('') and reassigned once the
+	 *  user picks an agent. '' is the unassigned sentinel; hasAgent() is the readable check. */
+	agentId: string;
 	title: string | null;
+	/** Grouping label — flat, one level. Null = ungrouped. */
+	folder: string | null;
 	tags: string[];
 	readonly createdAt: number;
 	lastActive: number;
@@ -70,6 +82,7 @@ export class Session {
 		id: string,
 		agentId: string,
 		title: string | null,
+		folder: string | null,
 		tags: string[],
 		createdAt: number,
 		lastActive: number,
@@ -80,6 +93,7 @@ export class Session {
 		this.id         = id;
 		this.agentId    = agentId;
 		this.title      = title;
+		this.folder     = folder;
 		this.tags       = tags;
 		this.createdAt  = createdAt;
 		this.lastActive = lastActive;
@@ -90,13 +104,15 @@ export class Session {
 
 	// ── Static entry points ──────────────────────────────────────────────────
 
-	/** Spawn a fresh session under an agent. A session always has a source agent — agentId is required. */
+	/** Spawn a fresh session. `agentId` may be omitted / '' for a DRAFT (agentless) session — it's inert
+	 *  until reassign() binds it to an agent. */
 	static create( opts: SessionOptions ): Session {
 		const now = Date.now();
 		return new Session(
 			opts.id ?? crypto.randomUUID(),
-			opts.agentId,
+			opts.agentId ?? '',
 			opts.title ?? null,
+			opts.folder ?? null,
 			opts.tags ?? [],
 			opts.createdAt ?? now,
 			opts.lastActive ?? now,
@@ -110,8 +126,9 @@ export class Session {
 	static fromSerialized( json: SerializedSession ): Session {
 		return new Session(
 			json.id,
-			json.agentId,
+			json.agentId ?? '',
 			json.title ?? null,
+			json.folder ?? null,
 			json.tags ?? [],
 			json.createdAt,
 			json.lastActive ?? json.createdAt,
@@ -127,6 +144,7 @@ export class Session {
 			id:         this.id,
 			agentId:    this.agentId,
 			title:      this.title,
+			folder:     this.folder,
 			tags:       [ ...this.tags ],
 			createdAt:  this.createdAt,
 			lastActive: this.lastActive,
@@ -140,6 +158,17 @@ export class Session {
 
 	/** Rename the session; null clears back to the derived title. */
 	rename( title: string | null ): void { this.title = title; }
+
+	/** Bind ( or rebind ) this session to an agent — the draft-session assignment path. '' clears it
+	 *  back to unassigned. Mutates in place; the caller persists ( DB update_session_agent ). */
+	reassign( agentId: string ): void { this.agentId = agentId; }
+
+	/** True once this session has a real source agent — the readable form of `agentId !== ''`. A draft
+	 *  session ( false ) is inert: it can't take a turn until an agent is assigned. */
+	hasAgent(): boolean { return this.agentId !== ''; }
+
+	/** Move this session into a grouping folder ( flat label ); null = ungrouped. */
+	setFolder( folder: string | null ): void { this.folder = folder; }
 
 	/** Stamp lastActive to now — called when a turn lands, so the switcher sorts by recency. */
 	touch(): void { this.lastActive = Date.now(); }

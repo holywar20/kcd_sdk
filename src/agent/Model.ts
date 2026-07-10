@@ -12,6 +12,14 @@ export interface ModelDescriptor {
 	key: string;
 	/** UI display name. */
 	label: string;
+	/**
+	 * The persona NAME this model answers to ( "Winston" for the local / GB10 stack, "Claude" for the
+	 * Anthropic / Claude-Code models ) — the human name the user keeps their agents straight by,
+	 * distinct from the lens ( its worldview / focus ) and from `label` ( the technical model name ).
+	 * Hardcoded on the descriptor for now and surfaced to the renderer, so a prompt template can inject
+	 * `{name}`. Optional: absent → a consumer falls back ( e.g. to the lens / agent name ).
+	 */
+	persona?: string;
 	/** Which connector family serves this model. */
 	provider: 'anthropic' | 'test' | 'local' | 'remote' | 'claude_code_max';
 	/** The wire id sent to the provider's API. */
@@ -59,6 +67,16 @@ export interface ModelDescriptor {
 		inputPerMTok:  number;
 		outputPerMTok: number;
 	};
+	/**
+	 * The root-context artifact bound 1:1 to THIS model — a project-root-relative path to a KCD
+	 * HTML doc (e.g. `Starmind.html`). When present, the orchestrator injects that doc's text as the
+	 * system-above-lens layer for every turn on this model, and NO other model receives it. Absent on
+	 * every model but the one that declares it: the binding lives on the thing, not in a side table, so
+	 * "which model gets which root context" is read straight off the descriptor. The resolved TEXT is
+	 * not carried here (the descriptor stays pure/path-only) — it is read + emitted main-side and
+	 * surfaced on `ModelRosterEntry.rootContextText`.
+	 */
+	rootContext?: string;
 }
 
 /**
@@ -108,7 +126,7 @@ export interface ModelConfigField {
  * surface (`doc`), and the session deck (`config`) read from ONE pull, so the renderer never
  * hand-joins a separate registry + server-state read again.
  */
-export type ModelRosterEntry = ModelDescriptor & { status: ModelStatus; doc: string; config: ModelConfigField[] };
+export type ModelRosterEntry = ModelDescriptor & { status: ModelStatus; doc: string; config: ModelConfigField[]; rootContextText: string | null };
 
 /**
  * The fallback model key. `Agent.create` / `fromSerialized` default to it

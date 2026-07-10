@@ -16,3 +16,4 @@ export type { ValidateReport, ValidateIssue } from './KcdValidate';
 export { KcdParse } from './KcdParse';
 export type { ParsedArtifact, ParsedSlot, ParsedParam } from './KcdParse';
 export { KcdEmit } from './KcdEmit';
+export { KcdText } from './KcdText';
