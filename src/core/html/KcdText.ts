@@ -17,9 +17,9 @@ import { HtmlTree, type HtmlEl, type HtmlNode } from './HtmlTree';
 
 export const KcdText = new class KcdText {
 
-	private HEADINGS = new Set( [ 'h1', 'h2', 'h3', 'h4', 'h5', 'h6' ] );
+	HEADINGS = new Set( [ 'h1', 'h2', 'h3', 'h4', 'h5', 'h6' ] );
 	// Chrome + machine-only structure — never part of the prompt body. `dl` is the frontmatter block.
-	private SKIP     = new Set( [ 'head', 'style', 'script', 'link', 'meta', 'dl' ] );
+	SKIP     = new Set( [ 'head', 'style', 'script', 'link', 'meta', 'dl' ] );
 
 	/** Emit an HTML string as faithful readable text. Prefers the `<article>` body; falls back to the
 	 *  whole document when there is no article. Empty string for empty / unparseable input. */
@@ -34,7 +34,7 @@ export const KcdText = new class KcdText {
 
 	/** Walk one element's children, emitting block boundaries. Containers recurse; leaf blocks emit
 	 *  their collapsed inline text and stop ( so a `<blockquote><p>…` is not counted twice ). */
-	private block( el: HtmlEl, out: string[] ): void {
+	block( el: HtmlEl, out: string[] ): void {
 		for ( const kid of el.kids ) {
 			if ( kid.type === 'text' ) { const t = this.inline( kid ); if ( t ) out.push( t ); continue; }
 
@@ -58,7 +58,7 @@ export const KcdText = new class KcdText {
 	}
 
 	/** Collapse a node's whole-subtree text to a single trimmed line. */
-	private inline( n: HtmlNode ): string {
+	inline( n: HtmlNode ): string {
 		return HtmlTree.textOf( n ).replace( /\s+/g, ' ' ).trim();
 	}
 }

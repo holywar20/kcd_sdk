@@ -189,12 +189,15 @@ export const KcdValidate = new class KcdValidate {
 				if ( merge && !KcdAddress.MERGES.includes( merge ) ) err( 'bad-merge', `section:${ v }`, `merge must be one of { ${ KcdAddress.MERGES.join( ' | ' ) } }` );
 			}
 
-			// slot — collect habit-class; flag rows that carry no addressable field
+			// slot — collect habit-class; flag rows that carry no addressable field; mode constrained
 			if ( KcdAddress.isSlot( el ) ) {
 				const hc = HtmlTree.get( el, 'data-kcd-habit-class' );
 				if ( hc ) habitClasses[ hc ] = ( habitClasses[ hc ] ?? 0 ) + 1;
 				if ( HtmlTree.collect( el, d => KcdAddress.isField( d ) ).length === 0 )
 					err( 'unaddressed-slot', 'slot', 'slot row carries no data-kcd-field — its cells are invisible to the parser' );
+				const mode = HtmlTree.get( el, 'data-kcd-mode' );
+				if ( mode && !KcdAddress.MODES.includes( mode ) )
+					err( 'bad-mode', `mode:${ mode }`, `mode must be one of { ${ KcdAddress.MODES.join( ' | ' ) } }` );
 			}
 
 			// param — should carry the four typed cells

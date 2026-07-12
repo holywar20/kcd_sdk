@@ -1,6 +1,7 @@
 export * from './framework';
 export * from './procedure';
 export { KCDParseError, KCDValidationError } from './errors';
+export { SLOT_MODES } from './types';
 export type {
 	ArtifactType,
 	ContextSegment,
@@ -11,6 +12,7 @@ export type {
 	ReaderFn,
 	SerializedArtifact,
 	SerializedLens,
+	SlotMode,
 	TypeCheckIssue,
 	WriteMap,
 	ArtifactRef,

@@ -55,6 +55,35 @@ export interface ModelDescriptor {
 	capabilities?: {
 		multimodal?:    boolean;
 		contextLength?: number;
+		/**
+		 * Whether this model's endpoint handles a STREAMING request. Absent/true → stream ( the default: the
+		 * orchestrator hands the connector a live sink ). `false` → the connector must NOT stream ( no sink →
+		 * a plain batch POST ): some hosted OpenAI shims ( Google's Gemma endpoint ) 500 on a streaming body
+		 * a self-hosted llama-server handles fine. An opt-OUT flag, so every normal model streams untouched.
+		 */
+		streaming?:     boolean;
+		/**
+		 * Reasoning / thinking support — the ONE place three consumers read from: the connector (what it
+		 * may put on the wire), the composer controls (which reasoning controls to show), and the info chip
+		 * (which flags to report). Absent → the model exposes NO reasoning surface: controls hidden, and no
+		 * `reasoning_effort` is ever sent. This is the seam that turns implicit per-model behaviour (the
+		 * kind that let a blind `reasoning_effort` 400 Google's Gemma shim) into queryable data.
+		 */
+		reasoning?: {
+			/**
+			 * The wire effort dial's levels, in order. Absent/empty → the model has NO effort dial: the
+			 * connector must not send `reasoning_effort` (Google's Gemma shim 400s on it; a self-hosted
+			 * llama-server merely ignores it) and the composer hides the slider. gpt-oss / harmony carries
+			 * `['low','medium','high']`; a budget-based reasoner (Anthropic thinking) carries none.
+			 */
+			effort?: ( 'low' | 'medium' | 'high' )[];
+			/**
+			 * How the reasoning comes back: `readable` (the words stream into the thinking box), `measured`
+			 * (a token count only, text redacted — the headless-frontier shape), or `none` (no thinking).
+			 * Drives whether the thinking box and the reasoning-mode control appear at all.
+			 */
+			channel?: 'readable' | 'measured' | 'none';
+		};
 	};
 	/**
 	 * Per-MILLION-token price in USD, split input/output (providers bill the two at different rates).

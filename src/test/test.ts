@@ -27,7 +27,7 @@ console.log( 'path        :', lens.getPath() );
 console.log( 'nodes loaded:', lens.getNodes().length );
 console.log( 'policy      :' );
 lens.getPolicy().forEach( e => {
-	console.log( `  [${e.always ? 'always' : 'cond  '}]  ${e.what}  →  ${e.href}` );
+	console.log( `  [${e.mode}]  ${e.what}  →  ${e.href}` );
 } );
 
 console.log( '\n=== serializeForContext() (first 500 chars) ===\n' );

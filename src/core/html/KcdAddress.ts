@@ -27,11 +27,15 @@ export const KcdAddress = new class KcdAddress {
 	REGIONS      = [ 'know', 'care', 'do' ];
 	SLOT_FIELDS  = [ 'what', 'where', 'why' ];
 	PARAM_FIELDS = [ 'name', 'type', 'default', 'description' ];
+	/** The one idiom every routable artifact ( reference, habit, contract, plan, anything else a
+	 *  slot can point at ) shares — same three states MCP tool exposure already uses. Absent on a
+	 *  slot ⇒ 'on', the default. See PolicyEntry / SlotMode in primitives/types.ts. */
+	MODES        = [ 'off', 'on', 'suggested' ];
 
 	KNOWN_ATTRS = [
 		'data-kcd', 'data-kcd-frontmatter', 'data-kcd-field', 'data-kcd-type',
-		'data-kcd-region', 'data-kcd-section', 'data-kcd-merge', 'data-kcd-slot',
-		'data-kcd-param', 'data-kcd-params', 'data-kcd-always', 'data-kcd-habit-class',
+		'data-kcd-region', 'data-kcd-section', 'data-kcd-merge', 'data-kcd-merge-key', 'data-kcd-slot',
+		'data-kcd-param', 'data-kcd-params', 'data-kcd-mode', 'data-kcd-habit-class',
 		'data-kcd-table', 'data-kcd-head', 'data-kcd-chips', 'data-kcd-tag',
 		'data-kcd-audience', 'data-kcd-chrome', 'data-kcd-live', 'data-kcd-script'
 	];
@@ -71,6 +75,17 @@ export const KcdAddress = new class KcdAddress {
 	/** This element's audience, default `both` ( protocol §5 — the dual-extraction strip control ). */
 	audienceOf( el: HtmlEl ): string { return HtmlTree.get( el, 'data-kcd-audience' ) ?? 'both'; }
 	isHumanOnly( el: HtmlEl ): boolean { return this.audienceOf( el ) === 'human'; }
+
+	/**
+	 * A section's CROSS-ARTIFACT fusion key ( context-optimization plan, Phase 2 ) — deliberately a
+	 * SEPARATE attribute from `data-kcd-merge`. That attribute is already load-bearing today as the
+	 * intra-file duplicate-section-name dedup STRATEGY ( protocol §3, `additive|declarative|union` —
+	 * ~35 files already write `data-kcd-merge="union"` on an unrelated `references` section each ).
+	 * Reusing its value as a merge KEY would silently fuse every one of those unrelated sections
+	 * together the moment two such artifacts loaded in the same context. `data-kcd-merge-key` is the
+	 * new, orthogonal slot the plan actually needs; `data-kcd-merge` is untouched.
+	 */
+	mergeKeyOf( el: HtmlEl ): string | undefined { return HtmlTree.get( el, 'data-kcd-merge-key' ); }
 
 	// ── Value extraction ( the core law §1.1–§1.2: the field's content IS the value ) ──
 	// Link fields ( an <a>, or a path/url type ) yield their href; everything else yields its text.

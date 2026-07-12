@@ -1,6 +1,7 @@
 import { KcdParse } from '../../core/html/KcdParse';
 import { KcdEmit } from '../../core/html/KcdEmit';
-import type { ArtifactType, KCDRole, LinkEntry, LinkType, PolicyEntry, SerializedArtifact, TypeCheckIssue, WriteMap } from '../types';
+import { KcdContext } from '../../core/html/KcdContext';
+import type { ArtifactType, KCDRole, LinkEntry, LinkType, PolicyEntry, SerializedArtifact, TaggedBlock, TypeCheckIssue, WriteMap } from '../types';
 
 export const DREDGE_MAX = 4;
 
@@ -156,7 +157,7 @@ export class KCDPrimitive {
 	}
 
 	toContextBlock(): string {
-		return `# [${this.type}] ${this.path}\n\n${this.body.trim()}`;
+		return KcdContext.project( this.serialize() );
 	}
 
 	// ── Contribution (tuned state) ───────────────────────────────────────────
@@ -166,6 +167,26 @@ export class KCDPrimitive {
 	 *  nothing; everything else renders its context block. */
 	contribute(): string {
 		return this.isIncluded ? this.toContextBlock() : '';
+	}
+
+	/**
+	 * This artifact's region-block decomposition ( context-optimization plan, Phase 2 ) — the unit
+	 * `ContextAssembler` merges and sorts across a whole loaded set. An excluded artifact contributes
+	 * no blocks, mirroring `contribute()`. Every block here defaults to this artifact's OWN
+	 * `getRole()` ( `do` for habit/contract/generator/analyzer/utility, `know` for everything else ) —
+	 * a lens's `data-kcd-region` wrappers override that per-section inside `KcdContext.projectBlocks`.
+	 * `sourceLayer` defaults `'lens'` ( "part of the normal dredge graph" ); `LensObject` overrides to
+	 * tag its `injected` children `'injected'` instead. `habitClass` comes straight from this
+	 * artifact's own `habit-class` frontmatter field ( protocol §6 ) — every block a classed habit
+	 * contributes carries the SAME class, since the mutual-exclusion cascade resolves at the whole-
+	 * artifact level, not per section.
+	 */
+	getContextBlocks(): TaggedBlock[] {
+		if ( !this.isIncluded ) return [];
+		const region = this.getRole() === 'do' ? 'do' : 'know';
+		const habitClass = ( this.frontmatter[ 'habit-class' ] as string | undefined ) ?? null;
+		return KcdContext.projectBlocks( this.serialize(), region )
+			.map( b => ( { ...b, sourceLayer: 'lens' as const, path: this.path, artifactType: this.type, habitClass } ) );
 	}
 
 	get included(): boolean { return this.isIncluded; }

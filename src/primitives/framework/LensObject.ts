@@ -1,6 +1,7 @@
 import * as path from 'path';
 import { KCDPrimitive, clampDepth, classifyRelPath } from './KCDPrimitive';
-import type { ArtifactType, KCDRole, PolicyEntry, ReaderFn, SerializedArtifact, SerializedLens } from '../types';
+import { SlotResolver } from './SlotResolver';
+import type { ArtifactType, KCDRole, PolicyEntry, ReaderFn, SerializedArtifact, SerializedLens, TaggedBlock } from '../types';
 
 const LENS_DEFAULT_DEPTH = 2;
 
@@ -140,12 +141,27 @@ export class LensObject extends KCDPrimitive {
 
 		for ( const entry of node.getPolicy() ) {
 			if ( entry.type !== 'internal' ) continue;
-			// `always` gates context auto-loading. Eager mode also follows the
-			// conditional links — for display — but marks them not-included below,
-			// so the assembled context never widens past the `always` set.
-			if ( !entry.always && !this.eager ) continue;
+			// `mode` gates context auto-loading — the one idiom for every artifact kind (reference,
+			// habit, contract, anything routable). `off` never dredges, full stop, even in eager
+			// display mode: the user turned it off. `on` (the default) skips the fetch entirely in
+			// normal assembly — cheap, it only ever needs to render as a routing row from `policy`
+			// (see stubBlock) — but eager mode still follows it FOR DISPLAY, marking it not-included
+			// below so the assembled context never widens past the `suggested` set.
+			if ( entry.mode === 'off' ) continue;
+			if ( entry.mode === 'on' && !this.eager ) continue;
 
 			const childAbs = LensObject.resolveHref( entry.href, this.projectRoot! );
+
+			// Plans are LINK-ONLY in assembled context ( Bryan, 2026-07-12 ): a plan is an informational,
+			// volatile working doc — not standing identity or reference prose — so its body must never ride
+			// the wire automatically. No matter what mode a slot marks it ( short of `off`, already skipped
+			// above, and `on`, which never fetches anyway ), a plan is NEVER dredged into `nodes`. Its
+			// reference SURVIVES as a routing row instead: a plan slot on the lens itself renders through
+			// `stubBlock`; a plan reached via some reference's own slot rides as a row inside that reference's
+			// routing table. This is the one deliberate type carve-out that outlives the general slot-mode
+			// ruling — it's the plan's volatility, not its role, that keeps its full text out of context.
+			if ( LensObject.classifyByPath( childAbs, this.projectRoot! ) === 'plan' ) continue;
+
 			if ( visited.has( childAbs ) ) continue;
 			visited.add( childAbs );
 
@@ -157,9 +173,8 @@ export class LensObject extends KCDPrimitive {
 				continue;
 			}
 
-			// Conditional (non-`always`) nodes are available-on-request: present in
-			// the graph for inspection, but excluded from the outbound context.
-			if ( !entry.always ) child.setIncluded( false );
+			// Only `suggested` rides full text; `on` nodes reached here are eager-display-only.
+			if ( entry.mode !== 'suggested' ) child.setIncluded( false );
 
 			out.push( ...this.dredgeFrom( child, remaining - 1, visited ) );
 		}
@@ -197,22 +212,61 @@ export class LensObject extends KCDPrimitive {
 
 	// ── Context assembly ──────────────────────────────────────────────────────
 
+	/**
+	 * This lens's full region-block set ( context-optimization plan, Phase 2 ) — its own Know/Care/Do
+	 * content, then each dredged node's blocks, then the "Available on request" stub (if any), then
+	 * each INJECTED node's blocks retagged `sourceLayer: 'injected'`. `ContextAssembler` does the
+	 * actual Care-hoist / injected-sink sort; this method only needs to get injected blocks tagged
+	 * correctly, since `getNodes()`'s simple append-order is no longer what guarantees "injected
+	 * last" once multiple lenses are in play.
+	 */
+	/**
+	 * The general `contract`/`habit` type carve-out is retired ( 2026-07-12 — see the mode ruling in
+	 * `_Claude/plans/context-optimization.html` ): the SAME `data-kcd-mode` idiom every artifact uses
+	 * does that job structurally now. `dredgeFrom` only ever fetches-and-includes a node when its slot's
+	 * mode is `suggested` ( `on`-mode targets are never fetched into `nodes` at all in normal, non-eager
+	 * assembly — they render as a routing row straight from `policy`, see `stubBlock` ). So `this.nodes`
+	 * can only ever contain `suggested` targets by construction, and no downstream filter is needed to keep
+	 * a habit's or a contract's full body off the wire by default — a lens author who sets
+	 * `data-kcd-mode="suggested"` on such a slot gets full text, because they asked for it.
+	 *
+	 * PLANS are the ONE surviving type exception ( Bryan, 2026-07-12 ): `dredgeFrom` refuses to fetch a
+	 * plan into `nodes` no matter its slot mode, so a plan can never reach `this.nodes` and its full body
+	 * never rides context. A plan is always a link — its routing row survives ( `stubBlock`, or the
+	 * referencing artifact's own routing table ); only its body is suppressed. See `dredgeFrom`.
+	 */
+	getContextBlocks(): TaggedBlock[] {
+		if ( !this.isIncluded ) return [];
+		const own      = super.getContextBlocks();
+		const dredged  = this.nodes.flatMap( n => n.getContextBlocks() );
+		const injected = this.injected
+			.flatMap( n => n.getContextBlocks() )
+			.map( b => ( { ...b, sourceLayer: 'injected' as const } ) );
+		const stub = this.stubBlock();
+		return [ ...own, ...dredged, ...( stub ? [ stub ] : [] ), ...injected ];
+	}
+
+	/** The "Available on request" stub — every `on`-mode internal link this lens's policy names (the
+	 *  routing-row case, any artifact type), plus any `suggested` link the current dredge depth
+	 *  didn't reach. One synthetic block, folded into `getContextBlocks()` so the unified assembler
+	 *  sees it like any other contribution instead of `serializeForContext()` special-casing it.
+	 *  `off`-mode links never appear here — the user excluded them entirely, not just deferred them.
+	 *  Silently omitted (not thrown) with no projectRoot — a display nicety, not something that
+	 *  should crash a context call from an unloaded lens. */
+	stubBlock(): TaggedBlock | null {
+		if ( !this.projectRoot ) return null;
+		const loadedPaths = new Set( this.getContributors().map( n => n.getPath() ) );
+		const stubs = this.policy.filter(
+			e => e.type === 'internal' && e.mode !== 'off' && !loadedPaths.has( LensObject.resolveHref( e.href, this.projectRoot! ) )
+		);
+		if ( !stubs.length ) return null;
+		const rows = stubs.map( e => `- ${ e.what } — ${ e.why } (${ e.href })` ).join( '\n' );
+		return { region: 'know', section: null, mergeKey: null, text: `# Available on request\n\n${ rows }`, sourceLayer: 'lens', path: this.path, artifactType: 'lens', habitClass: null };
+	}
+
 	serializeForContext(): string {
 		if ( !this.projectRoot ) throw new Error( 'serializeForContext requires a loaded lens (no projectRoot)' );
-
-		const list        = this.getContributors();
-		const loadedPaths = new Set( list.map( n => n.getPath() ) );
-		const out         = list.map( n => n.toContextBlock() );
-
-		const stubs = this.policy.filter(
-			e => e.type === 'internal' && !loadedPaths.has( LensObject.resolveHref( e.href, this.projectRoot! ) )
-		);
-		if ( stubs.length ) {
-			const rows = stubs.map( e => `| ${e.what} | ${e.href} | ${e.why} |` ).join( '\n' );
-			out.push( `# Available on request\n\n| What | Where | Why |\n|---|---|---|\n${rows}` );
-		}
-
-		return out.join( '\n\n---\n\n' );
+		return SlotResolver.compile( this.getContextBlocks() );
 	}
 
 }

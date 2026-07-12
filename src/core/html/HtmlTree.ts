@@ -12,7 +12,12 @@
  *                       already produced the tree ). Same output shape, so every consumer is
  *                       environment-agnostic.
  *
- * Node shape:  { type:'el', tag, attrs:{}, kids:[ … ] }  |  { type:'text', value }
+ * Node shape:  { type:'el', tag, attrs:{}, kids:[ … ], start?, end? }  |  { type:'text', value }
+ *
+ * `parse()` also records each element's source span ( `start`/`end` — byte offsets into the input
+ * string ), so a caller can splice a node's exact span out of the original source without a lossy
+ * re-serialize ( KcdExcise, the delete-cascade surgeon ). `fromDOM()` has no source, so those are
+ * absent on renderer-built trees — span-based edits are a Node-side ( string-source ) operation.
  *
  * `parse()` is the placeholder MiniHtml reader, ported verbatim from the dev-utilities validator so
  * the substrate is proven. It handles the subset KCD docs use: nested elements, quoted attributes,
@@ -21,7 +26,7 @@
 
 export type HtmlNode = HtmlEl | HtmlText;
 
-export interface HtmlEl   { type: 'el';   tag: string; attrs: Record<string, string>; kids: HtmlNode[]; }
+export interface HtmlEl   { type: 'el';   tag: string; attrs: Record<string, string>; kids: HtmlNode[]; start?: number; end?: number; }
 export interface HtmlText { type: 'text'; value: string; }
 
 export const HtmlTree = new class HtmlTree {
@@ -54,16 +59,26 @@ export const HtmlTree = new class HtmlTree {
 			if ( html[ i + 1 ] === '/' ) {
 				const e = html.indexOf( '>', i );
 				const name = html.slice( i + 2, e < 0 ? html.length : e ).trim().toLowerCase();
-				for ( let s = stack.length - 1; s > 0; s-- ) if ( stack[ s ].tag === name ) { stack.length = s; break; }
-				i = e < 0 ? html.length : e + 1;
+				const closeEnd = e < 0 ? html.length : e + 1;
+				// The matched element ( and any implicitly-closed children above it ) ends AT this close tag —
+				// record each one's source end so a caller can splice its exact span ( KcdExcise ).
+				for ( let s = stack.length - 1; s > 0; s-- ) if ( stack[ s ].tag === name ) {
+					for ( let k = s; k < stack.length; k++ ) stack[ k ].end = closeEnd;
+					stack.length = s;
+					break;
+				}
+				i = closeEnd;
 				continue;
 			}
 
+			const tagStart = i;
 			const e = this.tagEnd( html, i );
 			const inner = html.slice( i + 1, e ).trim();
 			const selfClose = inner.endsWith( '/' );
 			const { tag, attrs } = this.parseTag( selfClose ? inner.slice( 0, -1 ) : inner );
-			const el: HtmlEl = { type: 'el', tag, attrs, kids: [] };
+			// start = the '<'; provisional end = end of the open tag ( final for void/self-close; a
+			// container's end is overwritten when its close tag is reached above ).
+			const el: HtmlEl = { type: 'el', tag, attrs, kids: [], start: tagStart, end: e + 1 };
 			top().kids.push( el );
 			i = e + 1;
 
@@ -74,6 +89,7 @@ export const HtmlTree = new class HtmlTree {
 				const end   = close < 0 ? html.length : close;
 				if ( html.slice( i, end ) !== '' ) el.kids.push( { type: 'text', value: html.slice( i, end ) } );
 				const gt = html.indexOf( '>', end );
+				el.end = gt < 0 ? html.length : gt + 1;
 				i = gt < 0 ? html.length : gt + 1;
 				continue;
 			}

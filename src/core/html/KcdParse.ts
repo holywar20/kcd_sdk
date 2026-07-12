@@ -23,14 +23,16 @@ import { KcdAddress } from './KcdAddress';
 import { KcdValidate } from './KcdValidate';
 import { classifyHref } from '../../primitives/framework/KCDPrimitive';
 import { KCDValidationError } from '../../primitives/errors';
-import type { ArtifactType, LinkEntry, PolicyEntry, SerializedArtifact } from '../../primitives/types';
+import type { ArtifactType, LinkEntry, PolicyEntry, SerializedArtifact, SlotMode } from '../../primitives/types';
 
-/** A dredge/nav slot row, structured ( protocol §3 ). Frozen `policy` is the know-region subset. */
+/** A dredge/nav slot row, structured ( protocol §3 ). `policy` now covers every region — a habit or
+ *  contract slot is dredge-eligible the same way a reference slot is; only `mode` decides how much
+ *  of it rides ( see SlotMode ). */
 export interface ParsedSlot {
 	what: string;
 	where: string;          // the href ( the `where` field is a link )
 	why: string;
-	always: boolean;
+	mode: SlotMode;
 	habitClass?: string;    // mutual-exclusion group ( protocol §6 ) — rich-model extra, not in frozen policy
 	region?: string;
 	section?: string;
@@ -135,15 +137,15 @@ export const KcdParse = new class KcdParse {
 		return out;
 	}
 
-	// ── Policy ( frozen — the know-region slots, with the `always` dredge gate ) ───
-	// In the md world this was LensObject parsing the `## Know` markdown table. Now it is structured
-	// slot rows; only know-region slots are policy ( Do-region habit/contract slots are links, as
-	// before ), so the frozen getPolicy shape is preserved exactly.
+	// ── Policy ( every region — one dredge idiom for reference, habit, contract, anything routable ) ──
+	// In the md world this was LensObject parsing the `## Know` markdown table, know-only. A Do-region
+	// habit/contract slot now feeds the SAME policy list — `mode` alone decides what rides ( off /
+	// on-routing-row / suggested-full-text ), so no artifact type needs its own carve-out downstream.
 	policy( slots: ParsedSlot[] ): PolicyEntry[] {
 		const out: PolicyEntry[] = [];
 		for ( const s of slots ) {
-			if ( s.region !== 'know' ) continue;
-			out.push( { what: s.what, href: s.where, why: s.why, always: s.always, type: classifyHref( s.where ), section: s.section } );
+			if ( !s.where ) continue;
+			out.push( { what: s.what, href: s.where, why: s.why, mode: s.mode, type: classifyHref( s.where ), section: s.section } );
 		}
 		return out;
 	}
@@ -169,11 +171,12 @@ export const KcdParse = new class KcdParse {
 
 	readSlot( slot: HtmlEl, region: string | undefined, section: string | undefined ): ParsedSlot {
 		const cells = this.cells( slot );
+		const rawMode = HtmlTree.get( slot, 'data-kcd-mode' );
 		return {
 			what:       cells.what  ?? '',
 			where:      cells.where ?? '',
 			why:        cells.why   ?? '',
-			always:     HtmlTree.has( slot, 'data-kcd-always' ),
+			mode:       ( rawMode === 'off' || rawMode === 'suggested' ) ? rawMode : 'on',
 			habitClass: HtmlTree.get( slot, 'data-kcd-habit-class' ),
 			region,
 			section

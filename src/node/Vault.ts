@@ -1,10 +1,47 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { LensObject, Glob } from '../core';
+import { LensObject, Glob, KcdExcise } from '../core';
 import type { ArtifactRef, ArtifactType } from '../core';
 import { scan } from '../scanner';
 import type { ScannedFile } from '../scanner';
 import { inferProjectRoot, loadLensFromDisk } from './io';
+
+/**
+ * One inbound link that a heal touches. `file` is the referrer ( vault-relative ); `oldHref` is the
+ * EXACT authored href as written in that file ( so the on-disk swap is precise ); `newHref` is its
+ * replacement on a move, or undefined on a delete strip.
+ */
+export interface HealEdit {
+	file:     string;
+	oldHref:  string;
+	newHref?: string;
+}
+
+/**
+ * The full effect of a move/delete BEFORE it touches disk — the rename ( or removal ) plus every
+ * referrer edit that keeps the graph viable. Vault.move/delete compute this first ( the preview ) and
+ * then apply it; that split is the seam a human-approval gate slots into. Returned from the applied
+ * call too, so the caller sees exactly what changed.
+ */
+export interface HealPlan {
+	op:    'move' | 'delete';
+	from:  string;
+	to?:   string;
+	edits: HealEdit[];
+}
+
+/**
+ * One reference-integrity finding — a link or identity ref that does not resolve. Advisory ( `warn` ):
+ * distinct from the structural typeCheck errors that block. `path` is the referrer ( vault-relative );
+ * `ref` is the offending href or slug. This is what keeps the "internal state always viable" invariant
+ * observable between heals.
+ */
+export interface RefIssue {
+	path:     string;
+	severity: 'warn';
+	message:  string;
+	ref:      string;
+}
 
 /**
  * Vault — a KCD document store bound to one ( projectRoot, docRoot ) pair.
@@ -111,6 +148,185 @@ export class Vault {
 			depth:       opts?.depth,
 			eager:       opts?.eager,
 		} );
+	}
+
+	// ── Authoring / heal ──────────────────────────────────────────────────────
+
+	/**
+	 * Move ( or rename ) an artifact AND heal every inbound link so the graph never rots.
+	 *
+	 * Every referrer authors the target as a project-root-relative href ( `_Claude/...` ), so healing
+	 * is a targeted swap of that one authored string in each referrer — keyed off the link's RESOLVED
+	 * identity, not a text grep — which preserves the hand-authored formatting a full HtmlTree
+	 * round-trip would normalize away. The HealPlan is computed first, then applied unless `dryRun`
+	 * ( the approval seam ). On apply it rewrites each referrer, renames the file, and asserts the
+	 * post-condition: no link may still resolve to the old path ( a residual throws — fail loud ).
+	 */
+	move( from: string, to: string, opts?: { dryRun?: boolean } ): HealPlan {
+		const fromAbs = this.toAbs( from );
+		const destAbs = this.toAbs( to );
+
+		if ( !fs.existsSync( fromAbs ) ) throw new Error( `Cannot move: source "${ from }" does not exist` );
+		if ( fs.existsSync( destAbs ) )  throw new Error( `Cannot move: destination "${ to }" already exists` );
+
+		const newHref = `${ this.docRoot }/${ to }`.replace( /\\/g, '/' );
+		const plan: HealPlan = { op: 'move', from, to, edits: this.inboundEdits( fromAbs, newHref ) };
+
+		if ( opts?.dryRun ) return plan;
+
+		for ( const edit of plan.edits ) this.rewriteHref( edit );
+		fs.mkdirSync( path.dirname( destAbs ), { recursive: true } );
+		fs.renameSync( fromAbs, destAbs );
+
+		this.assertNoResidual( fromAbs, 'move' );
+		return plan;
+	}
+
+	/**
+	 * Every inbound link to `targetAbs`, as heal edits — the referrer, its exact authored href, and
+	 * ( on a move ) the replacement. Matches on RESOLVED identity, so an href authored in any relative
+	 * form still counts; skips the target's own file.
+	 */
+	inboundEdits( targetAbs: string, newHref?: string ): HealEdit[] {
+		const edits: HealEdit[] = [];
+		for ( const f of this.scan() ) {
+			if ( f.path === targetAbs ) continue;
+			for ( const link of f.rawLinks ) {
+				if ( this.resolveHref( link.href ) !== targetAbs ) continue;
+				edits.push( { file: f.relativePath, oldHref: link.href, newHref } );
+			}
+		}
+		return edits;
+	}
+
+	/**
+	 * Apply one move edit to disk — swap the authored old href for the new one in the referrer, in
+	 * both HTML ( `href="…"` / `href='…'` ) and `.js` comment ( `[text](…)` ) forms. Literal replace of
+	 * every occurrence ( split/join, never a regex — a path with metacharacters is safe ). A no-op
+	 * ( nothing matched ) is left for assertNoResidual to catch rather than silently swallowed.
+	 */
+	rewriteHref( edit: HealEdit ): void {
+		if ( edit.newHref === undefined ) return;
+		const abs    = this.toAbs( edit.file );
+		const before = fs.readFileSync( abs, 'utf-8' );
+		const after  = before
+			.split( `href="${ edit.oldHref }"` ).join( `href="${ edit.newHref }"` )
+			.split( `href='${ edit.oldHref }'` ).join( `href='${ edit.newHref }'` )
+			.split( `](${ edit.oldHref })` ).join( `](${ edit.newHref })` );
+		if ( after !== before ) fs.writeFileSync( abs, after, 'utf-8' );
+	}
+
+	/**
+	 * Post-condition guard: after an apply, NO link in the vault may still resolve to the old path.
+	 * A residual means a reference form the healer did not cover ( e.g. an href authored in a shape the
+	 * swap did not match ) — throw rather than leave the graph rotted.
+	 */
+	assertNoResidual( targetAbs: string, op: string ): void {
+		const residual = this.inboundEdits( targetAbs );
+		if ( residual.length === 0 ) return;
+		const where = residual.map( e => e.file ).join( ', ' );
+		throw new Error(
+			`${ op } heal incomplete: ${ residual.length } link(s) still resolve to "${ this.toVaultRel( targetAbs ) }" ( in ${ where } )`
+		);
+	}
+
+	/**
+	 * Delete an artifact AND cascade the removal through every referrer, so the graph stays viable.
+	 *
+	 * BLOCKS ( nothing deleted ) if anything references the target by IDENTITY — a `base`/`lens` slug
+	 * naming it. An identity ref survives a move and is not a movable link; silently unparenting the
+	 * dependents would be wrong, so the caller repoints or renames them first. Otherwise every inbound
+	 * href reference is EXCISED from its referrer: a slot-field link takes its whole data-kcd-slot record,
+	 * a bare prose `<a>` unwraps to its text — span-precise ( KcdExcise ), so formatting elsewhere is
+	 * untouched. Computes the HealPlan first ( `dryRun` = preview ), then applies, removes the file, and
+	 * asserts no link still resolves to it ( a residual throws — fail loud ).
+	 */
+	delete( target: string, opts?: { dryRun?: boolean } ): HealPlan {
+		const targetAbs = this.toAbs( target );
+		if ( !fs.existsSync( targetAbs ) ) throw new Error( `Cannot delete: "${ target }" does not exist` );
+
+		const dependents = this.identityDependents( targetAbs );
+		if ( dependents.length > 0 )
+			throw new Error(
+				`Cannot delete "${ target }": ${ dependents.length } artifact(s) reference it by identity ( ${ dependents.join( ', ' ) } ) — repoint or rename those first`
+			);
+
+		const plan: HealPlan = { op: 'delete', from: target, edits: this.inboundEdits( targetAbs ) };
+		if ( opts?.dryRun ) return plan;
+
+		this.exciseReferrers( plan.edits, targetAbs );
+		fs.rmSync( targetAbs );
+
+		this.assertNoResidual( targetAbs, 'delete' );
+		return plan;
+	}
+
+	/** Artifacts that reference `targetAbs` by IDENTITY — a `base` or `lens` frontmatter slug naming it.
+	 *  These block a delete ( unlike href links, which heal ). Returns their vault-relative paths. */
+	identityDependents( targetAbs: string ): string[] {
+		const files  = this.scan();
+		const target = files.find( f => f.path === targetAbs );
+		const name   = target && typeof target.frontmatter[ 'name' ] === 'string' ? target.frontmatter[ 'name' ] as string : '';
+		if ( !name ) return [];
+
+		const out: string[] = [];
+		for ( const f of files ) {
+			if ( f.path === targetAbs ) continue;
+			if ( f.frontmatter[ 'base' ] === name || f.frontmatter[ 'lens' ] === name ) out.push( f.relativePath );
+		}
+		return out;
+	}
+
+	/** Excise every deleted-target reference from its referrers — one parse+splice per file ( a file may
+	 *  hold several ), routed to the HTML or `.js` surgeon by extension, matched on resolved identity. */
+	exciseReferrers( edits: HealEdit[], targetAbs: string ): void {
+		const matches = ( href: string ): boolean => this.resolveHref( href ) === targetAbs;
+		for ( const file of new Set( edits.map( e => e.file ) ) ) {
+			const abs    = this.toAbs( file );
+			const before = fs.readFileSync( abs, 'utf-8' );
+			const after  = abs.endsWith( '.js' ) ? KcdExcise.js( before, matches ) : KcdExcise.html( before, matches );
+			if ( after !== before ) fs.writeFileSync( abs, after, 'utf-8' );
+		}
+	}
+
+	// ── Reference integrity ────────────────────────────────────────────────────
+
+	/**
+	 * Reference-integrity findings across the vault ( or one file, when `onlyFile` is given ) — the
+	 * hygiene half of health, complementing the per-file structural typeCheck:
+	 *
+	 *   • Dangling links — an internal link href whose target does not exist on disk. Code-file links
+	 *     count ( a lens Know table legitimately points at `.ts` ); external URLs, `#anchors`, and
+	 *     `{placeholder}` template hrefs are skipped.
+	 *   • Broken identity refs — a `base` / `lens` slug that names no artifact in the vault. The `cross`
+	 *     sentinel ( a multi-lens plan's `lens` ) is not a reference and is skipped.
+	 *
+	 * All findings are `warn`: advisory, never a parse-blocking error. `names` is built from the whole
+	 * scan even when scoped to one file, so a scoped identity ref still resolves against the full vault.
+	 */
+	referenceIssues( onlyFile?: string ): RefIssue[] {
+		const files   = this.scan();
+		const names   = new Set( files.map( f => typeof f.frontmatter[ 'name' ] === 'string' ? f.frontmatter[ 'name' ] as string : '' ) );
+		const targets = onlyFile ? files.filter( f => f.path === this.toAbs( onlyFile ) ) : files;
+		const issues: RefIssue[] = [];
+
+		for ( const f of targets ) {
+			for ( const link of f.rawLinks ) {
+				const href = link.href;
+				if ( href.startsWith( '#' ) || href.startsWith( 'http://' ) || href.startsWith( 'https://' ) ) continue;
+				if ( href.includes( '{' ) ) continue;
+				if ( !fs.existsSync( this.resolveHref( href ) ) )
+					issues.push( { path: f.relativePath, severity: 'warn', message: `link target missing on disk: "${ href }"`, ref: href } );
+			}
+
+			for ( const key of [ 'base', 'lens' ] ) {
+				const v = f.frontmatter[ key ];
+				if ( typeof v !== 'string' || v === '' || v === 'cross' ) continue;
+				if ( !names.has( v ) )
+					issues.push( { path: f.relativePath, severity: 'warn', message: `${ key } "${ v }" names no artifact in the vault`, ref: v } );
+			}
+		}
+		return issues;
 	}
 
 }

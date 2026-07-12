@@ -1,8 +1,37 @@
+import type { ContextBlock } from '../core/html/KcdContext';
+
 /**
  * The KCD role of an artifact — determines which context dock it belongs to in the UI.
  * Lens is composite (Know + Care + Do); all others are either informational or procedural.
  */
 export type KCDRole = 'know' | 'do' | 'lens';
+
+/**
+ * Where a block's ARTIFACT sits relative to the dredge graph — not the artifact's own
+ * Know/Care/Do region. The specificity hierarchy is `injected > agent > lens`: a session-dropped
+ * node is most specific, then a component the AGENT bolts on itself ( `base*` — its own habit/reference
+ * choices ), then what a lens contributes. `agent` is what lets an agent's habit choice OUTRANK the
+ * lens's in a slot ( the composability of behaviour ). The plan's full hierarchy also names a
+ * Constellation layer between injected and agent; that stays unrealized ( no distinct Constellation
+ * source tag exists yet ). `SlotResolver.RANK` reads through this type, so adding the last layer later
+ * is a rank-map edit, not a redesign.
+ */
+export type SourceLayer = 'lens' | 'injected' | 'agent';
+
+/** A `ContextBlock` plus the facts `ContextAssembler`/`SlotResolver` need to reason ACROSS
+ *  artifacts — where in the dredge graph it came from, which artifact it came from, that artifact's
+ *  own type, and its `habit-class` (if any). Bookkeeping only; the wire text stays source-blind,
+ *  none of these ride into the rendered output. `artifactType` is what lets a merge group resolve
+ *  "lens leads" (`ContextAssembler.merge`); `habitClass` is what lets `SlotResolver` find contending
+ *  blocks in the first place. */
+export interface TaggedBlock extends ContextBlock {
+	sourceLayer: SourceLayer;
+	path: string;
+	artifactType: ArtifactType;
+	/** This block's artifact's own `habit-class` frontmatter field (protocol §6), or `null` for
+	 *  classless (additive) content — the default for everything that isn't a classed habit. */
+	habitClass: string | null;
+}
 
 /**
  * ContextSegment — one block of an assembled request's context, broken out by SOURCE for inspection.
@@ -66,14 +95,28 @@ export interface LinkEntry {
 }
 
 /**
+ * A slot's wire mode — the SAME idiom for every artifact a slot can point at (reference, habit,
+ * contract, plan, MCP tool, anything else routable). No per-artifact-type special casing. Mirrors
+ * `ToolMode` (kcd_sdk/src/agent/ToolMode.ts) — same three values, same off→on→suggested framing;
+ * kept as its own type rather than importing ToolMode here since `agent` depends on `primitives`,
+ * not the other way around, but the UI layer is free to treat them interchangeably.
+ *   off       — excluded entirely; not dredged, not even shown as a routing row.
+ *   on        — the default. Routing row only (what/where/why) — the agent looks it up when its
+ *               When/trigger fires. Cheap: never fetched into the context-assembly graph.
+ *   suggested — the target's full text is dredged and rides inline, no lookup required.
+ */
+export const SLOT_MODES = [ 'off', 'on', 'suggested' ] as const;
+export type SlotMode = typeof SLOT_MODES[number];
+
+/**
  * A dredge-policy row parsed from a What | Where | Why table.
- * The table format IS the policy language: `always` in the Why cell = auto-dredge.
+ * The table format IS the policy language: `data-kcd-mode` on the slot IS the auto-dredge gate.
  */
 export interface PolicyEntry {
 	what: string;
 	href: string;
 	why: string;
-	always: boolean;
+	mode: SlotMode;
 	type: LinkType;
 	section?: string;
 }
