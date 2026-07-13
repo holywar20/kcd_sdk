@@ -90,10 +90,18 @@ const ROUTING_TITLE: Record<string, string> = Object.fromEntries(
 
 export const ContextAssembler = new class ContextAssembler {
 
+	/** The merged + sorted list — Care → core → routing → injected — before the join. The one place
+	 *  both `assemble()`'s text join and any future per-block projection ( e.g. token weights, the
+	 *  compiled-context plan's `Agent.compiledBlocks()` ) read, so inclusion can never be computed two
+	 *  different ways. */
+	assembleBlocks( blocks: TaggedBlock[] ): TaggedBlock[] {
+		return this.sort( this.merge( blocks ) );
+	}
+
 	/** Merge by key, sort Care → core → routing → injected, then join. `sep` defaults to the
 	 *  separator every other context-layer join already uses ( see `Agent.SYSTEM_SEP` ). */
 	assemble( blocks: TaggedBlock[], sep = '\n\n---\n\n' ): string {
-		return this.sort( this.merge( blocks ) ).map( b => b.text ).join( sep );
+		return this.assembleBlocks( blocks ).map( b => b.text ).join( sep );
 	}
 
 	/** The key a block merges on — its authored `mergeKey`, or an implicit `routing:<section>` key
@@ -179,18 +187,62 @@ export const ContextAssembler = new class ContextAssembler {
 	 *  then keeps them in load order ). */
 	lensRank( b: TaggedBlock ): number { return b.artifactType === 'lens' ? 0 : 1; }
 
+	/** This block's sort tier — Care(0) → core(1) → routing(2) → injected(3). Exposed ( not just a
+	 *  `sort()`-local closure ) so `withBandHeadings` — and anything else that needs to know a tier
+	 *  boundary rather than just the final order — reads the exact same ranking, never a second
+	 *  derivation of it. */
+	tierOf( b: TaggedBlock ): number {
+		if ( b.sourceLayer === 'injected' ) return 3;
+		if ( b.region === 'care' ) return 0;
+		if ( b.section && ROUTING_SECTIONS.has( b.section ) ) return 2;
+		return 1;
+	}
+
 	/** Care first, then core content, then routing tables, injected last — load order preserved
 	 *  within each tier ( see the class doc for the full rationale ). */
 	sort( blocks: TaggedBlock[] ): TaggedBlock[] {
-		const tier = ( b: TaggedBlock ): number => {
-			if ( b.sourceLayer === 'injected' ) return 3;
-			if ( b.region === 'care' ) return 0;
-			if ( b.section && ROUTING_SECTIONS.has( b.section ) ) return 2;
-			return 1;
-		};
 		return blocks
 			.map( ( b, i ) => ( { b, i } ) )
-			.sort( ( x, y ) => tier( x.b ) - tier( y.b ) || x.i - y.i )
+			.sort( ( x, y ) => this.tierOf( x.b ) - this.tierOf( y.b ) || x.i - y.i )
 			.map( x => x.b );
+	}
+
+	/** Display-band heading per tier ( compiled-context plan, decisions ratified 2026-07-13 ) —
+	 *  deliberately NOT the internal region/tier vocabulary: "Knowledge," not "Know"/"core," since
+	 *  Know/Care/Do's future as internal categories is unsettled. `null` for a tier with no settled
+	 *  band name yet — tier 3 ( `injected`, i.e. session-dropped content ) is NOT the same thing as
+	 *  the plan's "Turn History" band ( actual conversation turns, which don't ride this list at all
+	 *  yet — see the plan's Phase 6 ); conflating the two here would be a guess, not a decision, so it
+	 *  stays unheaded until that's actually settled. */
+	bandHeading( tier: number ): string | null {
+		return ( { 0: '## Cares', 1: '## Knowledge', 2: '## Routing' } as Record<number, string> )[ tier ] ?? null;
+	}
+
+	/** One synthetic heading block — no source artifact, so tagged neutrally like every other
+	 *  compiler-synthesized block ( the routing dividers, the manifest tables ). */
+	headingBlock( text: string ): TaggedBlock {
+		return { region: 'know', section: null, mergeKey: null, text, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
+	}
+
+	/** Splice a band heading before the first block of each tier run in an ALREADY tier-sorted list
+	 *  ( `assembleBlocks`'s output, or any other list sharing its ordering ). A tier with no settled
+	 *  heading ( `bandHeading` returns `null` ) gets none; a tier with no members contributes nothing
+	 *  to splice around — this never invents a heading for an empty band. Kept as an explicit, opt-in
+	 *  step rather than folded into `assembleBlocks`/`sort` themselves, so every EXISTING caller
+	 *  ( `LensObject.serializeForContext`, the unit tests ) keeps its plain merged+sorted list with no
+	 *  behavior change; only a caller that wants display bands asks for them. */
+	withBandHeadings( sorted: TaggedBlock[] ): TaggedBlock[] {
+		const out: TaggedBlock[] = [];
+		let lastTier: number | null = null;
+		for ( const b of sorted ) {
+			const t = this.tierOf( b );
+			if ( t !== lastTier ) {
+				const heading = this.bandHeading( t );
+				if ( heading ) out.push( this.headingBlock( heading ) );
+				lastTier = t;
+			}
+			out.push( b );
+		}
+		return out;
 	}
 }();

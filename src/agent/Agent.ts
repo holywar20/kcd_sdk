@@ -597,19 +597,68 @@ export class Agent {
 	 * compiles to nothing.
 	 */
 	compile(): string {
-		if ( !this.lenses.length ) return '';
+		return this.compiledBlocks().map( b => b.text ).join( '\n\n' );
+	}
+
+	/**
+	 * THE compiled-block currency ( the compiled-context plan, 2026-07-12/13 ) — the flat, merged,
+	 * post-resolution `TaggedBlock[]` `compile()` now projects to text. Shape unchanged from what
+	 * `compile()` used to build inline: the merged body ( care → core → injected, via
+	 * `ContextAssembler.assembleBlocks` ) first, then the bottom-of-context manifest blocks
+	 * ( `manifestBlocks()` — Files, then each non-empty `MANIFEST_SECTIONS` table, in `INDEX_ORDER` ),
+	 * each pair of PRESENT segments separated by a literal `---` divider block. Kept as TWO separate
+	 * assembles rather than one combined pass through `ContextAssembler.sort` on purpose: a single pass
+	 * would tier `injected` BELOW `routing` ( matching `ContextAssembler`'s own documented intent ), but
+	 * today's actual wire puts injected content ABOVE the manifest — unifying the sort would silently
+	 * change output whenever a session has injected content, which is a real behavior change, not a
+	 * refactor. Flagged in the plan; not resolved either way here.
+	 *
+	 * `extras` ( Phase 2, 2026-07-13 ): `before` rides ahead of the body ( the model-bound root context —
+	 * the ONE layer that genuinely leads everything else ), `after` trails the manifest ( the on-mode
+	 * tool manifest, every suggested tool's full schema — today assembled renderer-side in
+	 * `Session.wireSystemFor` ). A flat trailing array couldn't express "some extras lead, some trail";
+	 * this is the real positioning the Phase 1 doc comment deferred to Phase 2.
+	 */
+	compiledBlocks( extras: { before?: TaggedBlock[]; after?: TaggedBlock[] } = {} ): TaggedBlock[] {
+		const before = extras.before ?? [];
+		const after  = extras.after ?? [];
+		if ( !this.lenses.length ) return Agent.joinSegments( [ before, after ] );
 		const blocks  = SlotResolver.compilePlan( this.getContextBlocks() ).survivors;
 		const inIndex = ( b: TaggedBlock ): boolean => b.section !== null && Agent.INDEX_SECTIONS.has( b.section );
 		// The body is everything that ISN'T an index table and isn't the legacy Available-on-request stub.
-		const body    = blocks.filter( b => !inIndex( b ) && b.section !== 'stub' );
+		const body = blocks.filter( b => !inIndex( b ) && b.section !== 'stub' );
 
-		const manifest = this.manifest( blocks.filter( inIndex ) );
-		const bodyText = ContextAssembler.assemble( body, '\n\n' );
-		// Exactly ONE structural rule in the whole compiled context: the boundary between the body ( what
-		// it knows — the cache-stable lens prose ) and the manifest ( the curated affordance surface ) that
-		// trails it. Everything else is blank-line separated — the `###` headers carry the structure; a
-		// `---` between every block is chrome an agent doesn't need.
-		return [ bodyText, manifest ].filter( Boolean ).join( '\n\n---\n\n' );
+		// Band headings ( Cares / Knowledge over the body's own care/core tiers; Routing over the
+		// manifest ) — real headings on the real wire text, per the plan's 2026-07-13 decisions, not a
+		// view-only re-skin. `withBandHeadings` only fires per NON-EMPTY tier, so an agent with no core
+		// content never gets a bare "## Knowledge" heading over nothing.
+		const bodyBlocks  = ContextAssembler.withBandHeadings( ContextAssembler.assembleBlocks( body ) );
+		const rawManifest = this.manifestBlocks( blocks.filter( inIndex ) );
+		const manifestBlocks = rawManifest.length
+			? [ ContextAssembler.headingBlock( ContextAssembler.bandHeading( 2 )! ), ...rawManifest ]
+			: [];
+		return Agent.joinSegments( [ before, bodyBlocks, manifestBlocks, after ] );
+	}
+
+	/** Join several block-list SEGMENTS with a literal `---` divider block between each pair of
+	 *  segments that BOTH have content — an empty segment ( no root context bound, no `suggested`
+	 *  tools armed, a draft with no body ) contributes nothing, not even a stray divider. The same
+	 *  `.filter(Boolean).join(SEP)` semantics `wireSystemFor` used to hand-roll over raw strings, now a
+	 *  block-list operation any caller stitching wire-order layers can reuse. */
+	static joinSegments( segments: TaggedBlock[][] ): TaggedBlock[] {
+		const out: TaggedBlock[] = [];
+		for ( const seg of segments.filter( s => s.length ) ) {
+			if ( out.length ) out.push( Agent.dividerBlock() );
+			out.push( ...seg );
+		}
+		return out;
+	}
+
+	/** The literal `---` boundary block between two wire-order segments ( see `joinSegments` ).
+	 *  Synthetic — no source artifact — so it carries the same neutral tagging every other
+	 *  compiler-synthesized block does. */
+	static dividerBlock(): TaggedBlock {
+		return { region: 'know', section: null, mergeKey: null, text: '---', sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
 	}
 
 	/** The KCD manifest sections — the what/where/why routing tables. Each is hoisted OUT of the body and
@@ -621,30 +670,38 @@ export class Agent {
 	static readonly INDEX_SECTIONS = new Set<string>( MANIFEST_SECTIONS );
 
 	/**
-	 * The bottom-of-context manifest ( see `compile` ): a `Files` table naming every loaded lens, then one
-	 * routing table per non-empty manifest section ( References / Domains / Habits / Contracts ), in
-	 * `INDEX_ORDER`. Every row is one what/where/why line; every file appears exactly once, deduped across
-	 * sources by `ContextAssembler.routingTable` so a manifest table and an inline merge can't differ. The
-	 * `Files` heading is itself a manifest section — single-sourced via `ContextAssembler.title` so no
-	 * caller hardcodes a `###` string. Paths are vault-relative — the primary lens's `vaultRelative`, so a
-	 * stack sharing a vault root all resolve against it.
+	 * The bottom-of-context manifest ( see `compiledBlocks` ), AS BLOCKS: a `Files` block naming every
+	 * loaded lens, then one routing-table block per non-empty manifest section ( References / Domains /
+	 * Habits / Contracts ), in `INDEX_ORDER`. Every row is one what/where/why line; every file appears
+	 * exactly once, deduped across sources by `ContextAssembler.routingTable` so a manifest table and an
+	 * inline merge can't differ. The `Files` heading is itself a manifest section — single-sourced via
+	 * `ContextAssembler.title` so no caller hardcodes a `###` string. Paths are vault-relative — the
+	 * primary lens's `vaultRelative`, so a stack sharing a vault root all resolve against it.
 	 */
-	manifest( index: TaggedBlock[] ): string {
-		const root  = this.primaryLens;
-		const parts: string[] = [];
+	manifestBlocks( index: TaggedBlock[] ): TaggedBlock[] {
+		const root = this.primaryLens;
+		const out: TaggedBlock[] = [];
 
 		const fileRows = this.lenses.map( l => KcdContext.renderRow( {
 			what:  l.getName(),
 			where: ( root ?? l ).vaultRelative( l.getPath() ?? '' ),
 			why:   String( l.getFrontmatter()[ 'description' ] ?? '' )
 		} ) );
-		if ( fileRows.length ) parts.push( [ ContextAssembler.title( 'files' ), ...fileRows ].join( '\n' ) );
+		if ( fileRows.length ) {
+			out.push( Agent.manifestBlock( 'files', [ ContextAssembler.title( 'files' ), ...fileRows ].join( '\n' ) ) );
+		}
 
 		for ( const section of Agent.INDEX_ORDER ) {
 			const members = index.filter( b => b.section === section );
-			if ( members.length ) parts.push( ContextAssembler.routingTable( members, section ) );
+			if ( members.length ) out.push( Agent.manifestBlock( section, ContextAssembler.routingTable( members, section ) ) );
 		}
-		return parts.join( '\n\n' );
+		return out;
+	}
+
+	/** One manifest-table block — synthetic ( no single source artifact, so tagged neutrally ), `region:
+	 *  'know'` since it's routing content, never Care identity prose. */
+	static manifestBlock( section: string, text: string ): TaggedBlock {
+		return { region: 'know', section, mergeKey: null, text, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
 	}
 
 	/**

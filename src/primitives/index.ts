@@ -13,6 +13,8 @@ export type {
 	SerializedArtifact,
 	SerializedLens,
 	SlotMode,
+	SourceLayer,
+	TaggedBlock,
 	TypeCheckIssue,
 	WriteMap,
 	ArtifactRef,

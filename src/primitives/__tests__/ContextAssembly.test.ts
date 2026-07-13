@@ -329,6 +329,51 @@ describe( 'Agent.compile — the context-compiler surface: merged body first, th
 	} );
 } );
 
+describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Phase 1)', () => {
+	const loadBase = (): Agent => {
+		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/_lens_base.html' ), {
+			projectRoot: PROJECT_ROOT, read: ( abs ) => fs.readFileSync( abs, 'utf-8' ), depth: 2
+		} );
+		return Agent.create( { lenses: [ lens ] } );
+	};
+
+	it( 'the joined block list is compile() — no separate logic tree, byte for byte', () => {
+		const agent = loadBase();
+		const joined = agent.compiledBlocks().map( b => b.text ).join( '\n\n' );
+		expect( joined ).toBe( agent.compile() );
+	} );
+
+	it( '`after` extras trail the manifest, `before` extras lead the body — each behind its own divider', () => {
+		const agent = loadBase();
+		const lead  = { region: 'know', section: null, mergeKey: null, text: 'ROOT CONTEXT', sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null } as const;
+		const trail = { region: 'know', section: null, mergeKey: null, text: 'TOOL MANIFEST', sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null } as const;
+		const withExtras = agent.compiledBlocks( { before: [ lead ], after: [ trail ] } );
+		expect( withExtras.map( b => b.text ).join( '\n\n' ) )
+			.toBe( 'ROOT CONTEXT' + '\n\n---\n\n' + agent.compile() + '\n\n---\n\n' + 'TOOL MANIFEST' );
+		expect( withExtras[ 0 ] ).toBe( lead );
+		expect( withExtras[ withExtras.length - 1 ] ).toBe( trail );
+	} );
+
+	it( 'an empty extras segment contributes no stray divider', () => {
+		const agent = loadBase();
+		const trail = { region: 'know', section: null, mergeKey: null, text: 'TOOL MANIFEST', sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null } as const;
+		const withExtras = agent.compiledBlocks( { after: [ trail ] } );
+		expect( withExtras.map( b => b.text ).join( '\n\n' ) ).toBe( agent.compile() + '\n\n---\n\n' + 'TOOL MANIFEST' );
+	} );
+
+	it( 'per-block weight sums to the whole-string weight, for ANY consistent length function — the identity that makes a real tokenizer sum agree with the wire estimate', () => {
+		const agent = loadBase();
+		const blocks = agent.compiledBlocks();
+		const sep = '\n\n';
+		// Stand-in for the renderer's real `estimateTokens` — the SDK carries no tokenizer (plan Notes:
+		// "compiledBlocks does not pull a tokenizer into @kcd/core"). Any consistent length function obeys
+		// the same additive identity, which is the actual property being locked here.
+		const weight = ( s: string ): number => s.length;
+		const summed = blocks.reduce( ( a, b ) => a + weight( b.text ), 0 ) + Math.max( 0, blocks.length - 1 ) * weight( sep );
+		expect( summed ).toBe( weight( blocks.map( b => b.text ).join( sep ) ) );
+	} );
+} );
+
 describe( 'Know/Care/Do labels are stripped from compiled context — real deployed base lens', () => {
 	it( 'the base lens compiles with no K/C/D region headings, but its sections and slot rows survive', () => {
 		const p = path.join( PROJECT_ROOT, '_Claude/lenses/_lens_base.html' );
