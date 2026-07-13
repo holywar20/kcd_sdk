@@ -85,6 +85,23 @@ describe( 'KcdContext — AI-audience projection', () => {
 		const out = KcdContext.project( artifact );
 		expect( out.split( '\n' )[ 0 ] ).toBe( '# [lens] fixture.html' );
 	} );
+
+	it( 'preserves the significant space between two inline elements — no "canonical:_Claude" welding', () => {
+		const html = `<!DOCTYPE html><html><head><meta charset="utf-8"><title>WS</title></head><body>
+<article data-kcd="reference">
+<dl data-kcd-frontmatter>
+<dt>name</dt><dd data-kcd-field="name" data-kcd-type="slug">ws</dd>
+<dt>description</dt><dd data-kcd-field="description" data-kcd-type="text">d</dd>
+<dt>type</dt><dd data-kcd-field="type" data-kcd-type="enum">reference</dd>
+<dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>
+</dl>
+<p><strong>kcd is canonical:</strong> <code>_Claude/kcd/</code> is the source.</p>
+</article>
+</body></html>`;
+		const out = KcdContext.project( KcdParse.parse( html, 'ws.html' ) );
+		expect( out ).toContain( 'kcd is canonical: _Claude/kcd/ is the source.' );
+		expect( out ).not.toContain( 'canonical:_Claude' );
+	} );
 } );
 
 const LENS_FIXTURE = `<!DOCTYPE html>
@@ -183,11 +200,20 @@ describe( 'KcdContext.projectBlocks — region-block decomposition (Phase 2)', (
 		expect( joined ).toContain( 'A ref — reasons (x.html)' );
 	} );
 
-	it( 'gives the head (type/path header + frontmatter) its own leading block, tagged `care` for a lens', () => {
+	it( 'emits NO synthetic head block on the wire — identity ( name/path ) rides once in the compiled manifest, not per artifact', () => {
 		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' );
 		const blocks = KcdContext.projectBlocks( artifact, 'know' );
+		// No block carries the `# [type] path` header or the frontmatter keep-set anymore.
+		expect( blocks.some( b => b.text.includes( '# [lens]' ) ) ).toBe( false );
+		expect( blocks.some( b => b.text.includes( 'name: region-fixture' ) ) ).toBe( false );
+		// The first block is now the artifact's real lede ( still tagged `care` for a lens ), not the head.
 		expect( blocks[ 0 ].region ).toBe( 'care' );
-		expect( blocks[ 0 ].text ).toContain( 'name: region-fixture' );
+		expect( blocks[ 0 ].text ).toContain( 'identity lede' );
+	} );
+
+	it( 'the flat project() still leads with the head — that path feeds the Atlas human preview, not the wire', () => {
+		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' );
+		expect( KcdContext.project( artifact ).split( '\n' )[ 0 ] ).toBe( '# [lens] fixture.html' );
 	} );
 
 	it( 'defaults every block of a non-lens artifact to the caller-supplied role — a habit-role artifact defaults to `do`', () => {

@@ -1,8 +1,10 @@
 import { LensObject } from '../primitives/framework/LensObject';
 import { SlotResolver } from '../primitives/framework/SlotResolver';
 import type { SlotResolution } from '../primitives/framework/SlotResolver';
+import { ContextAssembler, MANIFEST_SECTIONS } from '../primitives/framework/ContextAssembler';
+import { KcdContext } from '../core/html/KcdContext';
 import { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
-import type { ArtifactType, ContextSegment, PolicyEntry, SerializedArtifact, SerializedLens, TaggedBlock } from '../primitives/types';
+import type { ArtifactType, ContextSegment, PolicyEntry, SerializedArtifact, SerializedLens, SlotMode, TaggedBlock } from '../primitives/types';
 import { DEFAULT_MODEL_KEY } from './Model';
 import type { ToolMode } from './ToolMode';
 
@@ -44,6 +46,9 @@ export interface SerializedAgent {
 	 * that predates them, or a draft, carries none ).
 	 */
 	baseHabitNodes?: SerializedArtifact[];
+	/** The agent's `baseReferences` MATERIALIZED into loaded artifacts — the reference sibling of
+	 *  `baseHabitNodes`, identical shape and identical reason ( main reads disk; the renderer can't ). */
+	baseReferenceNodes?: SerializedArtifact[];
 	/**
 	 * Per-TOOL three-state inclusion, keyed by tool name ( the wire's currency ): `off` ( absent =
 	 * off ), `on` ( advertised as a one-liner in the system-prompt manifest, server stays lazy ), or
@@ -51,6 +56,37 @@ export interface SerializedAgent {
 	 * the renderer's per-tool control writes it; the turn assembly reads it to split the manifest from
 	 * the injected surface. Distinct from `baseTools` ( the dumb inventory ), which stays untouched. */
 	toolModes: Record<string, ToolMode>;
+	/**
+	 * On/off EXCLUSION sets for the agent's own `baseReferences` / `baseHabits` — presence in here means
+	 * OFF ( absent = on, the default ), so a fresh agent's whole base inventory starts fully live with no
+	 * seed data required. Distinct from REMOVING a path from `baseReferences`/`baseHabits` outright: off
+	 * keeps it in the agent's own inventory ( still shown, still re-enable-able ), just excluded from
+	 * `getContextBlocks()`. The LEGACY binary layer — `referenceModes`/`habitModes` ( the three-state tier )
+	 * now supersede this for any path they hold an entry for; these stay as the fallback default a path with
+	 * no explicit mode falls back to ( off ⇒ `off`, else ⇒ `suggested` — see `effectiveReferenceMode`/
+	 * `effectiveHabitMode` ), so an agent with no explicit mode set behaves exactly as before either tier
+	 * existed.
+	 */
+	referenceOff: string[];
+	habitOff: string[];
+	/**
+	 * Per-REFERENCE three-state OVERRIDE, keyed by the reference's path — the exact `habitModes` idiom, on
+	 * the reference axis: an agent-level override of EITHER a lens-contributed reference's slot mode OR one
+	 * of the agent's own `baseReferences` picks. ABSENT for a path = inherit ( a lens's own dredged mode, or
+	 * the `referenceOff` binary default for an own pick ); PRESENT = the agent forces that reference to `off`
+	 * ( excluded, its manifest row dropped ), `on` ( routing row only ), or `suggested` ( full body rides ),
+	 * regardless of the lens's policy. The reference sibling of `habitModes` — unifies references onto the
+	 * exact same three-state composition every other component ( tools, habits ) already carries. */
+	referenceModes?: Record<string, SlotMode>;
+	/**
+	 * Per-HABIT three-state OVERRIDE, keyed by the habit's path — the exact `toolModes` idiom for habits:
+	 * an agent-level override of a LENS-contributed habit's slot mode. ABSENT for a path = inherit the
+	 * lens's own mode ( the agent screen greys the row to say "not overridden" ); PRESENT = the agent forces
+	 * that habit to `off` ( excluded, its manifest row dropped ), `on` ( routing row only ), or `suggested`
+	 * ( full four-field body rides ), regardless of what the lens said. Distinct from `habitOff` ( the binary
+	 * exclusion of the agent's OWN `baseHabits` ) — this overrides INHERITED habits, and carries the on↔suggested
+	 * tier `habitOff` can't express. The composability of behaviour, same shape as `effectiveToolModes()`. */
+	habitModes?: Record<string, SlotMode>;
 	/** Open typed-field bag — composable config, kept LOOSE at the SDK seam (widget SettingFields). */
 	fields: Record<string, unknown>[];
 	/** Management / system configuration (model overrides, runtime knobs). Loose by design. */
@@ -77,6 +113,10 @@ export interface AgentOptions {
 	baseReferences?: string[];
 	basePlans?: string[];
 	toolModes?: Record<string, ToolMode>;
+	referenceOff?: string[];
+	referenceModes?: Record<string, SlotMode>;
+	habitOff?: string[];
+	habitModes?: Record<string, SlotMode>;
 	fields?: Record<string, unknown>[];
 	system?: Record<string, unknown>;
 	status?: AgentStatus;
@@ -137,6 +177,17 @@ export class Agent {
 	/** Per-tool three-state inclusion, keyed by tool name (see SerializedAgent.toolModes). */
 	toolModes: Record<string, ToolMode>;
 
+	/** On/off exclusion sets for the agent's own base references/habits (see SerializedAgent.referenceOff). */
+	referenceOff: string[];
+	habitOff: string[];
+
+	/** Per-reference override — EITHER a lens-inherited reference OR one of this agent's own `baseReferences`
+	 *  (see SerializedAgent.referenceModes). Absent key = inherit; present = the agent forces off/on/suggested. */
+	referenceModes: Record<string, SlotMode>;
+	/** Per-habit override of an INHERITED lens habit's slot mode (see SerializedAgent.habitModes). Absent
+	 *  key = inherit the lens's mode; present = the agent forces off/on/suggested. */
+	habitModes: Record<string, SlotMode>;
+
 	fields: Record<string, unknown>[];
 	system: Record<string, unknown>;
 
@@ -151,6 +202,10 @@ export class Agent {
 	composedHabits: string[] = [];
 	composedReferences: string[] = [];
 	composedPlans: string[] = [];
+	/** Per-tool modes CONTRIBUTED by the lenses ( tool name → mode ), materialized in compose() from each
+	 *  lens's `getToolModes()`. The composition baseline; `effectiveToolModes()` overlays this agent's own
+	 *  authored `toolModes` on top, agent-wins-per-tool. Never persisted — rebuilt from the lenses. */
+	composedToolModes: Record<string, ToolMode> = {};
 
 	/**
 	 * The agent's OWN base habits as LOADED objects ( the `agent` source layer at composition ). Disk is
@@ -158,6 +213,10 @@ export class Agent {
 	 * for the renderer's structured view. Never persisted to the DB ( `baseHabits` is ) — rebuilt from the
 	 * paths on every load/save so it can't go stale. Empty until materialized ( a draft, or a bare wire ). */
 	baseHabitNodes: KCDPrimitive[] = [];
+	/** The agent's OWN base references as LOADED objects — the reference sibling of `baseHabitNodes`,
+	 *  identical shape and identical reason. Never persisted; rebuilt from `baseReferences` on every
+	 *  load/save. Empty until materialized ( a draft, or a bare wire ). */
+	baseReferenceNodes: KCDPrimitive[] = [];
 
 	private constructor(
 		id: string,
@@ -172,6 +231,10 @@ export class Agent {
 		baseReferences: string[],
 		basePlans: string[],
 		toolModes: Record<string, ToolMode>,
+		referenceOff: string[],
+		referenceModes: Record<string, SlotMode>,
+		habitOff: string[],
+		habitModes: Record<string, SlotMode>,
 		fields: Record<string, unknown>[],
 		system: Record<string, unknown>,
 		createdAt: number,
@@ -191,6 +254,10 @@ export class Agent {
 		this.baseReferences = baseReferences;
 		this.basePlans      = basePlans;
 		this.toolModes      = toolModes;
+		this.referenceOff   = referenceOff;
+		this.referenceModes = referenceModes;
+		this.habitOff       = habitOff;
+		this.habitModes     = habitModes;
 		this.fields         = fields;
 		this.system         = system;
 		this.createdAt      = createdAt;
@@ -218,6 +285,10 @@ export class Agent {
 			opts.baseReferences ?? [],
 			opts.basePlans ?? [],
 			opts.toolModes ?? {},
+			opts.referenceOff ?? [],
+			opts.referenceModes ?? {},
+			opts.habitOff ?? [],
+			opts.habitModes ?? {},
 			opts.fields ?? [],
 			opts.system ?? {},
 			Date.now(),
@@ -244,6 +315,10 @@ export class Agent {
 			json.baseReferences ?? [],
 			json.basePlans ?? [],
 			json.toolModes ?? {},
+			json.referenceOff ?? [],
+			json.referenceModes ?? {},
+			json.habitOff ?? [],
+			json.habitModes ?? {},
 			json.fields ?? [],
 			json.system ?? {},
 			json.createdAt,
@@ -251,9 +326,11 @@ export class Agent {
 			json.folder,
 			json.notes ?? null,
 		);
-		// The materialized base habits ride the wire ( the renderer can't dredge disk ). Main re-materializes
-		// from the paths on every load/save, so an absent field just means "not materialized yet", never a loss.
-		agent.baseHabitNodes = ( json.baseHabitNodes ?? [] ).map( ( n ) => KCDPrimitive.fromSerialized( n ) );
+		// The materialized base habits/references ride the wire ( the renderer can't dredge disk ). Main
+		// re-materializes from the paths on every load/save, so an absent field just means "not materialized
+		// yet", never a loss.
+		agent.baseHabitNodes     = ( json.baseHabitNodes ?? [] ).map( ( n ) => KCDPrimitive.fromSerialized( n ) );
+		agent.baseReferenceNodes = ( json.baseReferenceNodes ?? [] ).map( ( n ) => KCDPrimitive.fromSerialized( n ) );
 		return agent;
 	}
 
@@ -273,13 +350,18 @@ export class Agent {
 			baseReferences: [ ...this.baseReferences ],
 			basePlans:      [ ...this.basePlans ],
 			toolModes:      { ...this.toolModes },
+			referenceOff:   [ ...this.referenceOff ],
+			referenceModes: { ...this.referenceModes },
+			habitOff:       [ ...this.habitOff ],
+			habitModes:     { ...this.habitModes },
 			fields:         this.fields.map( ( f ) => ( { ...f } ) ),
 			system:         { ...this.system },
 			createdAt:      this.createdAt,
 			status:         this.status,
 			folder:         this.folder,
 			notes:          this.notes,
-			baseHabitNodes: this.baseHabitNodes.map( ( n ) => n.serialize() ),
+			baseHabitNodes:     this.baseHabitNodes.map( ( n ) => n.serialize() ),
+			baseReferenceNodes: this.baseReferenceNodes.map( ( n ) => n.serialize() ),
 		};
 	}
 
@@ -291,8 +373,10 @@ export class Agent {
 	 * expensive dredge already happened when the lens was loaded), so call it freely: at
 	 * construction, and whenever a base string or a lens changes.
 	 *
-	 * `composedTools` stays empty for now — lenses don't expose a tool/plugin contribution yet;
-	 * that lands when the per-category resolver seam is wired (the strings-to-objects step).
+	 * `composedTools` ( the dumb inventory of tool NAMES ) stays empty — a tool is not a dredged node, so
+	 * the lens's tool contribution is a per-tool MODE map ( `composedToolModes` ), materialized from each
+	 * lens's `getToolModes()`. Later lenses override earlier per-tool; the agent's own `toolModes` then
+	 * overrides all of them ( `effectiveToolModes()` ).
 	 */
 	compose(): void {
 		const nodes = this.lenses.flatMap( ( l ) => l.getNodes() );
@@ -300,6 +384,8 @@ export class Agent {
 		this.composedPlans      = _pathsOfType( nodes, 'plan' );
 		this.composedHabits     = _pathsOfType( nodes, 'habit' );
 		this.composedTools      = [];
+		this.composedToolModes  = {};
+		for ( const l of this.lenses ) Object.assign( this.composedToolModes, l.getToolModes() as Record<string, ToolMode> );
 	}
 
 	/** What this agent actually carries = bolted-on ∪ inherited-from-lenses. The permissions
@@ -309,6 +395,48 @@ export class Agent {
 	effectiveHabits():     string[] { return _union( this.baseHabits,     this.composedHabits ); }
 	effectiveReferences(): string[] { return _union( this.baseReferences, this.composedReferences ); }
 	effectivePlans():      string[] { return _union( this.basePlans,      this.composedPlans ); }
+
+	/** The per-tool modes actually in force: the lenses' contribution ( `composedToolModes` ) with this
+	 *  agent's OWN authored `toolModes` overlaid on top — agent wins per-tool, so an agent can promote,
+	 *  demote, or `off`-out any tool a lens set. THE surface every tool-wire reader should consult ( the
+	 *  turn manifest + suggested-injection ), so the composability of tools mirrors habits' lens→agent
+	 *  override. A draft with no lens just returns its own `toolModes`. */
+	effectiveToolModes(): Record<string, ToolMode> {
+		return { ...this.composedToolModes, ...this.toolModes };
+	}
+
+	/** The effective slot mode of one INHERITED lens habit ( keyed by path ): this agent's override if it
+	 *  authored one, else the lens's own dredged mode ( `suggested` when the node rides its body, `on`
+	 *  otherwise ). The habit sibling of `effectiveToolModes` — the ONE read the compile and the agent
+	 *  screen share, so the row's colour ( overridden vs inherited ) and what actually compiles can't drift.
+	 *  `null` for a path this agent carries no lens habit for. */
+	effectiveHabitMode( path: string ): SlotMode | null {
+		const override = this.habitModes[ path ];
+		if ( override ) return override;
+		const lensNode = this.getNodes().find( n => n.getType() === 'habit' && n.getPath() === path );
+		if ( lensNode ) return lensNode.included ? 'suggested' : 'on';
+		// an agent's OWN pick has no lens policy to inherit from — its un-overridden default is `suggested`
+		// ( full body ), matching `habitOff`'s long-standing binary default ( absent from `habitOff` = on,
+		// carrying its full body ) now that `habitModes` can express the third tier for these paths too.
+		const ownNode = this.baseHabitNodes.find( n => n.getPath() === path );
+		if ( ownNode ) return this.habitOff.includes( path ) ? 'off' : 'suggested';
+		return null;
+	}
+
+	/** The effective slot mode of one reference ( keyed by path ) — EITHER a lens-inherited reference OR
+	 *  one of this agent's own `baseReferences`, the reference sibling of `effectiveHabitMode`. This agent's
+	 *  override wins if it authored one; else a lens-inherited reference reads its own dredged mode ( off
+	 *  `included`, same convention as `effectiveHabitMode` ); else an own pick falls back to the legacy
+	 *  binary `referenceOff` default. `null` for a path this agent carries no reference for at all. */
+	effectiveReferenceMode( path: string ): SlotMode | null {
+		const override = this.referenceModes[ path ];
+		if ( override ) return override;
+		const lensNode = this.getNodes().find( n => n.getType() === 'reference' && n.getPath() === path );
+		if ( lensNode ) return lensNode.included ? 'suggested' : 'on';
+		const ownNode = this.baseReferenceNodes.find( n => n.getPath() === path );
+		if ( ownNode ) return this.referenceOff.includes( path ) ? 'off' : 'suggested';
+		return null;
+	}
 
 	// ── Lens surface ──────────────────────────────────────────────────────────
 
@@ -342,11 +470,79 @@ export class Agent {
 	 * doesn't honour, and neither can drift into a leak the other doesn't see.
 	 */
 	getContextBlocks(): TaggedBlock[] {
-		const lensBlocks  = this.lenses.flatMap( lens => lens.getContextBlocks() );
-		const habitBlocks = this.baseHabitNodes.flatMap( node =>
-			node.getContextBlocks().map( b => ( { ...b, sourceLayer: 'agent' as const } ) )
-		);
-		return Agent.dedupeBySource( [ ...lensBlocks, ...habitBlocks ] );
+		// Apply this agent's OVERRIDES ( `habitModes` / `referenceModes` ) to the inherited lens habits AND
+		// references BEFORE assembly: re-mode each dredged node to its EFFECTIVE mode ( the agent's override,
+		// else the lens's own authored mode read off policy — never off the node's live `included`, which we
+		// mutate here, so clearing an override reverts cleanly instead of sticking ). `suggested` rides the
+		// full body; `on` demotes it to a routing row only; `off` excludes it ( its manifest row is struck
+		// below ). One mechanism, two axes: the same `included` gate that governs every node
+		// ( `KCDPrimitive.getContextBlocks` ) governs an overridden habit OR reference alike — no per-mode
+		// block surgery. Injected / policy-less nodes are left untouched ( an injected drop is always-on ).
+		const norm       = ( s: string ): string => s.replace( /\\/g, '/' );
+		const offHabits  = new Set<string>();
+		const offRefs    = new Set<string>();
+		for ( const lens of this.lenses ) {
+			const policy = lens.getPolicy();
+			const lensModeFor = ( p: string ): SlotMode =>
+				policy.find( e => e.href && norm( p ).endsWith( norm( e.href ) ) )?.mode ?? 'on';
+			for ( const node of lens.getNodes() ) {
+				const type = node.getType();
+				if ( type !== 'habit' && type !== 'reference' ) continue;
+				const path      = node.getPath();
+				const overrides = type === 'habit' ? this.habitModes : this.referenceModes;
+				const override  = overrides[ path ];
+				const inPolicy  = policy.some( e => e.href && norm( path ).endsWith( norm( e.href ) ) );
+				if ( !override && !inPolicy ) continue;
+				const effective = override ?? lensModeFor( path );
+				node.setIncluded( effective === 'suggested' );
+				if ( effective === 'off' ) ( type === 'habit' ? offHabits : offRefs ).add( path );
+			}
+		}
+
+		let lensBlocks = this.lenses.flatMap( lens => lens.getContextBlocks() );
+		if ( offHabits.size ) lensBlocks = Agent.dropRows( lensBlocks, offHabits, 'habits' );
+		if ( offRefs.size )   lensBlocks = Agent.dropRows( lensBlocks, offRefs, 'references' );
+		// The agent's OWN picks get the SAME three-state treatment as an inherited-lens override, through the
+		// SAME `habitModes`/`referenceModes` maps ( keyed by path — nothing restricts them to lens paths ):
+		// `off` excludes entirely, `on` demotes to a stub ( `setIncluded(false)` ), `suggested` rides the full
+		// body. Absent from the map falls back to the legacy binary `habitOff`/`referenceOff` read ( off ⇒
+		// excluded, else ⇒ `suggested`, full body ), so an agent with no explicit mode set for a pick behaves
+		// exactly as before this tier existed. `habitOff`/`referenceOff` themselves are UNCHANGED ( still the
+		// fast on/off exclusion set the agent screen's blank-slot-fill path also honors ) — this only adds a
+		// finer layer on top, never removes the coarse one.
+		const ownBlocks = ( nodes: KCDPrimitive[], modes: Record<string, SlotMode>, off: string[] ): TaggedBlock[] =>
+			nodes
+				.map( node => {
+					const path      = node.getPath();
+					const effective: SlotMode = modes[ path ] ?? ( off.includes( path ) ? 'off' : 'suggested' );
+					if ( effective === 'off' ) return null;
+					node.setIncluded( effective === 'suggested' );
+					return node;
+				} )
+				.filter( ( n ): n is KCDPrimitive => n !== null )
+				.flatMap( node => node.getContextBlocks().map( b => ( { ...b, sourceLayer: 'agent' as const } ) ) );
+		const habitBlocks     = ownBlocks( this.baseHabitNodes, this.habitModes, this.habitOff );
+		const referenceBlocks = ownBlocks( this.baseReferenceNodes, this.referenceModes, this.referenceOff );
+		return Agent.dedupeBySource( [ ...lensBlocks, ...habitBlocks, ...referenceBlocks ] );
+	}
+
+	/** Strike `off`-overridden rows from a manifest section table ( `habits` or `references` ). A habit's
+	 *  or reference's row lives in its lens's own SECTION block ( not on the node itself ), so an agent `off`
+	 *  override that already excluded the body must also drop the row — matched by the row's `where` href
+	 *  being the tail of the off artifact's absolute path. Rows-only surgery: the routing tier re-renders
+	 *  every table from `rows` ( `ContextAssembler.mergeRouting` ), so the wire + manifest both follow this
+	 *  filter with no text rewrite. A block whose rows are unchanged passes through by identity. */
+	static dropRows( blocks: TaggedBlock[], offPaths: Set<string>, section: string ): TaggedBlock[] {
+		const norm    = ( s: string ): string => s.replace( /\\/g, '/' );
+		const offNorm = [ ...offPaths ].map( norm );
+		const isOff   = ( where: string | undefined ): boolean =>
+			!!where && offNorm.some( p => p.endsWith( norm( where ) ) );
+		return blocks.map( b => {
+			const cur = b.rows ?? [];
+			if ( b.section !== section || !cur.length ) return b;
+			const rows = cur.filter( r => !isOff( r.where ) );
+			return rows.length === cur.length ? b : { ...b, rows };
+		} );
 	}
 
 	/**
@@ -381,6 +577,77 @@ export class Agent {
 	}
 
 	/**
+	 * THE compiled context surface ( the context-compiler, 2026-07-12 ) — the Agent owns the WHOLE
+	 * assembly, not just identity. Shape: the merged body FIRST, then a MANIFEST at the very bottom
+	 * ( once ). The lens's identity + prose is the cache-stable prefix that rarely changes turn to turn,
+	 * so it leads; the manifest is the changeable, curated surface of affordances, so it trails ( Bryan,
+	 * 2026-07-12: "place all manifest at the bottom of the context window" ).
+	 *
+	 * The manifest is what/where/why tables — the one format ( `- what — why (where)` ) that stays
+	 * identical for agents and engineers all the way through: a `Files` table naming every loaded lens
+	 * ( name — description — vault-relative path, the file's ID ), then one deduped routing table per
+	 * `MANIFEST_SECTIONS` entry ( References / Domains / Habits / Contracts ) listing every affordance the
+	 * agent can hit indirectly. It is NOT an index of "where the content is" — it is a section of tools /
+	 * interactable surfaces, and its curation is a first-class lever.
+	 *
+	 * The body is every loaded artifact's full text, habit-class-resolved ( `SlotResolver` ) then merged
+	 * + sorted ( `ContextAssembler` ), with NO per-artifact header: a loaded file's identity lives once
+	 * in the manifest, its content merges into the body at its point. The legacy `stub` ( Available-on-
+	 * request ) block is dropped — the References table already carries those rows. A draft ( no lens )
+	 * compiles to nothing.
+	 */
+	compile(): string {
+		if ( !this.lenses.length ) return '';
+		const blocks  = SlotResolver.compilePlan( this.getContextBlocks() ).survivors;
+		const inIndex = ( b: TaggedBlock ): boolean => b.section !== null && Agent.INDEX_SECTIONS.has( b.section );
+		// The body is everything that ISN'T an index table and isn't the legacy Available-on-request stub.
+		const body    = blocks.filter( b => !inIndex( b ) && b.section !== 'stub' );
+
+		const manifest = this.manifest( blocks.filter( inIndex ) );
+		const bodyText = ContextAssembler.assemble( body, '\n\n' );
+		// Exactly ONE structural rule in the whole compiled context: the boundary between the body ( what
+		// it knows — the cache-stable lens prose ) and the manifest ( the curated affordance surface ) that
+		// trails it. Everything else is blank-line separated — the `###` headers carry the structure; a
+		// `---` between every block is chrome an agent doesn't need.
+		return [ bodyText, manifest ].filter( Boolean ).join( '\n\n---\n\n' );
+	}
+
+	/** The KCD manifest sections — the what/where/why routing tables. Each is hoisted OUT of the body and
+	 *  into the bottom-of-context manifest as its own deduped table; every other section is prose that
+	 *  stays in the body. Derived from `MANIFEST_SECTIONS` ( the ONE registry shared with
+	 *  `ContextAssembler`, so the hoist set and the routing-tier/heading logic can never drift apart );
+	 *  `INDEX_ORDER` is the manifest's table order after `### Files`. */
+	static readonly INDEX_ORDER = MANIFEST_SECTIONS;
+	static readonly INDEX_SECTIONS = new Set<string>( MANIFEST_SECTIONS );
+
+	/**
+	 * The bottom-of-context manifest ( see `compile` ): a `Files` table naming every loaded lens, then one
+	 * routing table per non-empty manifest section ( References / Domains / Habits / Contracts ), in
+	 * `INDEX_ORDER`. Every row is one what/where/why line; every file appears exactly once, deduped across
+	 * sources by `ContextAssembler.routingTable` so a manifest table and an inline merge can't differ. The
+	 * `Files` heading is itself a manifest section — single-sourced via `ContextAssembler.title` so no
+	 * caller hardcodes a `###` string. Paths are vault-relative — the primary lens's `vaultRelative`, so a
+	 * stack sharing a vault root all resolve against it.
+	 */
+	manifest( index: TaggedBlock[] ): string {
+		const root  = this.primaryLens;
+		const parts: string[] = [];
+
+		const fileRows = this.lenses.map( l => KcdContext.renderRow( {
+			what:  l.getName(),
+			where: ( root ?? l ).vaultRelative( l.getPath() ?? '' ),
+			why:   String( l.getFrontmatter()[ 'description' ] ?? '' )
+		} ) );
+		if ( fileRows.length ) parts.push( [ ContextAssembler.title( 'files' ), ...fileRows ].join( '\n' ) );
+
+		for ( const section of Agent.INDEX_ORDER ) {
+			const members = index.filter( b => b.section === section );
+			if ( members.length ) parts.push( ContextAssembler.routingTable( members, section ) );
+		}
+		return parts.join( '\n\n' );
+	}
+
+	/**
 	 * The habit-class slot resolution across this agent's WHOLE composed set — the visualization twin of
 	 * `contribute()`, for the Slot UI to show every class's candidates and which one won. Reads the exact
 	 * same `getContextBlocks()` and resolves it through the same `SlotResolver`, so this view can never
@@ -411,7 +678,7 @@ export class Agent {
 	 * empty — above-lens layer between the two; here there is nothing between them.)
 	 */
 	identity(): string {
-		return Agent.assembleSystem( [ this.systemPrompt, this.contribute() ] );
+		return Agent.assembleSystem( [ this.systemPrompt, this.compile() ] );
 	}
 
 	/**

@@ -71,7 +71,7 @@ export const KcdContext = new class KcdContext {
 	project( artifact: SerializedArtifact ): string {
 		const header = `# [${ artifact.type }] ${ artifact.path }`;
 		const front  = this.frontmatter( artifact.frontmatter );
-		const body   = this.body( artifact.body );
+		const body   = artifact.type === 'habit' ? this.projectHabit( artifact ) : this.body( artifact.body );
 		return [ header, front, body ].filter( Boolean ).join( '\n\n' );
 	}
 
@@ -114,14 +114,20 @@ export const KcdContext = new class KcdContext {
 	 * utility ), since role is a KCDPrimitive concept this pure projector doesn't otherwise have.
 	 */
 	projectBlocks( artifact: SerializedArtifact, defaultRegion: 'know' | 'do' = 'know' ): ContextBlock[] {
+		// A habit is a fixed four-field directive, not free-form regions: it projects to ONE dense block
+		// ( the blessed two-liner ), never decomposed section-by-section. See `projectHabit`.
+		if ( artifact.type === 'habit' ) {
+			const text = this.projectHabit( artifact );
+			return text ? [ { region: defaultRegion, section: 'habit', mergeKey: null, text } ] : [];
+		}
 		const ledeRegion: ContextRegion = artifact.type === 'lens' ? 'care' : defaultRegion;
 		const out: ContextBlock[] = [];
 
-		const header = `# [${ artifact.type }] ${ artifact.path }`;
-		const front  = this.frontmatter( artifact.frontmatter );
-		const head   = [ header, front ].filter( Boolean ).join( '\n\n' );
-		if ( head ) out.push( { region: ledeRegion, section: null, mergeKey: null, text: head } );
-
+		// No synthetic `# [type] path` head / frontmatter block on the wire: a loaded artifact's identity
+		// ( name, description, path ) rides ONCE in the manifest ( Agent.compile — now the bottom-of-context
+		// affordance surface ), never repeated per artifact ( Bryan, 2026-07-12: the path exists only once ).
+		// The flat `project()` still leads with the head — that path feeds the Atlas's human single-artifact
+		// preview, a deliberately different ( human ) audience than the wire.
 		if ( !artifact.body || !artifact.body.trim() ) return out;
 
 		const root = HtmlTree.parse( artifact.body );
@@ -262,6 +268,69 @@ export const KcdContext = new class KcdContext {
 		};
 		visit( nodes );
 		return out;
+	}
+
+	/** The four-field habit projection — the dense, agent-facing behavioral directive ( see
+	 *  `_habit_template` ). Reads the habit's `why` / `action` / `explanation` / `rules` sections and
+	 *  renders the blessed two-line grammar; a `don't`-style habit ( no `action` ) folds its rules onto
+	 *  line one. Pure concatenation — the authored fields are written to read correctly in the grammar,
+	 *  so this never rewrites text. The ONE home for the dense form: both `project()` ( flat/preview ) and
+	 *  `projectBlocks()` ( the wire ) route a habit through here, so a habit can never render two ways.
+	 *  `why` was `when` until 2026-07-13 — renamed to match the canonical What|Where|Why convention;
+	 *  it's the same trigger prose a lens's Why cell defers to via `mode:habit`. The rendered grammar
+	 *  keeps the English word "when" as a connector — only the section id / source field changed. */
+	projectHabit( artifact: SerializedArtifact ): string {
+		const name        = String( artifact.frontmatter[ 'name' ] ?? '' ).trim();
+		const secs        = this.habitSections( artifact.body );
+		const when        = secs[ 'why' ]?.text ?? '';
+		const action      = secs[ 'action' ]?.text ?? '';
+		const explanation = secs[ 'explanation' ]?.text ?? '';
+		const rules       = ( secs[ 'rules' ]?.items ?? [] ).join( '; ' );
+
+		const line1 = action
+			? `${ name } — when ${ when }, execute ${ action }.`
+			: `${ name } — when ${ when }${ rules ? `: ${ rules }` : '' }.`;
+
+		// Line two carries the depth: the explanation always, plus the rules UNLESS a don't-style habit
+		// already spent them on line one.
+		const tail  = [ explanation, action ? rules : '' ].filter( Boolean );
+		const line2 = tail.length ? `↳ ${ tail.join( ' · ' ) }` : '';
+
+		return [ line1, line2 ].filter( Boolean ).join( '\n' );
+	}
+
+	/** section-name → { text, items } for a flat-sectioned artifact ( a habit ). `text` is the section's
+	 *  prose with its heading and any list stripped; `items` is its `<li>` texts ( the rules bullets ).
+	 *  Human-only sections ( scaffold notes ) are skipped — they never reach the agent. */
+	habitSections( html: string ): Record<string, { text: string; items: string[] }> {
+		const out: Record<string, { text: string; items: string[] }> = {};
+		if ( !html || !html.trim() ) return out;
+		const root = HtmlTree.parse( html );
+		for ( const el of HtmlTree.collect( root, e => KcdAddress.isSection( e ) ) ) {
+			if ( KcdAddress.isHumanOnly( el ) ) continue;
+			const name = HtmlTree.get( el, 'data-kcd-section' );
+			if ( name ) out[ name ] = this.readSection( el );
+		}
+		return out;
+	}
+
+	/** One section's { text, items }: prose ( paragraphs/blockquotes, the heading dropped ) joined into
+	 *  `text`; every `<li>` collected into `items` ( the rules bullets ). */
+	readSection( el: HtmlEl ): { text: string; items: string[] } {
+		const parts: string[] = [];
+		const items: string[] = [];
+		const walk = ( kids: HtmlNode[] ): void => {
+			for ( const k of kids ) {
+				if ( !HtmlTree.isEl( k ) ) continue;
+				if ( this.HEADINGS.has( k.tag ) ) continue;              // drop the section's own heading
+				if ( k.tag === 'li' ) { const t = this.inline( k ); if ( t ) items.push( t ); continue; }
+				if ( k.tag === 'ul' || k.tag === 'ol' ) { walk( k.kids ); continue; }
+				const t = this.inline( k );
+				if ( t ) parts.push( t );
+			}
+		};
+		walk( el.kids );
+		return { text: parts.join( ' ' ), items };
 	}
 
 	/** Collapse a node's whole-subtree text to a single trimmed line. */

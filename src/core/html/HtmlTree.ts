@@ -48,7 +48,13 @@ export const HtmlTree = new class HtmlTree {
 				const next = html.indexOf( '<', i );
 				const end  = next < 0 ? html.length : next;
 				const text = html.slice( i, end );
-				if ( text.trim() !== '' ) top().kids.push( { type: 'text', value: this.decode( text ) } );
+				// A whitespace-only run between two INLINE elements ( `</strong> <code>` ) is a significant
+				// space — dropping it welds words together ( "canonical:_Claude" ). Collapse it to a single
+				// space rather than discarding it. In BLOCK context that lone space renders to nothing
+				// ( `KcdContext.inline` trims it away ), so keeping it is safe there. A truly empty run adds
+				// nothing.
+				const value = text.trim() !== '' ? this.decode( text ) : ( text === '' ? '' : ' ' );
+				if ( value ) top().kids.push( { type: 'text', value } );
 				i = end;
 				continue;
 			}

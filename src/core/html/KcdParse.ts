@@ -25,6 +25,9 @@ import { classifyHref } from '../../primitives/framework/KCDPrimitive';
 import { KCDValidationError } from '../../primitives/errors';
 import type { ArtifactType, LinkEntry, PolicyEntry, SerializedArtifact, SlotMode } from '../../primitives/types';
 
+/** The lens section whose where-less slots name MCP tools ( not path artifacts ) + their mode. */
+const TOOLS_SECTION = 'tools';
+
 /** A dredge/nav slot row, structured ( protocol §3 ). `policy` now covers every region — a habit or
  *  contract slot is dredge-eligible the same way a reference slot is; only `mode` decides how much
  *  of it rides ( see SlotMode ). */
@@ -57,6 +60,8 @@ export interface ParsedArtifact extends SerializedArtifact {
 	policy: PolicyEntry[];
 	params: ParsedParam[];
 	slots: ParsedSlot[];
+	/** tool name → mode, from the where-less slots of the Tools section ( lens only; {} elsewhere ). */
+	toolModes: Record<string, SlotMode>;
 }
 
 export const KcdParse = new class KcdParse {
@@ -101,8 +106,23 @@ export const KcdParse = new class KcdParse {
 			included:    true,
 			policy:      this.policy( slots ),
 			params:      acc.params,
-			slots
+			slots,
+			toolModes:   this.toolModes( slots )
 		};
+	}
+
+	// ── Tools ( a lens's MCP tool composition — where-less slots in the Tools section ) ──
+	// A tool is NOT a path artifact: its slot names the tool ( the `what` cell ) and carries a mode, with
+	// no `where` link, so it never enters `policy` ( which skips where-less rows ). Collected here into a
+	// name → mode map the lens carries beside its dredged nodes. A row without a `what` or with mode `off`
+	// contributes nothing.
+	toolModes( slots: ParsedSlot[] ): Record<string, SlotMode> {
+		const out: Record<string, SlotMode> = {};
+		for ( const s of slots ) {
+			if ( s.section !== TOOLS_SECTION || s.where || !s.what || s.mode === 'off' ) continue;
+			out[ s.what ] = s.mode;
+		}
+		return out;
 	}
 
 	// ── Frontmatter ( <dl data-kcd-frontmatter> → Record, replacing YAML ) ─────────

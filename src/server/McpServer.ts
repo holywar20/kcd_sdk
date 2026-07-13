@@ -208,8 +208,19 @@ export class McpServer {
 		}
 
 		const args = ( params?.[ 'arguments' ] ?? {} ) as Record<string, unknown>;
+		return this.invoke( name, args );
+	}
 
-		// A handler failure is a tool result the model sees, not a protocol error.
+	/**
+	 * Run a registered tool in-process by name — the dispatch a COMPOSING tool ( e.g. a batch ) uses
+	 * without going over the wire. Same contract as a wire call: a handler that throws folds into an
+	 * isError result, never propagating. An unknown tool is an isError result too — unlike a wire
+	 * tools/call ( which raises a protocol error ), there is no protocol layer here, so a caller can
+	 * treat every outcome uniformly as a ToolResult.
+	 */
+	async invoke( name: string, args: Record<string, unknown> ): Promise<ToolResult> {
+		const tool = this.tools.get( name );
+		if ( !tool ) return { content: [ { type: 'text', text: `Unknown tool: ${ name }` } ], isError: true };
 		try {
 			return await tool.handler( args );
 		} catch ( e ) {

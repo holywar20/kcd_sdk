@@ -6,6 +6,7 @@ import { LensObject } from '../framework/LensObject';
 import { ContextAssembler } from '../framework/ContextAssembler';
 import { SlotResolver } from '../framework/SlotResolver';
 import { KCDPrimitive } from '../framework/KCDPrimitive';
+import { Agent } from '../../agent/Agent';
 import type { ReaderFn, TaggedBlock } from '../types';
 
 const ROOT = 'C:/fixtures/root';
@@ -37,10 +38,9 @@ const LENS_HTML = `<!DOCTYPE html>
 </body></html>
 `;
 
-// Two SUGGESTED-mode references sharing a merge key — generic merge-key fusion fixture. `reference`
-// rather than `habit` here just keeps the fixture reading naturally; either type rides full text
-// identically once its slot mode is `suggested` — see the habit-slot-mode describe block below for
-// the type-agnostic proof.
+// Two references the lens slots at `suggested`. Under LINKS-ONLY dredge their bodies ( "From Reference
+// A/B." ) never ride — they surface only as routing rows in the lens's own References table. The bodies
+// stay in the fixture so a regression that re-introduced full-text dredge would surface them.
 const refHtml = ( slug: string, label: string ) => `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Reference</title></head>
 <body>
@@ -99,11 +99,12 @@ describe( 'LensObject.getContextBlocks + ContextAssembler — Phase 2 integratio
 		expect( out.indexOf( 'Care identity prose.' ) ).toBeLessThan( out.indexOf( 'reason A' ) );
 	} );
 
-	it( 'fuses two dredged nodes sharing a data-kcd-merge-key into one block — tight join, no --- between them', () => {
+	it( 'dredge is links-only — the referenced bodies never ride, only their routing rows do', () => {
 		const lens = loadFixtureLens();
 		const out = lens.serializeForContext();
-		expect( out ).toContain( 'From Reference A.\n\nFrom Reference B.' );
-		expect( out ).not.toContain( 'From Reference A.\n\n---\n\nFrom Reference B.' );
+		expect( out ).not.toContain( 'From Reference A.' );
+		expect( out ).not.toContain( 'From Reference B.' );
+		expect( out ).toContain( '- Reference A — reason A (ref-a.html)' );
 	} );
 
 	it( 'the lens\'s own References section merges into ONE routing table too — the implicit section merge key, not just explicit data-kcd-merge-key groups', () => {
@@ -123,21 +124,21 @@ describe( 'LensObject.getContextBlocks + ContextAssembler — Phase 2 integratio
 
 		const injectedIdx = out.indexOf( 'Dropped-in-context content.' );
 		const careIdx     = out.indexOf( 'Care identity prose.' );
-		const knowIdx     = out.indexOf( 'From Reference A.' );
+		const knowIdx     = out.indexOf( '- Reference A — reason A' );   // the routing row, links-only
 		expect( injectedIdx ).toBeGreaterThan( careIdx );
 		expect( injectedIdx ).toBeGreaterThan( knowIdx );
 	} );
 
-	it( 'the References routing table sinks below the core dredged content, but still above injected', () => {
+	it( 'the References routing table sinks below the lens identity, but still above injected', () => {
 		const lens = loadFixtureLens();
 		const realInjected = KCDPrimitive.fromHtml( INJECTED_HTML, `${ ROOT }/injected.html` );
 		lens.addInjected( realInjected );
 		const out = lens.serializeForContext();
 
-		const coreIdx    = out.indexOf( 'From Reference A.' );
-		const routingIdx = out.indexOf( '- Reference A — reason A' );
+		const careIdx     = out.indexOf( 'Care identity prose.' );
+		const routingIdx  = out.indexOf( '- Reference A — reason A' );
 		const injectedIdx = out.indexOf( 'Dropped-in-context content.' );
-		expect( routingIdx ).toBeGreaterThan( coreIdx );
+		expect( routingIdx ).toBeGreaterThan( careIdx );
 		expect( injectedIdx ).toBeGreaterThan( routingIdx );
 	} );
 
@@ -186,14 +187,13 @@ describe( 'LensObject.getContextBlocks + ContextAssembler — Phase 2 integratio
 	} );
 } );
 
-// ── Phase 3→5: mode governs full-text inclusion for EVERY artifact, habits included — the REAL
-// logging habits on disk. A stronger proof than a synthetic fixture: reads session-log-aggressive.html
-// and session-log-never.html straight from _Claude/habits/, exactly as a live dredge/inject would.
-// Bryan, 2026-07-12: there is no per-artifact-type carve-out any more — a habit's slot uses the SAME
-// `off`/`on`/`suggested` idiom a reference's does. Default (`on`, no attribute) still means "routing
-// row only, look it up when the trigger fires" — the old blanket "habits never ride full text" ruling
-// is just what `on` means now, for every type, not a habit-specific law. `suggested` is new capability:
-// an author can now explicitly ask a habit's full text to ride, same as an always-loaded reference.
+// ── TRANSITIONAL ( Bryan, 2026-07-12, ruling corrected ): the INTENT is that `on` = deck pointer
+// ( routing row ) while `suggested` = an implicit injection whose body rides ( a "this matters" highlight
+// the user operates ) — see LensObject.getContextBlocks' corrected model. The current `dredgeFrom` does
+// NOT yet realize that for `suggested`; dredge is being reworked and is not canonical for habits. The
+// assertions below pin the CURRENT ( transitional ) behavior so a change is visible, NOT the end-state.
+// The one path that already rides a full body today is a session INJECT ( `addInjected` — a deliberate
+// paste of context ), which projects through the same dense form as any other injected habit.
 
 const PROJECT_ROOT = path.resolve( __dirname, '../../../..' );   // kcd_sdk/src/primitives/__tests__ → repo root
 const HABITS_DIR   = path.join( PROJECT_ROOT, '_Claude/habits' );
@@ -221,7 +221,7 @@ const slotLensHtml = ( mode: 'on' | 'suggested' ) => `<!DOCTYPE html>
 </body></html>
 `;
 
-describe( 'habit slot mode — default (on) stays routing-row-only, suggested rides full text, against the real, authored logging habits', () => {
+describe( 'habit slot dredge is links-only — no mode rides full text; only a session inject does', () => {
 	it( 'default mode (on): neither session-log-aggressive (dredged) nor session-log-never (injected) contributes full text to the wire', () => {
 		const readReal: ReaderFn = ( absPath ) => {
 			if ( absPath.replace( /\\/g, '/' ).endsWith( 'slot-lens.html' ) ) return slotLensHtml( 'on' );
@@ -243,10 +243,11 @@ describe( 'habit slot mode — default (on) stays routing-row-only, suggested ri
 		lens.addInjected( KCDPrimitive.fromHtml( neverHabit, neverHabitPath ) );
 
 		// addInjected is itself always a "suggested" act (the GUI "drop context" gesture) — the
-		// injected habit's OWN full text now rides ( no more blanket habit exclusion ), same as any
-		// other injected node. What's proven here is that the LENS's `on`-mode dredge stays silent.
+		// injected habit's OWN body now rides as its DENSE four-field form ( KcdContext.projectHabit ),
+		// not a raw dump, same as any other injected habit. What's proven here is that the LENS's
+		// `on`-mode dredge stays silent while the injected habit's directive rides.
 		const afterInject = lens.serializeForContext();
-		expect( afterInject ).toContain( 'Do nothing. Write no line to' );
+		expect( afterInject ).toContain( 'do nothing; write no line to' );
 		expect( afterInject ).not.toMatch( /breadcrumb a future session reads/ );
 
 		const slots = SlotResolver.describe( lens.getContextBlocks() );
@@ -254,7 +255,7 @@ describe( 'habit slot mode — default (on) stays routing-row-only, suggested ri
 		expect( resolution?.winner.sourceLayer ).toBe( 'injected' );
 	} );
 
-	it( 'suggested mode: session-log-aggressive\'s full text rides on a plain dredge, no injection needed', () => {
+	it( 'TRANSITIONAL: suggested habit is still links-only today ( intent is it rides — pending the dredge rework )', () => {
 		const readReal: ReaderFn = ( absPath ) => {
 			if ( absPath.replace( /\\/g, '/' ).endsWith( 'slot-lens.html' ) ) return slotLensHtml( 'suggested' );
 			return fs.readFileSync( absPath, 'utf-8' );
@@ -264,7 +265,12 @@ describe( 'habit slot mode — default (on) stays routing-row-only, suggested ri
 			projectRoot: PROJECT_ROOT, read: readReal, depth: 2
 		} );
 
-		expect( lens.serializeForContext() ).toMatch( /breadcrumb a future session reads/ );
+		// Nothing dredged: the habit's full body never rides, but its what/where/why row survives.
+		expect( lens.getNodes().length ).toBe( 0 );
+		const ctx = lens.serializeForContext();
+		expect( ctx ).not.toMatch( /breadcrumb a future session reads/ );
+		expect( ctx ).toContain( 'session-log-aggressive' );
+		expect( ctx ).toContain( '_Claude/habits/session-logging/session-log-aggressive.html' );
 	} );
 } );
 
@@ -289,6 +295,39 @@ const planSlotLensHtml = ( planHref: string ) => `<!DOCTYPE html>
 </article>
 </body></html>
 `;
+
+describe( 'Agent.compile — the context-compiler surface: merged body first, then the manifest at the bottom', () => {
+	const loadBase = (): Agent => {
+		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/_lens_base.html' ), {
+			projectRoot: PROJECT_ROOT, read: ( abs ) => fs.readFileSync( abs, 'utf-8' ), depth: 2
+		} );
+		return Agent.create( { lenses: [ lens ] } );
+	};
+
+	it( 'trails with the manifest: the body leads, then a Files table and the References/Habits tables, each exactly once', () => {
+		const out = loadBase().compile();
+		// The manifest sinks to the bottom ( Bryan, 2026-07-12 ): the body prose leads, the affordance
+		// surface trails. The Files table is the manifest head, so no body text follows it.
+		expect( out.startsWith( '### Files' ) ).toBe( false );
+		const filesIdx = out.indexOf( '### Files' );
+		expect( filesIdx ).toBeGreaterThan( 0 );
+		expect( out.indexOf( 'Philosophy' ) ).toBeLessThan( filesIdx );   // lens prose precedes the manifest
+		for ( const header of [ '### Files', '### References', '### Habits' ] )
+			expect( out.split( header ).length - 1 ).toBe( 1 );   // exactly one occurrence
+		// The Files row is the lens's own vault-relative path ( the file ID ), not an absolute OS path.
+		expect( out ).toContain( '(_Claude/lenses/_lens_base.html)' );
+		expect( out ).not.toContain( 'C:/Code' );
+	} );
+
+	it( 'carries no per-artifact header, no Available-on-request stub, and no Know/Care/Do label', () => {
+		const out = loadBase().compile();
+		expect( out ).not.toContain( '# [lens]' );
+		expect( out ).not.toContain( '# [habit]' );
+		expect( out ).not.toContain( 'Available on request' );
+		for ( const label of [ 'Know', 'Care', 'Do' ] )
+			expect( out ).not.toMatch( new RegExp( `^#+\\s+${ label }\\s*$`, 'm' ) );
+	} );
+} );
 
 describe( 'Know/Care/Do labels are stripped from compiled context — real deployed base lens', () => {
 	it( 'the base lens compiles with no K/C/D region headings, but its sections and slot rows survive', () => {

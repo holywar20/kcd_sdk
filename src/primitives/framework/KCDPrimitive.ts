@@ -7,9 +7,17 @@ export const DREDGE_MAX = 4;
 
 export type HydratorFn = ( json: SerializedArtifact ) => KCDPrimitive;
 
-/** Clamp a requested dredge depth into the legal [1, DREDGE_MAX] range. */
-export function clampDepth( depth: number ): number {
-	return Math.max( 1, Math.min( DREDGE_MAX, Math.floor( depth ) ) );
+/** Clamp a requested dredge depth into the legal [1, DREDGE_MAX] range.
+ *  HARD-CODED to 2 ( = direct children only, no grandchildren ) — Bryan, 2026-07-13: dredge is
+ *  real but was generating noise while the current focus is inheritance/override visualization.
+ *  2 is the floor, not 1: `habitClass` ( what SlotResolver groups slots by ) lives on the CHILD
+ *  artifact's own frontmatter, never in the lens's own policy table — depth 1 fetches nothing and
+ *  silently blanks every slot, which looks like a parse bug but isn't one. Depth 2 is also the
+ *  pre-existing system default ( LENS_DEFAULT_DEPTH below ), so this rejects anything DEEPER than
+ *  before, it doesn't reopen anything wider. Restore
+ *  `Math.max( 1, Math.min( DREDGE_MAX, Math.floor( depth ) ) )` to bring variable depth back. */
+export function clampDepth( _depth: number ): number {
+	return 2;
 }
 
 /**

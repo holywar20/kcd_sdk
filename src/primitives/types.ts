@@ -152,6 +152,12 @@ export interface SerializedLens extends SerializedArtifact {
 	 *  the wire and contributes as always-loaded Know; never written to disk markdown.
 	 *  Absent on a lens that has had nothing injected. */
 	injected?: SerializedArtifact[];
+	/** Per-tool three-state inclusion the LENS itself contributes ( tool name → mode ), parsed from
+	 *  the lens's Tools table ( `data-kcd-section="tools"` — where-less slots, MCP tool names, not
+	 *  path artifacts ). The composition BASELINE an agent's own `toolModes` overrides per-tool
+	 *  ( Agent.effectiveToolModes ). Absent on a lens with no Tools table. Unlike references/habits,
+	 *  a tool is not a dredged node, so it rides here rather than in `nodes`. */
+	toolModes?: Record<string, SlotMode>;
 }
 
 /** Flat map of path → artifact. Only dirty objects contribute. Atomic unit for kcd_save. */

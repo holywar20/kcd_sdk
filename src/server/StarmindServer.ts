@@ -1,5 +1,5 @@
 import { McpServer } from './McpServer';
-import type { ToolDefinition } from './McpServer';
+import type { ToolDefinition, ToolResult } from './McpServer';
 import type { ServerManifest } from './manifest';
 import { runVerify } from './verify';
 import type { Registration, TestSpec, VerifyReport } from './verify';
@@ -74,6 +74,17 @@ export abstract class StarmindServer {
 	async run(): Promise<void> {
 		this.ensureBuilt();
 		await this.server.connect();
+	}
+
+	/**
+	 * Run a registered tool in-process by name — the seam a COMPOSING tool ( e.g. a batch ) dispatches
+	 * through to run other tools in sequence. Builds first ( idempotent ), then delegates to the
+	 * McpServer's own dispatch, so an internal call obeys the exact same contract as a wire call. A
+	 * subclass wires this into such a tool at build() time ( `batchTools( ( n, a ) => this.invoke( n, a ) )` ).
+	 */
+	invoke( name: string, args: Record<string, unknown> ): Promise<ToolResult> {
+		this.ensureBuilt();
+		return this.server.invoke( name, args );
 	}
 
 	// ── Internals ─────────────────────────────────────────────────────────────────

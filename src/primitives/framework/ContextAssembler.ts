@@ -44,8 +44,8 @@
  * else that isn't a routing table — the lens's own non-routing prose plus every ALWAYS-loaded
  * artifact's full text ( references included — Bryan, 2026-07-11: "a reference that's included
  * directly in context is written right at the top" ), load order preserved. `routing` is the
- * References/Habits sections specifically: pure What/Where/Why pointers, not the content itself —
- * they sink BELOW the substantive material, "next to each other" (their implicit merge already
+ * manifest sections ( `MANIFEST_SECTIONS` — References / Domains / Habits / Contracts ): pure
+ * What/Where/Why pointers, not the content itself — they sink BELOW the substantive material, "next to each other" (their implicit merge already
  * puts each kind in one place), because routing information is secondary to the knowledge/identity
  * it's pointing at, not equal to it. `injected` ( session-dropped ) still sinks to the true bottom,
  * the volatile tail that must never invalidate the cache-stable prefix above it — including below
@@ -60,15 +60,33 @@
 import { KcdContext } from '../../core/html/KcdContext';
 import type { TaggedBlock } from '../types';
 
-/** Section names that are routing tables, not content — see the class doc's `routing` tier. */
-const ROUTING_SECTIONS = new Set( [ 'references', 'habits' ] );
+/**
+ * MANIFEST_SECTIONS — the ordered What/Where/Why sections that compose the bottom-of-context MANIFEST:
+ * the curated surface of interactable affordances an agent hits INDIRECTLY through a tool ( fetch a
+ * reference, apply a habit, honor a contract ). It is NOT content — it is a section of tools /
+ * interactable surfaces, declared so the CURATION of this surface is a first-class, high-leverage lever
+ * ( Bryan, 2026-07-12 ). ONE source of truth: the manifest hoist set ( `Agent.INDEX_ORDER` /
+ * `INDEX_SECTIONS` ), the merge-dedupe + bottom-tier sink ( `ROUTING_SECTIONS` ), and the canonical
+ * headings ( `ROUTING_TITLE`, via `title()` ) all derive from this list, so the three can never disagree
+ * again — they DID before ( references+habits sank to the routing tier while domains+contracts stayed in
+ * core ). `domains` rides for now, its idiom fate deferred ( Bryan: "feels like another form of a
+ * reference" ). A `tools` / `parameters` surface slots in as ONE more entry when it lands. */
+export const MANIFEST_SECTIONS = [ 'references', 'domains', 'habits', 'contracts' ] as const;
 
-/** The canonical merged heading per routing section — one per kind, regardless of how many sources
- *  contributed rows or what heading LEVEL each source's own section happened to render at ( a
- *  top-level artifact's own References section renders `##`; a lens's nested one renders `###` — the
- *  merged block is a new synthesized entity, so it gets one settled shape, not whichever source's
- *  heading happened to sort first ). */
-const ROUTING_TITLE: Record<string, string> = { references: '### References', habits: '### Habits' };
+/** Section names that are manifest routing tables, not content ( see `MANIFEST_SECTIONS` ) — they
+ *  merge-fuse across sources and sink to the bottom `routing` tier. */
+const ROUTING_SECTIONS = new Set<string>( MANIFEST_SECTIONS );
+
+/** The canonical merged heading per manifest section — one settled shape regardless of how many sources
+ *  contributed rows or what heading LEVEL each source's own section happened to render at ( a top-level
+ *  artifact's own References section renders `##`; a lens's nested one renders `###` — the merged block
+ *  is a new synthesized entity, so it gets one settled shape, not whichever source's heading sorted
+ *  first ). `files` — the synthesized lens roster that heads the manifest ( rows come from the loaded
+ *  agents, not authored slots ) — is a manifest section too, so its heading is single-sourced here
+ *  alongside the block-driven ones. Read through `title()`, never indexed directly. */
+const ROUTING_TITLE: Record<string, string> = Object.fromEntries(
+	[ 'files', ...MANIFEST_SECTIONS ].map( s => [ s, `### ${ s.charAt( 0 ).toUpperCase() }${ s.slice( 1 ) }` ] )
+);
 
 export const ContextAssembler = new class ContextAssembler {
 
@@ -112,7 +130,7 @@ export const ContextAssembler = new class ContextAssembler {
 		for ( const [ key, members ] of groups ) {
 			if ( key.startsWith( 'routing:' ) ) {
 				const section = members[ 0 ].section ?? '';
-				placeholder.get( key )!.text = this.mergeRouting( members, ROUTING_TITLE[ section ] ?? `### ${ section }` );
+				placeholder.get( key )!.text = this.mergeRouting( members, this.title( section ) );
 				continue;
 			}
 			const ordered = [ ...members ].sort( ( a, c ) => this.lensRank( a ) - this.lensRank( c ) );
@@ -140,6 +158,21 @@ export const ContextAssembler = new class ContextAssembler {
 			}
 		}
 		return [ title, ...lines ].join( '\n' );
+	}
+
+	/** The canonical merged routing table for one section ( `references` | `habits` ) across many source
+	 *  blocks — the building block of `Agent.compile`'s top-of-context manifest. Reuses `mergeRouting` +
+	 *  the canonical `ROUTING_TITLE` so a table rendered into the manifest and one merged inline can never
+	 *  differ in shape. */
+	routingTable( members: TaggedBlock[], section: string ): string {
+		return this.mergeRouting( members, this.title( section ) );
+	}
+
+	/** The canonical heading for one manifest section — the single source both the merged routing tables
+	 *  and the synthesized `Files` roster head read, so no caller hardcodes a `###` string. Falls back to
+	 *  a capitalized section name for a section not ( yet ) in `ROUTING_TITLE`. */
+	title( section: string ): string {
+		return ROUTING_TITLE[ section ] ?? `### ${ section.charAt( 0 ).toUpperCase() }${ section.slice( 1 ) }`;
 	}
 
 	/** A lens's own content leads within a merge group; everything else is a tie ( a stable sort

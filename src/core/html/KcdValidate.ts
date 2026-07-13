@@ -90,6 +90,7 @@ export const KcdValidate = new class KcdValidate {
 
 		const name = this.checkFrontmatter( article, rootType, err, warn );
 		this.checkStructure( article, rootType, err, warn );
+		if ( rootType === 'habit' ) this.checkHabit( article, err, warn );
 
 		return this.result( rootType, name, errors, warnings );
 	}
@@ -222,9 +223,40 @@ export const KcdValidate = new class KcdValidate {
 			}
 		} );
 
+		// Care is a CLOSED section vocabulary — Purpose + Philosophy ( + Open Questions ). The retired
+		// `core-mental-model` / `philosophy-prerogatives` slugs must not reappear.
+		for ( const region of HtmlTree.collect( article, el => KcdAddress.isRegion( el ) && HtmlTree.get( el, 'data-kcd-region' ) === 'care' ) )
+			for ( const sec of HtmlTree.collect( region, el => KcdAddress.isSection( el ) ) ) {
+				const v = HtmlTree.get( sec, 'data-kcd-section' );
+				if ( v && !KcdAddress.CARE_SECTIONS.includes( v ) )
+					err( 'bad-care-section', `section:${ v }`, `Care section "${ v }" not in { ${ KcdAddress.CARE_SECTIONS.join( ' | ' ) } }` );
+			}
+
 		// composable-rule guard: one carrier ⇒ at most one slot per habit-class
 		for ( const [ hc, n ] of Object.entries( habitClasses ) )
 			if ( n > 1 ) err( 'dup-habit-class', `habit-class:${ hc }`, `${ n } slots share habit-class "${ hc }" — at most one per file ( §6 )` );
+	}
+
+	// ── Habit pass — the four-field contract ( see _habit_template ) ────────────────
+	// `why` is REQUIRED ( the trigger; a habit with no why can't fire — renamed from `when`,
+	// Bryan 2026-07-13, so the field matches the canonical What|Where|Why convention: it's the
+	// same prose a lens's own Why cell can defer to via `mode:habit` ). `action` + `explanation` are
+	// the dense-form body — warned-on when absent rather than hard-required, so a `don't`-style habit
+	// ( rules, no action ) and an in-progress migration both still validate. `rules` is optional. EXTRA
+	// sections ( format / example / homes / … ) are allowed — they ride only on a full on-demand read,
+	// never in the dense projection, so the four-field shape doesn't forbid a habit from carrying more.
+	checkHabit( article: HtmlEl, err: Emit, warn: Emit ): void {
+		const names = new Set(
+			HtmlTree.collect( article, el => KcdAddress.isSection( el ) )
+				.map( el => HtmlTree.get( el, 'data-kcd-section' ) )
+				.filter( ( v ): v is string => !!v )
+		);
+		if ( !names.has( 'why' ) )
+			err( 'habit-no-why', 'section:why', 'a habit must declare a `why` section ( the trigger it fires on )' );
+		if ( !names.has( 'action' ) && !names.has( 'rules' ) )
+			warn( 'habit-no-behavior', 'section', 'a habit has neither an `action` nor a `rules` section — nothing to do' );
+		if ( !names.has( 'explanation' ) )
+			warn( 'habit-no-explanation', 'section:explanation', 'a habit has no `explanation` — the dense suggested form will carry no rationale' );
 	}
 
 	// ── Helpers ───────────────────────────────────────────────────────────────────

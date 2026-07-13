@@ -25,6 +25,9 @@ export const KcdAddress = new class KcdAddress {
 	AUDIENCES    = [ 'human', 'agent', 'both' ];
 	MERGES       = [ 'additive', 'declarative', 'union' ];
 	REGIONS      = [ 'know', 'care', 'do' ];
+	/** The closed Care-region section vocabulary. `core-mental-model` and `philosophy-prerogatives`
+	 *  were retired 2026-07-12 — Care is Purpose + Philosophy ( + Open Questions ). */
+	CARE_SECTIONS = [ 'purpose', 'philosophy', 'open-questions' ];
 	SLOT_FIELDS  = [ 'what', 'where', 'why' ];
 	PARAM_FIELDS = [ 'name', 'type', 'default', 'description' ];
 	/** The one idiom every routable artifact ( reference, habit, contract, plan, anything else a

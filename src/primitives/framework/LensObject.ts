@@ -1,7 +1,7 @@
 import * as path from 'path';
 import { KCDPrimitive, clampDepth, classifyRelPath } from './KCDPrimitive';
 import { SlotResolver } from './SlotResolver';
-import type { ArtifactType, KCDRole, PolicyEntry, ReaderFn, SerializedArtifact, SerializedLens, TaggedBlock } from '../types';
+import type { ArtifactType, KCDRole, PolicyEntry, ReaderFn, SerializedArtifact, SerializedLens, SlotMode, TaggedBlock } from '../types';
 
 const LENS_DEFAULT_DEPTH = 2;
 
@@ -65,6 +65,10 @@ export class LensObject extends KCDPrimitive {
 	 *  serialize distinctly (they ride the wire but never reach disk). They contribute
 	 *  as always-loaded Know — see getNodes / addInjected. */
 	protected injected: KCDPrimitive[] = [];
+	/** Per-tool three-state inclusion the lens CONTRIBUTES ( tool name → mode ), parsed from the lens's
+	 *  Tools table. Unlike references/habits a tool is not a dredged node, so it lives here, not in `nodes`.
+	 *  The composition baseline an agent's own `toolModes` overrides per-tool ( Agent.effectiveToolModes ). */
+	protected toolModes: Record<string, SlotMode> = {};
 	protected projectRoot?: string;
 	protected dredgeDepth = LENS_DEFAULT_DEPTH;
 	/** When set, the dredge follows conditional (non-`always`) links too, marking
@@ -113,6 +117,9 @@ export class LensObject extends KCDPrimitive {
 		obj.nodes      = children.map( ( n ) => KCDPrimitive.fromSerialized( n ) );
 		const injected = ( json as SerializedLens ).injected ?? [];
 		obj.injected   = injected.map( ( n ) => KCDPrimitive.fromSerialized( n ) );
+		// Tool modes arrive from BOTH doors through this one: the parse ( ParsedArtifact.toolModes, computed
+		// from the Tools table ) and the wire ( serializeForWire below ). A lens with no Tools table carries {}.
+		obj.toolModes  = { ...( json as SerializedLens ).toolModes ?? {} };
 		return obj;
 	}
 
@@ -128,8 +135,9 @@ export class LensObject extends KCDPrimitive {
 	serializeForWire(): SerializedLens {
 		return {
 			...this.serialize(),
-			nodes:    this.nodes.map( ( n ) => n.serialize() ),
-			injected: this.injected.map( ( n ) => n.serialize() ),
+			nodes:     this.nodes.map( ( n ) => n.serialize() ),
+			injected:  this.injected.map( ( n ) => n.serialize() ),
+			toolModes: { ...this.toolModes },
 		};
 	}
 
@@ -141,14 +149,17 @@ export class LensObject extends KCDPrimitive {
 
 		for ( const entry of node.getPolicy() ) {
 			if ( entry.type !== 'internal' ) continue;
-			// `mode` gates context auto-loading — the one idiom for every artifact kind (reference,
-			// habit, contract, anything routable). `off` never dredges, full stop, even in eager
-			// display mode: the user turned it off. `on` (the default) skips the fetch entirely in
-			// normal assembly — cheap, it only ever needs to render as a routing row from `policy`
-			// (see stubBlock) — but eager mode still follows it FOR DISPLAY, marking it not-included
-			// below so the assembled context never widens past the `suggested` set.
+			// Dredge follows a slot's MODE ( Bryan, 2026-07-12, corrected 2026-07-12 — the first pass made
+			// EVERY fetched child not-included, which silently stripped `suggested` of its whole meaning:
+			// toggling a lens reference On↔Suggested changed the UI but never the compiled context ). `off`
+			// drops the slot entirely; `on` still fetches ( eager display needs the object either way — the
+			// Atlas graph, the reader drawer — but is marked not-included below, so it rides only as the
+			// routing ROW `Agent.compile`'s manifest already carries ); `suggested` is marked INCLUDED, so its
+			// full text joins `dredged` in `getContextBlocks()` below — the one case where a slot's body
+			// actually rides the wire. Plans are the sole exception that outlives mode entirely ( see the
+			// carve-out a few lines down ).
 			if ( entry.mode === 'off' ) continue;
-			if ( entry.mode === 'on' && !this.eager ) continue;
+			if ( !this.eager ) continue;
 
 			const childAbs = LensObject.resolveHref( entry.href, this.projectRoot! );
 
@@ -173,8 +184,9 @@ export class LensObject extends KCDPrimitive {
 				continue;
 			}
 
-			// Only `suggested` rides full text; `on` nodes reached here are eager-display-only.
-			if ( entry.mode !== 'suggested' ) child.setIncluded( false );
+			// `suggested` rides full-body; `on` fetches for display ( the Atlas graph, the reader drawer )
+			// but is excluded from `getContextBlocks()` — the routing row is its whole contribution.
+			child.setIncluded( entry.mode === 'suggested' );
 
 			out.push( ...this.dredgeFrom( child, remaining - 1, visited ) );
 		}
@@ -187,6 +199,17 @@ export class LensObject extends KCDPrimitive {
 	// rides the wire; the lens just exposes it. The markdown Know-table parse is gone.
 
 	getPolicy(): PolicyEntry[]  { return [ ...this.policy ]; }
+
+	/** The vault root this lens was loaded against — the base every loaded file's path is relativized to
+	 *  for the compiled manifest. Undefined on a wire-hydrated lens ( render never dredges ). */
+	getProjectRoot(): string | undefined { return this.projectRoot; }
+
+	/** An absolute path in vault-relative, forward-slashed form — the file's ID in the compiled manifest
+	 *  ( Bryan, 2026-07-12: vault-relative paths, no project-resolution magic yet ). Passthrough when no
+	 *  projectRoot is known. */
+	vaultRelative( abs: string ): string {
+		return this.projectRoot ? path.relative( this.projectRoot, abs ).replace( /\\/g, '/' ) : abs;
+	}
 
 	/** The full Know graph: dredged children plus any session-injected nodes. The single
 	 *  percolation point — the spiral, the count, Composition, and contribute() all read
@@ -208,6 +231,10 @@ export class LensObject extends KCDPrimitive {
 		this.injected.push( node );
 	}
 
+	/** The per-tool modes this lens contributes ( tool name → mode ) — the composition baseline the agent
+	 *  layers its own `toolModes` over. A tool is not a node, so this is its own read, not `getNodes()`. */
+	getToolModes(): Record<string, SlotMode> { return { ...this.toolModes }; }
+
 	getRole(): KCDRole { return 'lens'; }
 
 	// ── Context assembly ──────────────────────────────────────────────────────
@@ -221,19 +248,19 @@ export class LensObject extends KCDPrimitive {
 	 * last" once multiple lenses are in play.
 	 */
 	/**
-	 * The general `contract`/`habit` type carve-out is retired ( 2026-07-12 — see the mode ruling in
-	 * `_Claude/plans/context-optimization.html` ): the SAME `data-kcd-mode` idiom every artifact uses
-	 * does that job structurally now. `dredgeFrom` only ever fetches-and-includes a node when its slot's
-	 * mode is `suggested` ( `on`-mode targets are never fetched into `nodes` at all in normal, non-eager
-	 * assembly — they render as a routing row straight from `policy`, see `stubBlock` ). So `this.nodes`
-	 * can only ever contain `suggested` targets by construction, and no downstream filter is needed to keep
-	 * a habit's or a contract's full body off the wire by default — a lens author who sets
-	 * `data-kcd-mode="suggested"` on such a slot gets full text, because they asked for it.
+	 * A lens's region-block set for the compiled context. The MODEL ( ruling corrected, Bryan 2026-07-12,
+	 * superseding the overzealous "links-only for `suggested`" framing ): a slot's mode is a
+	 * suggestion surface, NOT a fetch policy — `off` excludes; `on` is the DECK POINTER ( a routing ROW
+	 * only, ~90% of habits live here ); `suggested` is an IMPLICIT INJECTION — the target's body rides,
+	 * a deliberate "this one matters" highlight the user operates. A session-INJECTED node is the same
+	 * force by another door ( retagged `injected` ). A habit body that rides projects to the dense
+	 * four-field form ( `KcdContext.projectHabit` ), never a raw file dump. Routing rows render from this
+	 * lens's own section ( `references` / `habits` / `contracts` ) and hoist into the bottom-of-context
+	 * manifest ( `Agent.compile` ); the agent reads a deck file by its manifest path on demand.
 	 *
-	 * PLANS are the ONE surviving type exception ( Bryan, 2026-07-12 ): `dredgeFrom` refuses to fetch a
-	 * plan into `nodes` no matter its slot mode, so a plan can never reach `this.nodes` and its full body
-	 * never rides context. A plan is always a link — its routing row survives ( `stubBlock`, or the
-	 * referencing artifact's own routing table ); only its body is suppressed. See `dredgeFrom`.
+	 * ⚠ The `dredgeFrom` mechanism BELOW is mid-rework and does NOT yet cleanly realize this model for
+	 * every mode ( it half-fetches, half-links ). Dredge is being redesigned around this behavior and is
+	 * NOT canonical for habits — do not treat the current fetch/links split as the intended contract.
 	 */
 	getContextBlocks(): TaggedBlock[] {
 		if ( !this.isIncluded ) return [];
@@ -252,16 +279,45 @@ export class LensObject extends KCDPrimitive {
 	 *  sees it like any other contribution instead of `serializeForContext()` special-casing it.
 	 *  `off`-mode links never appear here — the user excluded them entirely, not just deferred them.
 	 *  Silently omitted (not thrown) with no projectRoot — a display nicety, not something that
-	 *  should crash a context call from an unloaded lens. */
+	 *  should crash a context call from an unloaded lens.
+	 *
+	 *  Dedupe is against CONTRIBUTING paths ( `.included`, i.e. `suggested` content already rendered
+	 *  full-body elsewhere ), not merely FETCHED paths — Bryan, 2026-07-13: an `on`-mode habit is
+	 *  fetched too ( `dredgeFrom` needs its `habit-class` regardless of mode ) but contributes nothing
+	 *  to `getContextBlocks()` while excluded; the old "already loaded ⇒ skip" filter caught that
+	 *  fetch-for-metadata case and silently dropped the row it was the ONLY source for. */
 	stubBlock(): TaggedBlock | null {
 		if ( !this.projectRoot ) return null;
-		const loadedPaths = new Set( this.getContributors().map( n => n.getPath() ) );
+		const included = new Set( this.getContributors().filter( n => n.included ).map( n => n.getPath() ) );
+		const byPath   = new Map( this.nodes.map( n => [ n.getPath(), n ] as const ) );
 		const stubs = this.policy.filter(
-			e => e.type === 'internal' && e.mode !== 'off' && !loadedPaths.has( LensObject.resolveHref( e.href, this.projectRoot! ) )
+			e => e.type === 'internal' && e.mode !== 'off' && !included.has( LensObject.resolveHref( e.href, this.projectRoot! ) )
 		);
 		if ( !stubs.length ) return null;
-		const rows = stubs.map( e => `- ${ e.what } — ${ e.why } (${ e.href })` ).join( '\n' );
-		return { region: 'know', section: null, mergeKey: null, text: `# Available on request\n\n${ rows }`, sourceLayer: 'lens', path: this.path, artifactType: 'lens', habitClass: null };
+		const rows = stubs.map( e => {
+			const why = LensObject.resolveWhy( e, byPath.get( LensObject.resolveHref( e.href, this.projectRoot! ) ) );
+			return `- ${ e.what } — ${ why } (${ e.href })`;
+		} ).join( '\n' );
+		// section 'stub' tags this as the legacy Available-on-request block so `Agent.compile()` can drop it —
+		// the manifest's References table already lists every reference slot ( on-mode included ), so the stub
+		// is redundant there ( Bryan, 2026-07-12: exists once, shave tokens ). The old contribute() path still
+		// renders it.
+		return { region: 'know', section: 'stub', mergeKey: null, text: `# Available on request\n\n${ rows }`, sourceLayer: 'lens', path: this.path, artifactType: 'lens', habitClass: null };
+	}
+
+	/** The reason text a routing/stub row shows. The Care-table Why cell is now a tri-state: real
+	 *  hand-written prose is an override and rides as-is; `always`, `habit`, or an empty cell are all
+	 *  "no override" sentinels — Bryan, 2026-07-13 — that DEFER to the target's own declared `why`
+	 *  ( `habit` is the authoring default, so most rows never restate a reason at all ). Duck-typed
+	 *  ( `getWhy` ) rather than importing `HabitObject` here — only habits carry this field today, and
+	 *  the check degrades safely for any other artifact type or an unfetched target. */
+	private static resolveWhy( entry: PolicyEntry, node: KCDPrimitive | undefined ): string {
+		const cell = entry.why.trim().toLowerCase();
+		const isSentinel = cell === '' || cell === 'habit' || cell === 'always';
+		if ( !isSentinel ) return entry.why;
+		const getWhy = ( node as unknown as { getWhy?: () => string } | undefined )?.getWhy;
+		const why = typeof getWhy === 'function' ? getWhy.call( node ) : '';
+		return why || entry.why;
 	}
 
 	serializeForContext(): string {
