@@ -99,4 +99,17 @@ export abstract class StarmindServer {
 	private ownManifest(): ServerManifest {
 		return ( this.constructor as typeof StarmindServer ).manifest;
 	}
+
+	// ── Live doc ──────────────────────────────────────────────────────────────────
+
+	/**
+	 * The server's doc-block as served right now — the recursive parent of its tools' docs,
+	 * generated fresh rather than frozen at author-time. Default: the static manifest's authored
+	 * `doc`, unchanged. A subclass overrides this to fold in runtime data (live config, current
+	 * state) so what an agent reads reflects the server as it stands at the moment its tools are
+	 * attached to context, not just what was true when the manifest was written.
+	 */
+	liveDoc(): string {
+		return this.ownManifest().doc ?? '';
+	}
 }

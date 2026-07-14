@@ -735,7 +735,7 @@ export class Agent {
 	 *  into the bottom-of-context manifest as its own deduped table; every other section is prose that
 	 *  stays in the body. Derived from `MANIFEST_SECTIONS` ( the ONE registry shared with
 	 *  `ContextAssembler`, so the hoist set and the routing-tier/heading logic can never drift apart );
-	 *  `INDEX_ORDER` is the manifest's table order after `### Files`. */
+	 *  `INDEX_ORDER` is the manifest's table order after `## Files`. */
 	static readonly INDEX_ORDER = MANIFEST_SECTIONS;
 	static readonly INDEX_SECTIONS = new Set<string>( MANIFEST_SECTIONS );
 

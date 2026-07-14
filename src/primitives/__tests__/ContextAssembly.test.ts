@@ -308,11 +308,11 @@ describe( 'Agent.compile — the context-compiler surface: merged body first, th
 		const out = loadBase().compile();
 		// The manifest sinks to the bottom ( Bryan, 2026-07-12 ): the body prose leads, the affordance
 		// surface trails. The Files table is the manifest head, so no body text follows it.
-		expect( out.startsWith( '### Files' ) ).toBe( false );
-		const filesIdx = out.indexOf( '### Files' );
+		expect( out.startsWith( '## Files' ) ).toBe( false );
+		const filesIdx = out.indexOf( '## Files' );
 		expect( filesIdx ).toBeGreaterThan( 0 );
 		expect( out.indexOf( 'Philosophy' ) ).toBeLessThan( filesIdx );   // lens prose precedes the manifest
-		for ( const header of [ '### Files', '### References', '### Habits' ] )
+		for ( const header of [ '## Files', '## References', '## Habits' ] )
 			expect( out.split( header ).length - 1 ).toBe( 1 );   // exactly one occurrence
 		// The Files row is the lens's own vault-relative path ( the file ID ), not an absolute OS path.
 		expect( out ).toContain( '(_Claude/lenses/_lens_base.html)' );
@@ -571,7 +571,7 @@ describe( 'ContextAssembler — unit', () => {
 		// ONE canonical heading, not each member's own ( ### vs ## ) — and the boilerplate intro line
 		// ( it lives only in `text`, never in `rows` — the merge reads `rows`, not `text` ) is gone,
 		// not just deduped: it was never structured data to begin with.
-		expect( merged[ 0 ].text ).toBe( '### References\n- primary lens ref (a.html)\n- secondary lens ref (b.html)' );
+		expect( merged[ 0 ].text ).toBe( '## References\n- primary lens ref (a.html)\n- secondary lens ref (b.html)' );
 	} );
 
 	it( 'a routing merge dedupes rows by their real `where` IDENTITY — not a text pattern-match — keeping the first-seen framing', () => {
@@ -588,7 +588,7 @@ describe( 'ContextAssembler — unit', () => {
 			} ),
 		];
 		const merged = ContextAssembler.merge( blocks );
-		expect( merged[ 0 ].text ).toBe( '### References\n- Gates & connectors — the boundary the orchestrator crosses (gates-and-connectors.html)' );
+		expect( merged[ 0 ].text ).toBe( '## References\n- Gates & connectors — the boundary the orchestrator crosses (gates-and-connectors.html)' );
 	} );
 
 	it( 'a routing merge never mistakes a habits row for a references row — dedup is per merge GROUP, not global', () => {
@@ -608,7 +608,7 @@ describe( 'ContextAssembler — unit', () => {
 			block( { text: 'x', rows: [ { what: 'no link', where: '', why: 'still routed' } ], region: 'know', section: 'references', path: 'b.html' } ),
 		];
 		const merged = ContextAssembler.merge( blocks );
-		expect( merged[ 0 ].text ).toBe( '### References\n- no link — still routed' );
+		expect( merged[ 0 ].text ).toBe( '## References\n- no link — still routed' );
 	} );
 
 	it( 'a references-section block and a habits-section block do NOT fuse with each other — different implicit keys', () => {

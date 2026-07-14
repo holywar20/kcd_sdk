@@ -98,9 +98,16 @@ const MANIFEST_HEADING  = '# Manifest\n_Lookup surface — fetch these on demand
  *  is a new synthesized entity, so it gets one settled shape, not whichever source's heading sorted
  *  first ). `files` — the synthesized lens roster that heads the manifest ( rows come from the loaded
  *  agents, not authored slots ) — is a manifest section too, so its heading is single-sourced here
- *  alongside the block-driven ones. Read through `title()`, never indexed directly. */
+ *  alongside the block-driven ones. Read through `title()`, never indexed directly.
+ *
+ *  Level `##`, one below the `# Manifest` band heading — deliberately NOT `###` ( Bryan, 2026-07-14:
+ *  "in case we ever want to add a third or a subcategory" ). Reserves `###` for a real future nesting
+ *  level ( e.g. grouping References by folder category on the wire, mirroring how the UI already
+ *  folders them ) rather than a level these sections merely inherited without one being available under
+ *  them. Purely a heading-text change: `#`→`##` keeps the exact same parent/child fold relationship to
+ *  `# Manifest` that `#`→`###` had, just without skipping a level. */
 const MANIFEST_TITLE: Record<string, string> = Object.fromEntries(
-	[ 'files', ...MANIFEST_SECTIONS ].map( s => [ s, `### ${ s.charAt( 0 ).toUpperCase() }${ s.slice( 1 ) }` ] )
+	[ 'files', ...MANIFEST_SECTIONS ].map( s => [ s, `## ${ s.charAt( 0 ).toUpperCase() }${ s.slice( 1 ) }` ] )
 );
 
 export const ContextAssembler = new class ContextAssembler {
@@ -192,10 +199,10 @@ export const ContextAssembler = new class ContextAssembler {
 	}
 
 	/** The canonical heading for one manifest section — the single source both the merged manifest tables
-	 *  and the synthesized `Files` roster head read, so no caller hardcodes a `###` string. Falls back to
+	 *  and the synthesized `Files` roster head read, so no caller hardcodes a `##` string. Falls back to
 	 *  a capitalized section name for a section not ( yet ) in `MANIFEST_TITLE`. */
 	title( section: string ): string {
-		return MANIFEST_TITLE[ section ] ?? `### ${ section.charAt( 0 ).toUpperCase() }${ section.slice( 1 ) }`;
+		return MANIFEST_TITLE[ section ] ?? `## ${ section.charAt( 0 ).toUpperCase() }${ section.slice( 1 ) }`;
 	}
 
 	/** A lens's own content leads within a merge group; everything else is a tie ( a stable sort
