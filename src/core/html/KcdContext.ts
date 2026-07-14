@@ -37,7 +37,7 @@ export type ContextRegion = 'care' | 'know' | 'do';
 
 /** One `data-kcd-slot` row's fields, structured — not yet rendered to text. The identity a routing
  *  merge dedupes BY is `where` ( a real path/href, not a string it has to re-derive by parsing
- *  rendered prose back apart ). See `ContextAssembler.mergeRouting` — Bryan, 2026-07-12: "lean into
+ *  rendered prose back apart ). See `ContextAssembler.mergeManifest` — Bryan, 2026-07-12: "lean into
  *  the recursive nature of the inclusion" instead of a regex dedupe pass over already-rendered text. */
 export interface SlotRow {
 	what: string;
@@ -132,7 +132,7 @@ export const KcdContext = new class KcdContext {
 
 		const root = HtmlTree.parse( artifact.body );
 		for ( const raw of this.collectRegions( root, ledeRegion ) ) {
-			const text = this.renderNodes( raw.nodes );
+			const text = this.renderNodes( this.stripNonCanonicalHeadings( raw.nodes ) );
 			if ( !text ) continue;
 			const rows = this.collectRows( raw.nodes );
 			out.push( { region: raw.region, section: raw.section, mergeKey: raw.mergeKey ?? null, text, ...( rows.length ? { rows } : {} ) } );
@@ -181,6 +181,24 @@ export const KcdContext = new class KcdContext {
 		};
 
 		visit( root.kids, ledeRegion );
+		return out;
+	}
+
+	/** The heading NUKE ( Bryan, 2026-07-13 ): raw `<h1>`–`<h6>` in an artifact body are human chrome and
+	 *  never ride the wire AS headings — the parser strips the whole superset up front rather than
+	 *  selectively sanitizing the doc title, the K/C/D labels, etc. one at a time. The ONE survivor is a
+	 *  heading an author marked canonical with `data-kcd-heading`; it's kept, and `block()` gives it the
+	 *  hash treatment at its own tag level ( `<h3 data-kcd-heading>` → `###` ). So the compiled heading
+	 *  structure — what heading-level folding keys on — depends only on the headings we chose to keep, never
+	 *  on hand-authored HTML. Recurses, so a junk / canonical heading is caught at any depth. Wire path only:
+	 *  the flat `project()` ( human Atlas preview ) keeps every authored heading. */
+	stripNonCanonicalHeadings( nodes: HtmlNode[] ): HtmlNode[] {
+		const out: HtmlNode[] = [];
+		for ( const n of nodes ) {
+			if ( !HtmlTree.isEl( n ) ) { out.push( n ); continue; }
+			if ( this.HEADINGS.has( n.tag ) && !HtmlTree.has( n, 'data-kcd-heading' ) ) continue;   // untagged heading → nuked
+			out.push( { ...n, kids: this.stripNonCanonicalHeadings( n.kids ) } );
+		}
 		return out;
 	}
 

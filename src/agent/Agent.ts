@@ -530,7 +530,7 @@ export class Agent {
 	 *  or reference's row lives in its lens's own SECTION block ( not on the node itself ), so an agent `off`
 	 *  override that already excluded the body must also drop the row — matched by the row's `where` href
 	 *  being the tail of the off artifact's absolute path. Rows-only surgery: the routing tier re-renders
-	 *  every table from `rows` ( `ContextAssembler.mergeRouting` ), so the wire + manifest both follow this
+	 *  every table from `rows` ( `ContextAssembler.mergeManifest` ), so the wire + manifest both follow this
 	 *  filter with no text rewrite. A block whose rows are unchanged passes through by identity. */
 	static dropRows( blocks: TaggedBlock[], offPaths: Set<string>, section: string ): TaggedBlock[] {
 		const norm    = ( s: string ): string => s.replace( /\\/g, '/' );
@@ -602,42 +602,112 @@ export class Agent {
 
 	/**
 	 * THE compiled-block currency ( the compiled-context plan, 2026-07-12/13 ) — the flat, merged,
-	 * post-resolution `TaggedBlock[]` `compile()` now projects to text. Shape unchanged from what
-	 * `compile()` used to build inline: the merged body ( care → core → injected, via
-	 * `ContextAssembler.assembleBlocks` ) first, then the bottom-of-context manifest blocks
-	 * ( `manifestBlocks()` — Files, then each non-empty `MANIFEST_SECTIONS` table, in `INDEX_ORDER` ),
-	 * each pair of PRESENT segments separated by a literal `---` divider block. Kept as TWO separate
-	 * assembles rather than one combined pass through `ContextAssembler.sort` on purpose: a single pass
-	 * would tier `injected` BELOW `routing` ( matching `ContextAssembler`'s own documented intent ), but
-	 * today's actual wire puts injected content ABOVE the manifest — unifying the sort would silently
-	 * change output whenever a session has injected content, which is a real behavior change, not a
-	 * refactor. Flagged in the plan; not resolved either way here.
+	 * post-resolution `TaggedBlock[]` `compile()` now projects to text. Shape ( band model re-ratified
+	 * 2026-07-13 ): the merged body — **Lenses** ( per-lens-named care, `buildLensBand` ) → **Memory**
+	 * ( reserved, empty ) → **Knowledge** ( core, forced-read ), via `ContextAssembler.assembleBlocks` +
+	 * `withBandHeadings` — first, then the bottom-of-context **Manifest** blocks ( `manifestBlocks()` —
+	 * Files, then each non-empty `MANIFEST_SECTIONS` table, in `INDEX_ORDER` ), each pair of PRESENT
+	 * segments separated by a literal `---` divider block. Kept as TWO separate assembles rather than one
+	 * combined pass through `ContextAssembler.sort` on purpose: a single pass would tier `injected` BELOW
+	 * `manifest` ( matching `ContextAssembler`'s own documented intent ), but today's actual wire puts
+	 * injected content ABOVE the manifest — unifying the sort would silently change output whenever a
+	 * session has injected content, which is a real behavior change, not a refactor. Flagged in the plan;
+	 * not resolved either way here.
 	 *
 	 * `extras` ( Phase 2, 2026-07-13 ): `before` rides ahead of the body ( the model-bound root context —
 	 * the ONE layer that genuinely leads everything else ), `after` trails the manifest ( the on-mode
 	 * tool manifest, every suggested tool's full schema — today assembled renderer-side in
 	 * `Session.wireSystemFor` ). A flat trailing array couldn't express "some extras lead, some trail";
 	 * this is the real positioning the Phase 1 doc comment deferred to Phase 2.
+	 *
+	 * `memory` ( memory-system plan, 2026-07-13 ) — the system-fired PRELOAD baseline ( `Agent.memoryBlock`,
+	 * built by the orchestrator from `database.baseline_memories` ). Unlike `before`/`after` it does NOT
+	 * bracket the join: it joins the BODY block list and sorts into the `memory` tier ( now BETWEEN the
+	 * Lenses band and Knowledge — `ContextAssembler.tierOf` ), because its position is a property of the
+	 * merged sort, not a fixed lead/trail slot. Its `## Memory` band heading is spliced by
+	 * `withBandHeadings` like any other body tier; while no memory rides ( the reserved-but-empty case ),
+	 * `withBandHeadings` emits nothing for the tier, so the wire carries no bare `## Memory`.
 	 */
-	compiledBlocks( extras: { before?: TaggedBlock[]; after?: TaggedBlock[] } = {} ): TaggedBlock[] {
+	compiledBlocks( extras: { before?: TaggedBlock[]; after?: TaggedBlock[]; memory?: TaggedBlock[] } = {} ): TaggedBlock[] {
 		const before = extras.before ?? [];
 		const after  = extras.after ?? [];
-		if ( !this.lenses.length ) return Agent.joinSegments( [ before, after ] );
-		const blocks  = SlotResolver.compilePlan( this.getContextBlocks() ).survivors;
+		const memory = extras.memory ?? [];
+		if ( !this.lenses.length ) return Agent.joinSegments( [ before, memory, after ] );
+		const blocks  = [ ...SlotResolver.compilePlan( this.getContextBlocks() ).survivors, ...memory ];
 		const inIndex = ( b: TaggedBlock ): boolean => b.section !== null && Agent.INDEX_SECTIONS.has( b.section );
 		// The body is everything that ISN'T an index table and isn't the legacy Available-on-request stub.
 		const body = blocks.filter( b => !inIndex( b ) && b.section !== 'stub' );
 
-		// Band headings ( Cares / Knowledge over the body's own care/core tiers; Routing over the
-		// manifest ) — real headings on the real wire text, per the plan's 2026-07-13 decisions, not a
-		// view-only re-skin. `withBandHeadings` only fires per NON-EMPTY tier, so an agent with no core
-		// content never gets a bare "## Knowledge" heading over nothing.
-		const bodyBlocks  = ContextAssembler.withBandHeadings( ContextAssembler.assembleBlocks( body ) );
+		// The Lenses band ( band model re-ratified 2026-07-13 ): the care-region prose, grouped + NAMED
+		// per active lens with `_lens_base`'s care folded into each ( see `buildLensBand` ). Pulled out of
+		// the generic assemble so it can carry the per-lens `### {name}` sub-headings the flat merge can't —
+		// then handed BACK into the same assemble as ordinary care-tier blocks, so `withBandHeadings` still
+		// brackets it with the single `## Lenses` heading and the sort keeps care first.
+		const careBlocks = body.filter( b => b.region === 'care' );
+		const rest       = body.filter( b => b.region !== 'care' );
+		const lensBand   = this.buildLensBand( careBlocks );
+
+		// Band headings ( Lenses / Memory / Knowledge over the body's care/memory/core tiers; Manifest over
+		// the manifest ) — real headings on the real wire text, not a view-only re-skin. `withBandHeadings`
+		// only fires per NON-EMPTY tier, so an agent with no core content never gets a bare "## Knowledge"
+		// heading over nothing, and the reserved `memory` tier emits nothing on the wire while empty.
+		const bodyBlocks  = ContextAssembler.withBandHeadings( ContextAssembler.assembleBlocks( [ ...lensBand, ...rest ] ) );
 		const rawManifest = this.manifestBlocks( blocks.filter( inIndex ) );
 		const manifestBlocks = rawManifest.length
-			? [ ContextAssembler.headingBlock( ContextAssembler.bandHeading( 2 )! ), ...rawManifest ]
+			? [ ContextAssembler.headingBlock( ContextAssembler.bandHeading( ContextAssembler.TIER.manifest )! ), ...rawManifest ]
 			: [];
 		return Agent.joinSegments( [ before, bodyBlocks, manifestBlocks, after ] );
+	}
+
+	/**
+	 * The per-lens **`## {Name} - Lens`** bands ( compiled-context plan, band model re-ratified 2026-07-13,
+	 * refined to attention-grouped output ) — the care-region identity prose, grouped and NAMED per active
+	 * lens. Each real lens gets its OWN top-level `## {Name} - Lens` heading ( the primary annotated
+	 * `( Primary )` ) — NO "## Lenses" wrapper: the output is grouped by kind, and a lens's personality is a
+	 * top-level block, not a child of a Lenses container ( Bryan, 2026-07-13: lens/agent/source are
+	 * COMPOSITION artifacts, not output artifacts ). Then its own care blocks, then `_lens_base`'s care
+	 * folded in AFTER ( repeated per lens: base is global behavior, "not its own band", so it merges into
+	 * each lens rather than standing alone ). Base contributes NO heading of its own.
+	 *
+	 * Care blocks carry their source lens's `path` ( a lens's own Purpose/Philosophy come from
+	 * `super.getContextBlocks()` with `path = this.path` — the same identity `dedupeBySource` keys on ), so
+	 * grouping is a plain path match against `this.lenses`. The `## {Name} - Lens` rows are care-tagged
+	 * synthetic headings, so they sort into the care tier; `bandHeading( care )` returns null, so
+	 * `withBandHeadings` adds no wrapper around them. Base clones drop their `mergeKey` so a shared care
+	 * merge key ( rare ) can't fuse the per-lens repeats back into one. A care block matching no active lens
+	 * ( e.g. an injected-care node ) rides after the named groups, never silently dropped.
+	 */
+	buildLensBand( careBlocks: TaggedBlock[] ): TaggedBlock[] {
+		const norm   = ( s: string ): string => s.replace( /\\/g, '/' );
+		const isBase = ( l: LensObject ): boolean => norm( l.getPath() ?? '' ).endsWith( '_lens_base.html' );
+		const bases  = this.lenses.filter( isBase );
+		const reals  = this.lenses.filter( l => !isBase( l ) );
+		const basePaths = new Set( bases.map( l => norm( l.getPath() ?? '' ) ) );
+		const baseCare  = careBlocks.filter( b => basePaths.has( norm( b.path ) ) );
+
+		// Base is global behavior folded into each REAL lens ( repeated per lens, no band of its own ).
+		// The degenerate base-only agent ( no real lens to fold into — the SDK's `loadBase` construct )
+		// falls back to showing base AS the lens, so its identity prose is never silently dropped; there's
+		// nothing to fold in that case, so `foldCare` is empty ( base isn't folded into itself ).
+		const groupLenses = reals.length ? reals : bases;
+		const foldCare    = reals.length ? baseCare : [];
+
+		const out: TaggedBlock[] = [];
+		for ( let i = 0; i < groupLenses.length; i++ ) {
+			const lens = groupLenses[ i ];
+			const own = careBlocks.filter( b => norm( b.path ) === norm( lens.getPath() ?? '' ) );
+			if ( !own.length && !foldCare.length ) continue;
+			// The first REAL lens is the primary ( base-only agents have no primary to annotate ).
+			const primaryTag = ( reals.length && i === 0 ) ? ' ( Primary )' : '';
+			out.push( ContextAssembler.headingBlock( `# ${ lens.getName() } - Lens${ primaryTag }`, 'care' ) );
+			out.push( ...own );
+			out.push( ...foldCare.map( b => ( { ...b, mergeKey: null } ) ) );
+		}
+		// Care blocks belonging to no active lens ( shouldn't happen for a lens's own prose, but an
+		// injected-care drop could ) ride after the named groups rather than vanishing.
+		const allPaths = new Set( this.lenses.map( l => norm( l.getPath() ?? '' ) ) );
+		out.push( ...careBlocks.filter( b => !allPaths.has( norm( b.path ) ) ) );
+		return out;
 	}
 
 	/** Join several block-list SEGMENTS with a literal `---` divider block between each pair of
@@ -673,7 +743,7 @@ export class Agent {
 	 * The bottom-of-context manifest ( see `compiledBlocks` ), AS BLOCKS: a `Files` block naming every
 	 * loaded lens, then one routing-table block per non-empty manifest section ( References / Domains /
 	 * Habits / Contracts ), in `INDEX_ORDER`. Every row is one what/where/why line; every file appears
-	 * exactly once, deduped across sources by `ContextAssembler.routingTable` so a manifest table and an
+	 * exactly once, deduped across sources by `ContextAssembler.manifestTable` so a manifest table and an
 	 * inline merge can't differ. The `Files` heading is itself a manifest section — single-sourced via
 	 * `ContextAssembler.title` so no caller hardcodes a `###` string. Paths are vault-relative — the
 	 * primary lens's `vaultRelative`, so a stack sharing a vault root all resolve against it.
@@ -693,7 +763,7 @@ export class Agent {
 
 		for ( const section of Agent.INDEX_ORDER ) {
 			const members = index.filter( b => b.section === section );
-			if ( members.length ) out.push( Agent.manifestBlock( section, ContextAssembler.routingTable( members, section ) ) );
+			if ( members.length ) out.push( Agent.manifestBlock( section, ContextAssembler.manifestTable( members, section ) ) );
 		}
 		return out;
 	}
@@ -702,6 +772,18 @@ export class Agent {
 	 *  'know'` since it's routing content, never Care identity prose. */
 	static manifestBlock( section: string, text: string ): TaggedBlock {
 		return { region: 'know', section, mergeKey: null, text, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
+	}
+
+	/** One PRELOAD-memory block — the system-fired baseline selection ( memory-system plan, 2026-07-13 ),
+	 *  passed to `compiledBlocks({ memory })`. `section: 'memory'` is the single marker that ( a ) sorts it
+	 *  into the `memory` tier ( `ContextAssembler.tierOf` — after the lens body, before the routing
+	 *  manifest ) and ( b ) keeps it OUT of the manifest hoist ( 'memory' is not a `MANIFEST_SECTIONS`
+	 *  name, so `INDEX_SECTIONS` never claims it ). Synthetic ( no source artifact ), so tagged neutrally
+	 *  like the manifest/divider blocks. The `## Memory` heading is a band heading spliced at render, so
+	 *  `text` is the bare prose dump — the ONE factory both the live wire ( Orchestrator ) and the
+	 *  renderer preview ( Session ) build from, so injection parity holds by construction. */
+	static memoryBlock( text: string ): TaggedBlock {
+		return { region: 'know', section: 'memory', mergeKey: null, text, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
 	}
 
 	/**

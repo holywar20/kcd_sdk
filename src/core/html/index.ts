@@ -18,5 +18,6 @@ export { KcdParse } from './KcdParse';
 export type { ParsedArtifact, ParsedSlot, ParsedParam } from './KcdParse';
 export { KcdEmit } from './KcdEmit';
 export { KcdExcise } from './KcdExcise';
+export { KcdEdit } from './KcdEdit';
 export { KcdContext } from './KcdContext';
 export { KcdText } from './KcdText';

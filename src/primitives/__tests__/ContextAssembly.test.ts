@@ -361,6 +361,26 @@ describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Ph
 		expect( withExtras.map( b => b.text ).join( '\n\n' ) ).toBe( agent.compile() + '\n\n---\n\n' + 'TOOL MANIFEST' );
 	} );
 
+	it( 'the `memory` extra lands under its own ## Memory band, BEFORE Knowledge and the Manifest (band model re-ratified 2026-07-13)', () => {
+		const agent = loadBase();
+		const out = agent.compiledBlocks( { memory: [ Agent.memoryBlock( '- claim — because reason' ) ] } ).map( b => b.text ).join( '\n\n' );
+		const memHeadIdx  = out.indexOf( '# Memory' );
+		const proseIdx    = out.indexOf( '- claim — because reason' );
+		const knowledgeIdx = out.indexOf( '# Knowledge' );  // core band
+		const manifestIdx  = out.indexOf( '# Manifest' );   // the manifest band — base lens always has one
+		expect( memHeadIdx ).toBeGreaterThan( -1 );
+		expect( proseIdx ).toBeGreaterThan( memHeadIdx );      // prose rides under its heading
+		expect( knowledgeIdx ).toBeGreaterThan( proseIdx );    // memory now precedes Knowledge, per Bryan's placement
+		expect( manifestIdx ).toBeGreaterThan( knowledgeIdx );
+	} );
+
+	it( 'each lens is its OWN top-level "## {Name} - Lens" band — no "## Lenses" wrapper', () => {
+		const agent = loadBase();
+		const out = agent.compiledBlocks().map( b => b.text ).join( '\n\n' );
+		expect( out ).not.toContain( '## Lenses' );          // no container band
+		expect( out ).toMatch( /^# .+ - Lens$/m );           // a named per-lens heading rides the wire
+	} );
+
 	it( 'per-block weight sums to the whole-string weight, for ANY consistent length function — the identity that makes a real tokenizer sum agree with the wire estimate', () => {
 		const agent = loadBase();
 		const blocks = agent.compiledBlocks();
@@ -494,6 +514,43 @@ describe( 'ContextAssembler — unit', () => {
 		const sorted = ContextAssembler.sort( blocks ).map( b => b.text );
 		expect( sorted.indexOf( 'core' ) ).toBeLessThan( sorted.indexOf( 'habits-routing' ) );
 		expect( sorted.indexOf( 'core' ) ).toBeLessThan( sorted.indexOf( 'refs-routing' ) );
+	} );
+
+	// ── memory tier ( band model re-ratified 2026-07-13 ): the system-fired preload now sits BETWEEN the
+	// Lenses band ( care ) and Knowledge ( core ) — "after the lenses but before knowledge" ( Bryan ). ──
+
+	it( 'a memory-section block sorts ABOVE core and BELOW care ( still above manifest and injected )', () => {
+		const blocks = [
+			block( { text: 'injected', sourceLayer: 'injected', region: 'know' } ),
+			block( { text: 'manifest', region: 'know', section: 'references' } ),
+			block( { text: 'memory', region: 'know', section: 'memory' } ),
+			block( { text: 'core', region: 'know' } ),
+			block( { text: 'care', region: 'care' } ),
+		];
+		expect( ContextAssembler.sort( blocks ).map( b => b.text ) ).toEqual( [ 'care', 'memory', 'core', 'manifest', 'injected' ] );
+	} );
+
+	it( 'the band headings track the re-ratified names: care→(no wrapper), memory→Memory, core→Knowledge, manifest→Manifest', () => {
+		// The care tier gets NO wrapper heading — each lens is its own top-level `## {Name} - Lens` band,
+		// built by `Agent.buildLensBand`, not a "## Lenses" parent.
+		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.care ) ).toBeNull();
+		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.memory ) ).toBe( '# Memory' );
+		// Knowledge / Manifest carry a directive line beneath the heading ( forced-read vs read-on-demand ).
+		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.core )!.split( '\n' )[ 0 ] ).toBe( '# Knowledge' );
+		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.core )! ).toContain( 'Required reading' );
+		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.manifest )!.split( '\n' )[ 0 ] ).toBe( '# Manifest' );
+		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.manifest )! ).toContain( 'Lookup surface' );
+		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.injected ) ).toBeNull();
+	} );
+
+	it( 'withBandHeadings splices "# Memory" ABOVE the Knowledge band ( memory now precedes core )', () => {
+		const sorted = ContextAssembler.assembleBlocks( [
+			block( { text: 'core', region: 'know' } ),
+			block( { text: 'MEM', region: 'know', section: 'memory' } ),
+		] );
+		// Heading blocks can now carry a directive line; compare on the first line of each block.
+		const firstLines = ContextAssembler.withBandHeadings( sorted ).map( b => b.text.split( '\n' )[ 0 ] );
+		expect( firstLines ).toEqual( [ '# Memory', 'MEM', '# Knowledge', 'core' ] );
 	} );
 
 	it( 'two references-section blocks from different sources fuse into ONE routing table via their STRUCTURED rows — one heading, both rows, no repeated boilerplate', () => {

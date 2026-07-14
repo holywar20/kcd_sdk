@@ -37,7 +37,7 @@ export const KcdAddress = new class KcdAddress {
 
 	KNOWN_ATTRS = [
 		'data-kcd', 'data-kcd-frontmatter', 'data-kcd-field', 'data-kcd-type',
-		'data-kcd-region', 'data-kcd-section', 'data-kcd-merge', 'data-kcd-merge-key', 'data-kcd-slot',
+		'data-kcd-region', 'data-kcd-section', 'data-kcd-heading', 'data-kcd-merge', 'data-kcd-merge-key', 'data-kcd-slot',
 		'data-kcd-param', 'data-kcd-params', 'data-kcd-mode', 'data-kcd-habit-class',
 		'data-kcd-table', 'data-kcd-head', 'data-kcd-chips', 'data-kcd-tag',
 		'data-kcd-audience', 'data-kcd-chrome', 'data-kcd-live', 'data-kcd-script'
