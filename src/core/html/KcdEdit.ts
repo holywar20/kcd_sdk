@@ -23,7 +23,7 @@ export const KcdEdit = new class KcdEdit {
 
 	/** The slot whose `where` href ends with `refPath` ( the node's absolute path ends with the slot's
 	 *  vault-relative href ), searched anywhere in `scope`. Mirrors the old `_findSlot`. */
-	private findSlot( scope: HtmlEl, refPath: string ): HtmlEl | null {
+	findSlot( scope: HtmlEl, refPath: string ): HtmlEl | null {
 		const key = refPath.replace( /\\/g, '/' );
 		return HtmlTree.first( scope, ( el ) => {
 			if( !HtmlTree.has( el, 'data-kcd-slot' ) ) return false;
@@ -35,7 +35,7 @@ export const KcdEdit = new class KcdEdit {
 
 	/** The `[data-kcd-table]` under `[data-kcd-region=REGION]` › `[data-kcd-section=SECTION]`, or null —
 	 *  the HtmlTree read of the descendant-combinator selectors the renderer helpers used. */
-	private table( root: HtmlEl, region: string, section: string ): HtmlEl | null {
+	table( root: HtmlEl, region: string, section: string ): HtmlEl | null {
 		const reg = HtmlTree.first( root, ( el ) => HtmlTree.get( el, 'data-kcd-region' ) === region );
 		if( !reg ) return null;
 		const sec = HtmlTree.first( reg, ( el ) => HtmlTree.get( el, 'data-kcd-section' ) === section );
@@ -44,7 +44,7 @@ export const KcdEdit = new class KcdEdit {
 	}
 
 	/** A vault-root-relative href ( `_Claude/…` ) from an absolute artifact path. */
-	private vaultHref( absPath: string ): string {
+	vaultHref( absPath: string ): string {
 		const norm = absPath.replace( /\\/g, '/' );
 		const i = norm.lastIndexOf( '/_Claude/' );
 		return i >= 0 ? norm.slice( i + 1 ) : norm;
@@ -52,25 +52,27 @@ export const KcdEdit = new class KcdEdit {
 
 	// ── tree construction / mutation ( HtmlTree is plain objects, so we build + splice directly ) ──
 
-	private el( tag: string, attrs: Record<string, string>, kids: HtmlNode[] = [] ): HtmlEl {
+	el( tag: string, attrs: Record<string, string>, kids: HtmlNode[] = [] ): HtmlEl {
 		return { type: 'el', tag, attrs, kids };
 	}
-	private text( value: string ): HtmlNode {
+	text( value: string ): HtmlNode {
 		return { type: 'text', value };
 	}
 
 	/** Remove `target` from anywhere under `root` by identity. Returns whether it was found + removed. */
-	private drop( root: HtmlEl, target: HtmlEl ): boolean {
+	drop( root: HtmlEl, target: HtmlEl ): boolean {
 		const i = root.kids.indexOf( target );
 		if( i >= 0 ) { root.kids.splice( i, 1 ); return true; }
 		for( const k of root.kids ) if( HtmlTree.isEl( k ) && this.drop( k, target ) ) return true;
 		return false;
 	}
 
-	/** A fresh `<div data-kcd-slot>` ( what · where · why ), `data-kcd-mode` gating auto-load: `suggested`
-	 *  = rides inline ( Included ), `on` = routing row only ( Conditional ). Matches the hand-authored shape. */
-	private buildSlot( name: string, vaultHref: string, included: boolean, habitClass?: string ): HtmlEl {
-		const attrs: Record<string, string> = { 'data-kcd-slot': '', 'data-kcd-mode': included ? 'suggested' : 'on' };
+	/** A fresh `<div data-kcd-slot="<kind>">` ( what · where · why ), `data-kcd-mode` gating auto-load:
+	 *  `suggested` = rides inline ( Included ), `on` = routing row only ( Conditional ). `kind` is the
+	 *  explicit slot role ( `reference` / `habit` — protocol §3 ), stamped so a newly-added slot carries the
+	 *  same kind the rest of the corpus does ( never a bare `data-kcd-slot`, which the validator rejects ). */
+	buildSlot( name: string, vaultHref: string, included: boolean, kind: string, habitClass?: string ): HtmlEl {
+		const attrs: Record<string, string> = { 'data-kcd-slot': kind, 'data-kcd-mode': included ? 'suggested' : 'on' };
 		if( habitClass ) attrs[ 'data-kcd-habit-class' ] = habitClass;
 		return this.el( 'div', attrs, [
 			this.el( 'span', { 'data-kcd-field': 'what',  'data-kcd-type': 'text' }, [ this.text( name ) ] ),
@@ -115,7 +117,7 @@ export const KcdEdit = new class KcdEdit {
 		if( this.findSlot( root, refPath ) ) return null;
 		const table = this.table( root, 'know', 'references' );
 		if( !table ) return null;
-		table.kids.push( this.buildSlot( name, this.vaultHref( refPath ), true ) );
+		table.kids.push( this.buildSlot( name, this.vaultHref( refPath ), true, 'reference' ) );
 		return HtmlTree.innerHtml( root );
 	}
 
@@ -132,19 +134,19 @@ export const KcdEdit = new class KcdEdit {
 			const s = this.findSlot( table, habitPath );
 			if( s ) this.drop( root, s );
 		}
-		if( on ) table.kids.push( this.buildSlot( name, this.vaultHref( habitPath ), true, habitClass ?? undefined ) );
+		if( on ) table.kids.push( this.buildSlot( name, this.vaultHref( habitPath ), true, 'habit', habitClass ?? undefined ) );
 		return HtmlTree.innerHtml( root );
 	}
 
 	// ── tool ops ( where-LESS slots under the Do region's `tools` section ) ────────
 
-	private toolTable( root: HtmlEl ): HtmlEl | null {
+	toolTable( root: HtmlEl ): HtmlEl | null {
 		return this.table( root, 'do', 'tools' );
 	}
 
 	/** The Tools table, minting the whole `<section data-kcd-section="tools">` ( heading + table head )
 	 *  under the Do region if the lens has none yet — the first tool docked mints it. */
-	private ensureToolTable( root: HtmlEl ): HtmlEl | null {
+	ensureToolTable( root: HtmlEl ): HtmlEl | null {
 		const existing = this.toolTable( root );
 		if( existing ) return existing;
 		const doRegion = HtmlTree.first( root, ( el ) => HtmlTree.get( el, 'data-kcd-region' ) === 'do' );
@@ -156,7 +158,7 @@ export const KcdEdit = new class KcdEdit {
 	}
 
 	/** The where-less tool slot whose `what` names `toolName`, or null. */
-	private findToolSlot( table: HtmlEl, toolName: string ): HtmlEl | null {
+	findToolSlot( table: HtmlEl, toolName: string ): HtmlEl | null {
 		return HtmlTree.first( table, ( el ) => {
 			if( !HtmlTree.has( el, 'data-kcd-slot' ) ) return false;
 			if( HtmlTree.first( el, ( c ) => c.tag === 'a' && HtmlTree.get( c, 'data-kcd-field' ) === 'where' ) ) return false; // a real slot, not a tool row
@@ -165,8 +167,8 @@ export const KcdEdit = new class KcdEdit {
 		} );
 	}
 
-	private buildToolSlot( toolName: string, mode: 'on' | 'suggested' ): HtmlEl {
-		return this.el( 'div', { 'data-kcd-slot': '', 'data-kcd-mode': mode }, [
+	buildToolSlot( toolName: string, mode: 'on' | 'suggested' ): HtmlEl {
+		return this.el( 'div', { 'data-kcd-slot': 'tool', 'data-kcd-mode': mode }, [
 			this.el( 'span', { 'data-kcd-field': 'what', 'data-kcd-type': 'text' }, [ this.text( toolName ) ] ),
 			this.el( 'span', { 'data-kcd-field': 'why',  'data-kcd-type': 'text' }, [ this.text( mode ) ] ),
 		] );

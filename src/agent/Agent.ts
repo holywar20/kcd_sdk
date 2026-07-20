@@ -7,6 +7,7 @@ import { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
 import type { ArtifactType, ContextSegment, PolicyEntry, SerializedArtifact, SerializedLens, SlotMode, TaggedBlock } from '../primitives/types';
 import { DEFAULT_MODEL_KEY } from './Model';
 import type { ToolMode } from './ToolMode';
+import type { ToolDef } from './ToolDef';
 
 export type AgentStatus = 'idle' | 'thinking';
 
@@ -218,6 +219,23 @@ export class Agent {
 	 *  load/save. Empty until materialized ( a draft, or a bare wire ). */
 	baseReferenceNodes: KCDPrimitive[] = [];
 
+	// ── Bound environment: the wire's EXTERNAL layers, injected post-hydration ( `bindEnv` ) ──
+	// The three inputs the compiled context needs that aren't the agent's own object graph: the
+	// model-bound root context, the live MCP tool defs ( for the manifest + suggested surface ), and the
+	// baseline PRELOAD memory. Set from OUTSIDE ( the renderer's Agent store, the main orchestrator ) the
+	// same way `baseHabitNodes` is — never persisted, never crosses the wire, flush-and-filled on change.
+	// With these bound, the agent answers `compiledContext()`/`wireSystem()`/`estimateTokens()` ALONE.
+
+	/** The model-bound root-context text ( CLAUDE.md / Winston.html et al. ) — leads the compiled context.
+	 *  '' when the agent's model declares none. */
+	rootContext: string = '';
+	/** The live tool defs available to this agent — the flat set the manifest + suggested surface read,
+	 *  each carrying its BAKED per-mode counts. Bound from the MCP store; `[]` until bound. */
+	toolDefs: ToolDef[] = [];
+	/** The baseline PRELOAD memory prose ( the system-fired top-N selection ). Rides only when the agent's
+	 *  own `system.memoryEnabled` gate is on. '' until bound / when the query came back dry. */
+	memory: string = '';
+
 	private constructor(
 		id: string,
 		name: string,
@@ -386,6 +404,20 @@ export class Agent {
 		this.composedTools      = [];
 		this.composedToolModes  = {};
 		for ( const l of this.lenses ) Object.assign( this.composedToolModes, l.getToolModes() as Record<string, ToolMode> );
+	}
+
+	/**
+	 * Bind the wire's EXTERNAL layers onto the agent — the environment `compiledContext()` needs beyond the
+	 * agent's own object graph. Flush-and-fill, like `compose()`: pass the whole environment ( a partial
+	 * overwrites only the keys it names ), call it whenever a source changes, and trust the fresh rebuild.
+	 * Cheap; there is no delta path to keep in sync. The renderer's Agent store calls this when the MCP tool
+	 * defs / model root context / baseline memory change ( then `triggerRef` ); the orchestrator calls it per
+	 * round on the canonical agent. Never persisted — this is live environment, not agent identity.
+	 */
+	bindEnv( env: { rootContext?: string; toolDefs?: ToolDef[]; memory?: string } ): void {
+		if ( env.rootContext !== undefined ) this.rootContext = env.rootContext;
+		if ( env.toolDefs    !== undefined ) this.toolDefs    = env.toolDefs;
+		if ( env.memory      !== undefined ) this.memory      = env.memory;
 	}
 
 	/** What this agent actually carries = bolted-on ∪ inherited-from-lenses. The permissions
@@ -603,7 +635,7 @@ export class Agent {
 	/**
 	 * THE compiled-block currency ( the compiled-context plan, 2026-07-12/13 ) — the flat, merged,
 	 * post-resolution `TaggedBlock[]` `compile()` now projects to text. Shape ( band model re-ratified
-	 * 2026-07-13 ): the merged body — **Lenses** ( per-lens-named care, `buildLensBand` ) → **Memory**
+	 * 2026-07-13 ): the merged body — **Care** ( by-kind `# Purpose` / `# Philosophy` bands, `buildCareBands` ) → **Memory**
 	 * ( reserved, empty ) → **Knowledge** ( core, forced-read ), via `ContextAssembler.assembleBlocks` +
 	 * `withBandHeadings` — first, then the bottom-of-context **Manifest** blocks ( `manifestBlocks()` —
 	 * Files, then each non-empty `MANIFEST_SECTIONS` table, in `INDEX_ORDER` ), each pair of PRESENT
@@ -638,20 +670,20 @@ export class Agent {
 		// The body is everything that ISN'T an index table and isn't the legacy Available-on-request stub.
 		const body = blocks.filter( b => !inIndex( b ) && b.section !== 'stub' );
 
-		// The Lenses band ( band model re-ratified 2026-07-13 ): the care-region prose, grouped + NAMED
-		// per active lens with `_lens_base`'s care folded into each ( see `buildLensBand` ). Pulled out of
-		// the generic assemble so it can carry the per-lens `### {name}` sub-headings the flat merge can't —
-		// then handed BACK into the same assemble as ordinary care-tier blocks, so `withBandHeadings` still
-		// brackets it with the single `## Lenses` heading and the sort keeps care first.
+		// The care bands ( compilation pass, 2026-07-19 ): the care-region prose, grouped by KIND — one
+		// `# Purpose` / `# Philosophy` block merging every lens's contribution as labeled `## {lens}`
+		// sub-sections ( primary marked + leading, base last ). Built here ( `buildCareBands` ) rather than
+		// in the generic merge because it needs lens NAMES + primacy; handed back as ordinary care-tier
+		// blocks, so `withBandHeadings` still keeps care first with no wrapper heading over it.
 		const careBlocks = body.filter( b => b.region === 'care' );
 		const rest       = body.filter( b => b.region !== 'care' );
-		const lensBand   = this.buildLensBand( careBlocks );
+		const careBands  = this.buildCareBands( careBlocks );
 
 		// Band headings ( Lenses / Memory / Knowledge over the body's care/memory/core tiers; Manifest over
 		// the manifest ) — real headings on the real wire text, not a view-only re-skin. `withBandHeadings`
 		// only fires per NON-EMPTY tier, so an agent with no core content never gets a bare "## Knowledge"
 		// heading over nothing, and the reserved `memory` tier emits nothing on the wire while empty.
-		const bodyBlocks  = ContextAssembler.withBandHeadings( ContextAssembler.assembleBlocks( [ ...lensBand, ...rest ] ) );
+		const bodyBlocks  = ContextAssembler.withBandHeadings( ContextAssembler.assembleBlocks( [ ...careBands, ...rest ] ) );
 		const rawManifest = this.manifestBlocks( blocks.filter( inIndex ) );
 		const manifestBlocks = rawManifest.length
 			? [ ContextAssembler.headingBlock( ContextAssembler.bandHeading( ContextAssembler.TIER.manifest )! ), ...rawManifest ]
@@ -659,54 +691,184 @@ export class Agent {
 		return Agent.joinSegments( [ before, bodyBlocks, manifestBlocks, after ] );
 	}
 
+	// ── Self-assembling context ( the fat-object surface; fed by `bindEnv` ) ──────
+	// Everything the Session store used to hand-gather into `compiledBlocks`'s extras bag now comes off the
+	// agent's own bound environment, so ONE zero-arg call answers "what is my context" and both the renderer
+	// preview and ( Phase 5 ) the send path read the SAME method — no second door, no drift by construction.
+
 	/**
-	 * The per-lens **`## {Name} - Lens`** bands ( compiled-context plan, band model re-ratified 2026-07-13,
-	 * refined to attention-grouped output ) — the care-region identity prose, grouped and NAMED per active
-	 * lens. Each real lens gets its OWN top-level `## {Name} - Lens` heading ( the primary annotated
-	 * `( Primary )` ) — NO "## Lenses" wrapper: the output is grouped by kind, and a lens's personality is a
-	 * top-level block, not a child of a Lenses container ( Bryan, 2026-07-13: lens/agent/source are
-	 * COMPOSITION artifacts, not output artifacts ). Then its own care blocks, then `_lens_base`'s care
-	 * folded in AFTER ( repeated per lens: base is global behavior, "not its own band", so it merges into
-	 * each lens rather than standing alone ). Base contributes NO heading of its own.
-	 *
-	 * Care blocks carry their source lens's `path` ( a lens's own Purpose/Philosophy come from
-	 * `super.getContextBlocks()` with `path = this.path` — the same identity `dedupeBySource` keys on ), so
-	 * grouping is a plain path match against `this.lenses`. The `## {Name} - Lens` rows are care-tagged
-	 * synthetic headings, so they sort into the care tier; `bandHeading( care )` returns null, so
-	 * `withBandHeadings` adds no wrapper around them. Base clones drop their `mergeKey` so a shared care
-	 * merge key ( rare ) can't fuse the per-lens repeats back into one. A care block matching no active lens
-	 * ( e.g. an injected-care node ) rides after the named groups, never silently dropped.
+	 * THE compiled context for this agent's live wire — `compiledBlocks()` with the bound environment folded
+	 * in as real blocks: the model root context LEADS ( `before` ), the baseline memory sorts into its tier,
+	 * and the `on`-mode tool manifest + every `suggested` tool's full schema TRAIL ( `after` ). Memory rides
+	 * only when the agent's own `system.memoryEnabled` gate is on. Zero-arg: the extras that used to be
+	 * hand-gathered in `Session.compiledBlocksFor` are the agent's own bound env now.
 	 */
-	buildLensBand( careBlocks: TaggedBlock[] ): TaggedBlock[] {
+	compiledContext(): TaggedBlock[] {
+		const manifest  = this.toolManifest();
+		const suggested = this.suggestedToolDefs();
+		const memory    = ( this.system[ 'memoryEnabled' ] !== false ) ? this.memory : '';
+		return this.compiledBlocks( {
+			before: this.rootContext ? [ Agent.extraBlock( 'root-context', this.rootContext ) ] : [],
+			memory: memory ? [ Agent.memoryBlock( memory ) ] : [],
+			after: Agent.joinSegments( [
+				manifest  ? [ Agent.extraBlock( 'tool-manifest', manifest ) ] : [],
+				suggested ? [ Agent.extraBlock( 'suggested-tools', suggested ) ] : []
+			] )
+		} );
+	}
+
+	/** The system half a real turn sends — `compiledContext()` projected to text. The exact string the
+	 *  renderer preview shows and ( Phase 5 ) the orchestrator will send. */
+	wireSystem(): string {
+		return this.compiledContext().map( b => b.text ).join( '\n\n' );
+	}
+
+	/** This agent's whole-context token ESTIMATE — a single pile over its assembled `wireSystem()`, so it
+	 *  equals the estimate of the exact string that rides ( the atom the budget gauge reads ). The agent's
+	 *  own `estimateTokens` ( it is not a `KCDPrimitive`, but shares the shape one level up ). Deliberately
+	 *  loose; only the wire `usage` is exact. */
+	estimateTokens(): number {
+		return KCDPrimitive._estimateTokens( this.wireSystem() );
+	}
+
+	/** The compiled currency summed by coarse budget bucket — System ( root context ) / Lenses ( the agent's
+	 *  own identity + routing ) / Tools ( manifest + suggested ). Read per-block off `compiledContext()`'s own
+	 *  `section` tags, the same split the ring + legend group by. Attached files + conversation turns aren't
+	 *  compiled blocks, so they stay their own reads wherever this is summed. */
+	compiledBudget(): { system: number; lenses: number; tools: number } {
+		const out = { system: 0, lenses: 0, tools: 0 };
+		for ( const b of this.compiledContext() ) out[ Agent.bucketOf( b ) ] += ( b.text ? KCDPrimitive._estimateTokens( b.text ) : 0 );
+		return out;
+	}
+
+	/** Group tool defs by their owning MCP server ( `ToolDef.server`, stamped main-side ), preserving
+	 *  first-seen order — the folder split the roster + drawer already show, now shared onto the wire. A def
+	 *  with no `server` ( a test double / pre-seam ) falls into a trailing "Other tools" bucket so nothing is
+	 *  ever dropped from the manifest. */
+	static groupByServer( defs: ToolDef[] ): { name: string; doc: string; tools: ToolDef[] }[] {
+		const order: string[] = [];
+		const groups = new Map<string, { name: string; doc: string; tools: ToolDef[] }>();
+		for ( const t of defs ) {
+			const key = t.server?.id ?? '';
+			if ( !groups.has( key ) ) { groups.set( key, { name: t.server?.name ?? 'Other tools', doc: t.server?.doc ?? '', tools: [] } ); order.push( key ); }
+			groups.get( key )!.tools.push( t );
+		}
+		return order.map( k => groups.get( k )! );
+	}
+
+	/** The system-prompt tool MANIFEST — grouped by SERVER ( folder ): each server heads its block with its
+	 *  own description, then one `- name — description` line per `on`-mode tool, so the agent knows the tool
+	 *  exists and can request it while its server stays lazy. Off the bound `toolDefs` + `effectiveToolModes()`;
+	 *  '' when nothing is `on`. The `###` server headings let the fold view + drawer reproduce the folders. */
+	toolManifest(): string {
+		const modes = this.effectiveToolModes();
+		const on = this.toolDefs.filter( t => modes[ t.name ] === 'on' );
+		if ( !on.length ) return '';
+		const sections = Agent.groupByServer( on ).map( g => {
+			const head = g.doc ? `### ${ g.name }\n${ g.doc }` : `### ${ g.name }`;
+			return head + '\n' + g.tools.map( t => `- ${ t.name } — ${ t.description }` ).join( '\n' );
+		} );
+		return '## Available tools\n\n' + sections.join( '\n\n' );
+	}
+
+	/** Every `suggested`-mode tool's FULL definition ( name + description + input schema — the real wire
+	 *  weight of the injected surface ), grouped by SERVER the same way the manifest is: a `###` server band
+	 *  ( name + description ) over its tools' `####` full defs. '' when nothing is `suggested`. */
+	suggestedToolDefs(): string {
+		const modes = this.effectiveToolModes();
+		const suggested = this.toolDefs.filter( t => modes[ t.name ] === 'suggested' );
+		if ( !suggested.length ) return '';
+		const sections = Agent.groupByServer( suggested ).map( g => {
+			const head = g.doc ? `### ${ g.name }\n${ g.doc }` : `### ${ g.name }`;
+			const defs = g.tools.map( t => `#### ${ t.name }\n\n${ t.description }\n\n\`\`\`json\n${ JSON.stringify( t.inputSchema, null, 2 ) }\n\`\`\`` ).join( '\n\n' );
+			return head + '\n\n' + defs;
+		} );
+		return '## Suggested tools\n\n' + sections.join( '\n\n' );
+	}
+
+	/** The tool names this agent injects as `suggested` — the set that rides the wire as structured `tools`,
+	 *  distinct from the `on` manifest. */
+	suggestedToolNames(): string[] {
+		const modes = this.effectiveToolModes();
+		return Object.entries( modes ).filter( ( [ , m ] ) => m === 'suggested' ).map( ( [ n ] ) => n );
+	}
+
+	/** A plain string wrapped as a synthetic wire-order `TaggedBlock` — root context / tool manifest /
+	 *  suggested schemas ride `compiledBlocks()`'s one list this way instead of being hand-concatenated onto
+	 *  its text a second time. `section` labels which extra it is ( the budget bucket keys off it ); never
+	 *  read by the compiler itself. */
+	static extraBlock( section: string, text: string ): TaggedBlock {
+		return { region: 'know', section, mergeKey: null, text, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
+	}
+
+	/** The coarse budget bucket one compiled block groups under — read straight off its `section` tag ( the
+	 *  root-context extra is System, the tool extras are Tools, everything else — identity, routing, memory,
+	 *  headings — is Lenses ). One read of a field the block already carries, no second compilation. */
+	static bucketOf( b: TaggedBlock ): 'system' | 'lenses' | 'tools' {
+		if ( b.section === 'root-context' ) return 'system';
+		if ( b.section === 'tool-manifest' || b.section === 'suggested-tools' ) return 'tools';
+		return 'lenses';
+	}
+
+	/**
+	 * The by-KIND care bands ( compilation pass, 2026-07-19 ) — Purpose and Philosophy each become ONE
+	 * block that MERGES every active lens's contribution as a labeled sub-section, instead of one band per
+	 * lens. The primary lens leads and is marked `( Primary )` ( disputes resolve in its favor ); `_lens_base`
+	 * follows, labeled `Base lens`. This is the true "group by KIND, decouple from source" output — the
+	 * reader sees each identity kind ONCE, its sources folded underneath — where the earlier per-lens
+	 * `# {Name} - Lens` band was a half-step ( it repeated base's care into every lens, the duplicate chips ).
+	 *
+	 * Each merged block is `# {Kind}` over, per contributing lens, `## {label}` over that lens's care prose.
+	 * A care block carries its section's OWN surviving `### heading` ( the `data-kcd-heading` survivor ) —
+	 * stripped here so the `# {Kind}` band isn't shadowed by a near-duplicate, keeping only the prose. Kinds
+	 * surface in first-appearance order ( Purpose before Philosophy — natural authoring order ). The block
+	 * keeps its first member's care/section tagging ( so it sorts into the care tier and labels as its kind );
+	 * only `text` is synthesized. A care block belonging to no active lens ( an injected-care drop ) rides at
+	 * the tail of its kind, never dropped. A base-only agent shows base AS the lens, unmarked.
+	 */
+	buildCareBands( careBlocks: TaggedBlock[] ): TaggedBlock[] {
 		const norm   = ( s: string ): string => s.replace( /\\/g, '/' );
 		const isBase = ( l: LensObject ): boolean => norm( l.getPath() ?? '' ).endsWith( '_lens_base.html' );
-		const bases  = this.lenses.filter( isBase );
 		const reals  = this.lenses.filter( l => !isBase( l ) );
-		const basePaths = new Set( bases.map( l => norm( l.getPath() ?? '' ) ) );
-		const baseCare  = careBlocks.filter( b => basePaths.has( norm( b.path ) ) );
+		const bases  = this.lenses.filter( isBase );
+		// Sub-section order: primary first, then any other real lens, then base last ( labeled "Base lens" ).
+		// A base-only agent ( the SDK `loadBase` construct ) shows base AS the lens, no primary annotation.
+		const ordered  = reals.length ? [ ...reals, ...bases ] : bases;
+		const allPaths = new Set( this.lenses.map( l => norm( l.getPath() ?? '' ) ) );
 
-		// Base is global behavior folded into each REAL lens ( repeated per lens, no band of its own ).
-		// The degenerate base-only agent ( no real lens to fold into — the SDK's `loadBase` construct )
-		// falls back to showing base AS the lens, so its identity prose is never silently dropped; there's
-		// nothing to fold in that case, so `foldCare` is empty ( base isn't folded into itself ).
-		const groupLenses = reals.length ? reals : bases;
-		const foldCare    = reals.length ? baseCare : [];
+		const title     = ( k: string ): string => k ? k.charAt( 0 ).toUpperCase() + k.slice( 1 ) : 'Care';
+		const lensLabel = ( l: LensObject ): string =>
+			( isBase( l ) && reals.length ) ? 'Base lens' : `${ l.getName() }${ l === reals[ 0 ] ? ' ( Primary )' : '' }`;
+		// Drop a care section's own leading `### {title}` heading ( the survivor of the parser's heading nuke ),
+		// so the `# {Kind}` band above it isn't shadowed by a near-duplicate; everything after it is the prose.
+		const prose = ( text: string ): string => {
+			const lines = text.split( '\n' );
+			let i = 0;
+			while ( i < lines.length && lines[ i ].trim() === '' ) i++;
+			return ( i < lines.length && /^#{1,6}\s/.test( lines[ i ].trim() ) )
+				? lines.slice( i + 1 ).join( '\n' ).trim()
+				: text.trim();
+		};
+
+		// Distinct care KINDS in first-appearance order ( Purpose, then Philosophy ).
+		const kinds: string[] = [];
+		for ( const b of careBlocks ) { const k = b.section ?? ''; if ( !kinds.includes( k ) ) kinds.push( k ); }
 
 		const out: TaggedBlock[] = [];
-		for ( let i = 0; i < groupLenses.length; i++ ) {
-			const lens = groupLenses[ i ];
-			const own = careBlocks.filter( b => norm( b.path ) === norm( lens.getPath() ?? '' ) );
-			if ( !own.length && !foldCare.length ) continue;
-			// The first REAL lens is the primary ( base-only agents have no primary to annotate ).
-			const primaryTag = ( reals.length && i === 0 ) ? ' ( Primary )' : '';
-			out.push( ContextAssembler.headingBlock( `# ${ lens.getName() } - Lens${ primaryTag }`, 'care' ) );
-			out.push( ...own );
-			out.push( ...foldCare.map( b => ( { ...b, mergeKey: null } ) ) );
+		for ( const kind of kinds ) {
+			const members = careBlocks.filter( b => ( b.section ?? '' ) === kind );
+			const parts: string[] = [ `# ${ title( kind ) }` ];
+			for ( const lens of ordered ) {
+				const mine = members.filter( b => norm( b.path ) === norm( lens.getPath() ?? '' ) );
+				if ( !mine.length ) continue;
+				parts.push( `## ${ lensLabel( lens ) }` );
+				for ( const m of mine ) parts.push( prose( m.text ) );
+			}
+			// Care belonging to no active lens ( an injected-care drop ) — kept under its own label, never dropped.
+			const orphans = members.filter( b => !allPaths.has( norm( b.path ) ) );
+			if ( orphans.length ) { parts.push( '## Injected' ); for ( const o of orphans ) parts.push( prose( o.text ) ); }
+			out.push( { ...members[ 0 ], text: parts.join( '\n\n' ), mergeKey: null } );
 		}
-		// Care blocks belonging to no active lens ( shouldn't happen for a lens's own prose, but an
-		// injected-care drop could ) ride after the named groups rather than vanishing.
-		const allPaths = new Set( this.lenses.map( l => norm( l.getPath() ?? '' ) ) );
-		out.push( ...careBlocks.filter( b => !allPaths.has( norm( b.path ) ) ) );
 		return out;
 	}
 

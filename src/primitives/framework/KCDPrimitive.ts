@@ -1,7 +1,7 @@
 import { KcdParse } from '../../core/html/KcdParse';
 import { KcdEmit } from '../../core/html/KcdEmit';
 import { KcdContext } from '../../core/html/KcdContext';
-import type { ArtifactType, KCDRole, LinkEntry, LinkType, PolicyEntry, SerializedArtifact, TaggedBlock, TypeCheckIssue, WriteMap } from '../types';
+import type { ArtifactType, KCDRole, LinkEntry, LinkType, PolicyEntry, SerializedArtifact, SlotMode, TaggedBlock, TypeCheckIssue, WriteMap } from '../types';
 
 export const DREDGE_MAX = 4;
 
@@ -195,6 +195,64 @@ export class KCDPrimitive {
 		const habitClass = ( this.frontmatter[ 'habit-class' ] as string | undefined ) ?? null;
 		return KcdContext.projectBlocks( this.serialize(), region )
 			.map( b => ( { ...b, sourceLayer: 'lens' as const, path: this.path, artifactType: this.type, habitClass } ) );
+	}
+
+	/**
+	 * The token COST of this artifact's contribution — literally `getContextBlocks()` priced per block, so
+	 * it INHERITS that method's recursion instead of re-implementing it: a leaf sums its own region blocks,
+	 * a `LensObject` sums its dredged + injected children's ( `getContextBlocks()` already folds them in ),
+	 * and no per-type override is needed for either. An excluded artifact contributes no blocks, so it costs
+	 * 0 by construction. Deliberately loose — a ±5% variance is expected and fine ( per-block sums run a hair
+	 * above a single-pile estimate ); the only EXACT count is the real wire usage the agent reads back off a
+	 * response. ( `Agent` is not a `KCDPrimitive` and its context carries bound env beyond
+	 * `getContextBlocks()`, so it defines its OWN `estimateTokens()` over its compiled blocks — the same
+	 * price-the-blocks shape, one level up. )
+	 */
+	estimateTokens(): number {
+		return this.getContextBlocks().reduce( ( sum, b ) => sum + ( b.text ? KCDPrimitive._estimateTokens( b.text ) : 0 ), 0 );
+	}
+
+	/**
+	 * The one token estimator — chars ÷ 4, floored at 1 for a present-but-tiny block. Lives here beside the
+	 * hydrator registry + path utilities, so every artifact and both process-side `Utils` baskets share ONE
+	 * formula with no separate import ( the `_` marks it the shared primitive `estimateTokens()` piles text
+	 * into, not a public surface ). The real per-token count is a connector concern; this is the cheap,
+	 * always-available estimate the whole budget UI runs on. Identical to the renderer's old
+	 * `Utils.estimateTokens`, which now delegates here.
+	 */
+	static _estimateTokens( text: string ): number {
+		return Math.max( 1, Math.round( text.length / 4 ) );
+	}
+
+	/**
+	 * This artifact's FULL-body context cost — its whole projected block priced regardless of tuned state,
+	 * i.e. what it weighs at `suggested` mode. Distinct from `estimateTokens()`, which respects inclusion and
+	 * returns 0 when excluded: a composition card asks "what would this cost if it rode full-body", which is
+	 * this. ( The home for `Composition.contextTokens( primitive )`. )
+	 */
+	bodyTokens(): number {
+		return KCDPrimitive._estimateTokens( this.toContextBlock() );
+	}
+
+	/**
+	 * This artifact's `on`-mode ROUTING-ROW cost — the single manifest line `- {name} — {why} ({path})` it
+	 * reduces to when demoted from full body to a pointer. `why` is composition copy ( the lens slot's
+	 * description ), passed in because it lives on the lens→artifact relationship, not on the artifact
+	 * itself; name + path are the artifact's own. ( The home for `Composition.stubTokens( name, why, href )`. )
+	 */
+	stubTokens( why: string ): number {
+		return KCDPrimitive._estimateTokens( `- ${ this.getName() } — ${ why } (${ this.getPath() })` );
+	}
+
+	/**
+	 * This artifact's cost at a given slot mode — the ONE home for the off/on/suggested split, so every
+	 * composition row reads the same number the compile actually pays: `off` = 0, `on` = the routing row
+	 * ( `stubTokens` ), `suggested` = the full body ( `bodyTokens` ). The artifact-axis mirror of the tool
+	 * axis' baked per-mode counts. ( The home for `Composition.habitModeTokens( node, mode, name, why )`. )
+	 */
+	modeTokens( mode: SlotMode, why = '' ): number {
+		if ( mode === 'off' ) return 0;
+		return mode === 'suggested' ? this.bodyTokens() : this.stubTokens( why );
 	}
 
 	get included(): boolean { return this.isIncluded; }

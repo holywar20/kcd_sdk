@@ -190,8 +190,16 @@ export const KcdValidate = new class KcdValidate {
 				if ( merge && !KcdAddress.MERGES.includes( merge ) ) err( 'bad-merge', `section:${ v }`, `merge must be one of { ${ KcdAddress.MERGES.join( ' | ' ) } }` );
 			}
 
-			// slot — collect habit-class; flag rows that carry no addressable field; mode constrained
+			// slot — kind required; collect habit-class; flag rows that carry no addressable field; mode constrained
 			if ( KcdAddress.isSlot( el ) ) {
+				// a slot's KIND is load-bearing now ( protocol §3 — the parser keys dredge role off it, not off
+				// section position ). A bare `data-kcd-slot` is invalid, full stop: without a kind the row's
+				// role is ambiguous and only survives by inference, which future kind-trusting code will misread.
+				const kind = HtmlTree.get( el, 'data-kcd-slot' );
+				if ( !kind )
+					err( 'unkinded-slot', 'slot', `slot carries no kind — data-kcd-slot must name one of { ${ KcdAddress.SLOT_KINDS.join( ' | ' ) } }` );
+				else if ( !KcdAddress.SLOT_KINDS.includes( kind ) )
+					err( 'bad-slot-kind', `slot:${ kind }`, `slot kind "${ kind }" not in { ${ KcdAddress.SLOT_KINDS.join( ' | ' ) } }` );
 				const hc = HtmlTree.get( el, 'data-kcd-habit-class' );
 				if ( hc ) habitClasses[ hc ] = ( habitClasses[ hc ] ?? 0 ) + 1;
 				if ( HtmlTree.collect( el, d => KcdAddress.isField( d ) ).length === 0 )

@@ -6,6 +6,10 @@ import { KcdParse } from '../core/html/KcdParse';
 export interface ScanOptions {
 	/** Substring filter applied to relativePath. Omit to return all scanned files. */
 	filter?: string;
+	/** WHITELIST of immediate subdirectory names under the scan root to descend into. A top-level
+	 *  directory not in the set has its WHOLE subtree skipped ( never walked ); root-level files are
+	 *  still scanned, and directories below the first level are always walked. Omit to walk everything. */
+	includeDirs?: string[];
 }
 
 /** The file extensions the scanner indexes — HTML artifacts ( the substrate ) plus `.js` utilities
@@ -40,7 +44,8 @@ const LINK_RE = /\[([^\]]*)\]\(([^)]+)\)/g;
 
 export function scan( root: string, opts?: ScanOptions ): ScannedFile[] {
 	const absRoot = path.resolve( root );
-	const files   = walkFiles( absRoot );
+	const topDirs = opts?.includeDirs ? new Set( opts.includeDirs ) : null;
+	const files   = walkFiles( absRoot, topDirs );
 
 	return files
 		.map( absPath => parseFile( absPath, absRoot ) )
@@ -48,7 +53,10 @@ export function scan( root: string, opts?: ScanOptions ): ScannedFile[] {
 		.filter( f => !opts?.filter || f.relativePath.includes( opts.filter ) );
 }
 
-function walkFiles( dir: string ): string[] {
+/** `topDirs`, when non-null, gates ONLY the immediate subdirectories of the scan root ( `atRoot` ) — a
+ *  top-level dir not in the whitelist is skipped entirely, everything else ( root-level files, deeper
+ *  dirs ) is walked as normal. */
+function walkFiles( dir: string, topDirs: Set<string> | null, atRoot = true ): string[] {
 	const results: string[] = [];
 	let entries: fs.Dirent[];
 
@@ -61,7 +69,8 @@ function walkFiles( dir: string ): string[] {
 	for ( const entry of entries ) {
 		const fullPath = path.join( dir, entry.name );
 		if ( entry.isDirectory() ) {
-			results.push( ...walkFiles( fullPath ) );
+			if ( atRoot && topDirs && !topDirs.has( entry.name ) ) continue;
+			results.push( ...walkFiles( fullPath, topDirs, false ) );
 		} else if ( entry.isFile() && SCAN_EXTS.some( ext => entry.name.endsWith( ext ) ) ) {
 			results.push( fullPath );
 		}

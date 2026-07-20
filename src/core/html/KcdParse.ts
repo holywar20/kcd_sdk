@@ -25,8 +25,19 @@ import { classifyHref } from '../../primitives/framework/KCDPrimitive';
 import { KCDValidationError } from '../../primitives/errors';
 import type { ArtifactType, LinkEntry, PolicyEntry, SerializedArtifact, SlotMode } from '../../primitives/types';
 
-/** The lens section whose where-less slots name MCP tools ( not path artifacts ) + their mode. */
-const TOOLS_SECTION = 'tools';
+/** Section name → the dredge ROLE a bare ( unstamped ) slot infers — the fallback mirror of the canonical
+ *  slot-kind law ( `data-kcd-slot="<kind>"`, protocol §3 ). The explicit attribute always wins; this only
+ *  fires for a hand-authored slot that carries no stamp. `domains`/`domain` fold into `reference`. */
+const SLOT_ROLE: Record<string, string> = {
+	references: 'reference', domains: 'reference', domain: 'reference',
+	habits: 'habit', contracts: 'contract', tools: 'tool', rules: 'rule'
+};
+
+/** A slot's kind BY POSITION, when it carries no explicit `data-kcd-slot` value: its block's role, or
+ *  `link` ( the row carries an href ) / `table-data` ( no href ) for a non-role block. */
+function inferSlotKind( section: string | undefined, where: string ): string {
+	return ( section && SLOT_ROLE[ section ] ) || ( where ? 'link' : 'table-data' );
+}
 
 /** A dredge/nav slot row, structured ( protocol §3 ). `policy` now covers every region — a habit or
  *  contract slot is dredge-eligible the same way a reference slot is; only `mode` decides how much
@@ -35,6 +46,9 @@ export interface ParsedSlot {
 	what: string;
 	where: string;          // the href ( the `where` field is a link )
 	why: string;
+	/** The slot's KIND — the explicit `data-kcd-slot="<kind>"` value, or `inferSlotKind` for a bare slot.
+	 *  Dredge roles: reference / habit / contract / tool / rule; non-dredge: link / table-data. */
+	kind: string;
 	mode: SlotMode;
 	habitClass?: string;    // mutual-exclusion group ( protocol §6 ) — rich-model extra, not in frozen policy
 	region?: string;
@@ -111,15 +125,16 @@ export const KcdParse = new class KcdParse {
 		};
 	}
 
-	// ── Tools ( a lens's MCP tool composition — where-less slots in the Tools section ) ──
-	// A tool is NOT a path artifact: its slot names the tool ( the `what` cell ) and carries a mode, with
-	// no `where` link, so it never enters `policy` ( which skips where-less rows ). Collected here into a
-	// name → mode map the lens carries beside its dredged nodes. A row without a `what` or with mode `off`
-	// contributes nothing.
+	// ── Tools ( a lens's MCP tool composition — the `tool`-kind slots ) ──
+	// A tool is NOT a path artifact: its slot names the tool ( the `what` cell ) and carries a mode, no
+	// `where`, so it never enters `policy` ( which skips where-less rows ). Keyed on the explicit slot KIND
+	// now ( `data-kcd-slot="tool"` ), decoupled from the section NAME — the migration's whole point. Bare
+	// tool slots still resolve via `inferSlotKind` ( tools-section → tool ). A row without a `what` or with
+	// mode `off` contributes nothing.
 	toolModes( slots: ParsedSlot[] ): Record<string, SlotMode> {
 		const out: Record<string, SlotMode> = {};
 		for ( const s of slots ) {
-			if ( s.section !== TOOLS_SECTION || s.where || !s.what || s.mode === 'off' ) continue;
+			if ( s.kind !== 'tool' || !s.what || s.mode === 'off' ) continue;
 			out[ s.what ] = s.mode;
 		}
 		return out;
@@ -192,10 +207,12 @@ export const KcdParse = new class KcdParse {
 	readSlot( slot: HtmlEl, region: string | undefined, section: string | undefined ): ParsedSlot {
 		const cells = this.cells( slot );
 		const rawMode = HtmlTree.get( slot, 'data-kcd-mode' );
+		const where = cells.where ?? '';
 		return {
 			what:       cells.what  ?? '',
-			where:      cells.where ?? '',
+			where,
 			why:        cells.why   ?? '',
+			kind:       HtmlTree.get( slot, 'data-kcd-slot' ) || inferSlotKind( section, where ),
 			mode:       ( rawMode === 'off' || rawMode === 'suggested' ) ? rawMode : 'on',
 			habitClass: HtmlTree.get( slot, 'data-kcd-habit-class' ),
 			region,

@@ -223,10 +223,17 @@ export const KcdContext = new class KcdContext {
 			const tag = kid.tag;
 			if ( this.SKIP.has( tag ) ) continue;
 
+			// The Tools section is metadata: its `tool`-kind slots feed `KcdParse.toolModes` → the wire's tool
+			// manifest, and never ride as body content. Skip the whole section so BOTH stamped and bare tool
+			// slots stay out of Knowledge — a metadata section by name, exactly as References / Habits are
+			// manifest sections. ( Closes the Tools-in-Knowledge leak. )
+			if ( KcdAddress.isSection( kid ) && HtmlTree.get( kid, 'data-kcd-section' ) === 'tools' ) continue;
+
 			// A region wrapper is transparent: recurse in, but strip its own K/C/D label heading first.
 			if ( KcdAddress.isRegion( kid ) ) { this.block( this.dropRegionLabel( kid.kids ), out ); continue; }
 
-			if ( KcdAddress.isSlot( kid ) ) { out.push( this.slotLine( kid ) ); continue; }
+			// Defence for a stray explicit `tool` slot outside a Tools section — same metadata rule, by KIND.
+			if ( KcdAddress.isSlot( kid ) ) { if ( HtmlTree.get( kid, 'data-kcd-slot' ) === 'tool' ) continue; out.push( this.slotLine( kid ) ); continue; }
 
 			if ( this.HEADINGS.has( tag ) ) {
 				out.push( '', '#'.repeat( Number( tag[ 1 ] ) ) + ' ' + this.inline( kid ), '' );

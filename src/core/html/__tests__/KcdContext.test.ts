@@ -1,6 +1,7 @@
 import { describe, it, expect } from 'vitest';
 import { KcdParse } from '../KcdParse';
 import { KcdContext } from '../KcdContext';
+import { HtmlTree } from '../HtmlTree';
 
 const FIXTURE = `<!DOCTYPE html>
 <html lang="en">
@@ -22,7 +23,7 @@ const FIXTURE = `<!DOCTYPE html>
 <section data-kcd-section="references">
 <div data-kcd-table>
 <div data-kcd-head><span>What</span><span>Where</span><span>Why</span></div>
-<div data-kcd-slot data-kcd-mode="suggested">
+<div data-kcd-slot="reference" data-kcd-mode="suggested">
 <span data-kcd-field="what" data-kcd-type="text">A reference</span>
 <a data-kcd-field="where" data-kcd-type="path" href="_Claude/references/x.html">x</a>
 <span data-kcd-field="why" data-kcd-type="text">Because it matters.</span>
@@ -121,7 +122,7 @@ const LENS_FIXTURE = `<!DOCTYPE html>
 <h2>Know</h2>
 <p>The Know region's own intro paragraph, before its first named section.</p>
 <section data-kcd-section="references">
-<div data-kcd-slot><span data-kcd-field="what" data-kcd-type="text">A ref</span><a data-kcd-field="where" data-kcd-type="path" href="x.html">x</a><span data-kcd-field="why" data-kcd-type="text">reasons</span></div>
+<div data-kcd-slot="reference"><span data-kcd-field="what" data-kcd-type="text">A ref</span><a data-kcd-field="where" data-kcd-type="path" href="x.html">x</a><span data-kcd-field="why" data-kcd-type="text">reasons</span></div>
 </section>
 </section>
 <section data-kcd-region="care">
@@ -245,5 +246,75 @@ describe( 'KcdContext.projectBlocks — region-block decomposition (Phase 2)', (
 		const blocks = KcdContext.projectBlocks( artifact, 'know' );
 		const purpose = blocks.find( b => b.section === 'purpose' )!;
 		expect( purpose.rows ).toBeUndefined();
+	} );
+} );
+
+// A lens whose Do region carries a Tools section: three explicitly-stamped tool slots ( on / suggested /
+// off ) plus one BARE slot ( no data-kcd-slot value ) that must still resolve to `tool` by position.
+const TOOLS_FIXTURE = `<!DOCTYPE html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Tools Fixture</title></head>
+<body>
+<article data-kcd="lens">
+<dl data-kcd-frontmatter>
+<dt>name</dt><dd data-kcd-field="name" data-kcd-type="slug">tools-fixture</dd>
+<dt>description</dt><dd data-kcd-field="description" data-kcd-type="text">A fixture for tool-kind slot handling.</dd>
+<dt>type</dt><dd data-kcd-field="type" data-kcd-type="enum">lens</dd>
+<dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>
+</dl>
+<h1>Tools Fixture</h1>
+<p>The lens's own identity lede.</p>
+<section data-kcd-region="care">
+<section data-kcd-section="purpose"><p>Exists to test tool-kind slot handling.</p></section>
+</section>
+<section data-kcd-region="do">
+<section data-kcd-section="tools">
+<div data-kcd-table>
+<div data-kcd-head><span>Tool</span><span>Mode</span></div>
+<div data-kcd-slot="tool" data-kcd-mode="on"><span data-kcd-field="what" data-kcd-type="text">recall</span><span data-kcd-field="why" data-kcd-type="text">on</span></div>
+<div data-kcd-slot="tool" data-kcd-mode="suggested"><span data-kcd-field="what" data-kcd-type="text">learn</span><span data-kcd-field="why" data-kcd-type="text">suggested</span></div>
+<div data-kcd-slot="tool" data-kcd-mode="off"><span data-kcd-field="what" data-kcd-type="text">grep</span><span data-kcd-field="why" data-kcd-type="text">off</span></div>
+<div data-kcd-slot data-kcd-mode="on"><span data-kcd-field="what" data-kcd-type="text">write</span><span data-kcd-field="why" data-kcd-type="text">on</span></div>
+</div>
+</section>
+</section>
+</article>
+</body>
+</html>
+`;
+
+// NOTE: this fixture keeps ONE deliberately-bare slot ( `write` ) to prove the parser still INFERS a
+// slot's kind by position ( `inferSlotKind`, live by design ). A bare slot is invalid per the validator
+// now, so these tests build through `KcdParse.build( HtmlTree.parse( … ) )` — the non-validating assembly
+// path — rather than `KcdParse.parse`, which would reject the doc at the gate. Inference is a parser
+// resilience feature; validity is a separate, stricter contract.
+describe( 'KcdParse / KcdContext — tool-kind slots ( explicit data-kcd-slot="tool" + bare-slot fallback )', () => {
+	it( 'toolModes keys on the KIND, not the section name — explicit `tool` slots AND a bare tools-section slot both resolve; mode `off` drops out', () => {
+		const artifact = KcdParse.build( HtmlTree.parse( TOOLS_FIXTURE ), 'tools.html' );
+		expect( artifact.toolModes ).toEqual( { recall: 'on', learn: 'suggested', write: 'on' } );
+		// grep is mode `off` → contributes nothing.
+		expect( artifact.toolModes.grep ).toBeUndefined();
+	} );
+
+	it( 'a bare slot in a tools section infers kind `tool` by position; an explicit stamp is read verbatim', () => {
+		const artifact = KcdParse.build( HtmlTree.parse( TOOLS_FIXTURE ), 'tools.html' );
+		const byName = ( n: string ) => artifact.slots.find( s => s.what === n )!;
+		expect( byName( 'recall' ).kind ).toBe( 'tool' );   // explicit
+		expect( byName( 'write' ).kind ).toBe( 'tool' );    // inferred from the tools section
+	} );
+
+	it( 'a tool slot is metadata — it never renders into the compiled body ( the Tools-in-Knowledge leak, closed )', () => {
+		const artifact = KcdParse.build( HtmlTree.parse( TOOLS_FIXTURE ), 'tools.html' );
+		const wire = KcdContext.projectBlocks( artifact, 'know' ).map( b => b.text ).join( '\n' );
+		expect( wire ).not.toContain( 'recall' );
+		expect( wire ).not.toContain( '— on' );           // the "recall — on" slot-line shape must be absent
+		expect( wire ).not.toMatch( /#+\s+Tools/ );         // and no bare Tools heading either
+		// The all-tool section renders to empty text, so no block survives for it.
+		expect( KcdContext.projectBlocks( artifact, 'know' ).some( b => b.section === 'tools' ) ).toBe( false );
+	} );
+
+	it( 'the flat human preview drops tool slots too ( same block() render gate )', () => {
+		const artifact = KcdParse.build( HtmlTree.parse( TOOLS_FIXTURE ), 'tools.html' );
+		expect( KcdContext.project( artifact ) ).not.toContain( 'recall' );
 	} );
 } );

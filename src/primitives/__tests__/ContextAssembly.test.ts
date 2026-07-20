@@ -25,8 +25,8 @@ const LENS_HTML = `<!DOCTYPE html>
 <p>Its identity lede.</p>
 <section data-kcd-region="know">
 <section data-kcd-section="references">
-<div data-kcd-slot data-kcd-mode="suggested"><span data-kcd-field="what" data-kcd-type="text">Reference A</span><a data-kcd-field="where" data-kcd-type="path" href="ref-a.html">a</a><span data-kcd-field="why" data-kcd-type="text">reason A</span></div>
-<div data-kcd-slot data-kcd-mode="suggested"><span data-kcd-field="what" data-kcd-type="text">Reference B</span><a data-kcd-field="where" data-kcd-type="path" href="ref-b.html">b</a><span data-kcd-field="why" data-kcd-type="text">reason B</span></div>
+<div data-kcd-slot="reference" data-kcd-mode="suggested"><span data-kcd-field="what" data-kcd-type="text">Reference A</span><a data-kcd-field="where" data-kcd-type="path" href="ref-a.html">a</a><span data-kcd-field="why" data-kcd-type="text">reason A</span></div>
+<div data-kcd-slot="reference" data-kcd-mode="suggested"><span data-kcd-field="what" data-kcd-type="text">Reference B</span><a data-kcd-field="where" data-kcd-type="path" href="ref-b.html">b</a><span data-kcd-field="why" data-kcd-type="text">reason B</span></div>
 </section>
 </section>
 <section data-kcd-region="care">
@@ -165,8 +165,8 @@ describe( 'LensObject.getContextBlocks + ContextAssembler — Phase 2 integratio
 </dl>
 <section data-kcd-region="know">
 <section data-kcd-section="references">
-<div data-kcd-slot data-kcd-mode="off"><span data-kcd-field="what" data-kcd-type="text">Disabled Reference</span><a data-kcd-field="where" data-kcd-type="path" href="ref-off.html">off</a><span data-kcd-field="why" data-kcd-type="text">turned off</span></div>
-<div data-kcd-slot><span data-kcd-field="what" data-kcd-type="text">Default Reference</span><a data-kcd-field="where" data-kcd-type="path" href="ref-on.html">on</a><span data-kcd-field="why" data-kcd-type="text">default on-mode</span></div>
+<div data-kcd-slot="reference" data-kcd-mode="off"><span data-kcd-field="what" data-kcd-type="text">Disabled Reference</span><a data-kcd-field="where" data-kcd-type="path" href="ref-off.html">off</a><span data-kcd-field="why" data-kcd-type="text">turned off</span></div>
+<div data-kcd-slot="reference"><span data-kcd-field="what" data-kcd-type="text">Default Reference</span><a data-kcd-field="where" data-kcd-type="path" href="ref-on.html">on</a><span data-kcd-field="why" data-kcd-type="text">default on-mode</span></div>
 </section>
 </section>
 </article>
@@ -214,7 +214,7 @@ const slotLensHtml = ( mode: 'on' | 'suggested' ) => `<!DOCTYPE html>
 </dl>
 <section data-kcd-region="know">
 <section data-kcd-section="references">
-<div data-kcd-slot${ mode === 'suggested' ? ' data-kcd-mode="suggested"' : '' } data-kcd-habit-class="session-logging"><span data-kcd-field="what" data-kcd-type="text">session-log-aggressive</span><a data-kcd-field="where" data-kcd-type="path" href="_Claude/habits/session-logging/session-log-aggressive.html">session-log-aggressive</a><span data-kcd-field="why" data-kcd-type="text">default</span></div>
+<div data-kcd-slot="reference"${ mode === 'suggested' ? ' data-kcd-mode="suggested"' : '' } data-kcd-habit-class="session-logging"><span data-kcd-field="what" data-kcd-type="text">session-log-aggressive</span><a data-kcd-field="where" data-kcd-type="path" href="_Claude/habits/session-logging/session-log-aggressive.html">session-log-aggressive</a><span data-kcd-field="why" data-kcd-type="text">default</span></div>
 </section>
 </section>
 </article>
@@ -289,7 +289,7 @@ const planSlotLensHtml = ( planHref: string ) => `<!DOCTYPE html>
 </dl>
 <section data-kcd-region="know">
 <section data-kcd-section="references">
-<div data-kcd-slot data-kcd-mode="suggested"><span data-kcd-field="what" data-kcd-type="text">context-optimization plan</span><a data-kcd-field="where" data-kcd-type="path" href="${ planHref }">context-optimization</a><span data-kcd-field="why" data-kcd-type="text">the plan this lens tracks</span></div>
+<div data-kcd-slot="reference" data-kcd-mode="suggested"><span data-kcd-field="what" data-kcd-type="text">context-optimization plan</span><a data-kcd-field="where" data-kcd-type="path" href="${ planHref }">context-optimization</a><span data-kcd-field="why" data-kcd-type="text">the plan this lens tracks</span></div>
 </section>
 </section>
 </article>
@@ -361,24 +361,27 @@ describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Ph
 		expect( withExtras.map( b => b.text ).join( '\n\n' ) ).toBe( agent.compile() + '\n\n---\n\n' + 'TOOL MANIFEST' );
 	} );
 
-	it( 'the `memory` extra lands under its own ## Memory band, BEFORE Knowledge and the Manifest (band model re-ratified 2026-07-13)', () => {
+	it( 'the `memory` extra lands under its own # Memory band, above the Manifest (band model re-ratified 2026-07-13)', () => {
 		const agent = loadBase();
 		const out = agent.compiledBlocks( { memory: [ Agent.memoryBlock( '- claim — because reason' ) ] } ).map( b => b.text ).join( '\n\n' );
 		const memHeadIdx  = out.indexOf( '# Memory' );
 		const proseIdx    = out.indexOf( '- claim — because reason' );
-		const knowledgeIdx = out.indexOf( '# Knowledge' );  // core band
+		// NOTE: no `# Knowledge` band to index here — a base-only agent has no core content ( its
+		// references/habits/contracts all hoist into the Manifest ), so there is no core tier to order
+		// against. Asserting one existed is exactly what this test used to get wrong. The full
+		// care→memory→core→manifest order is locked by the ContextAssembler.sort unit test above.
 		const manifestIdx  = out.indexOf( '# Manifest' );   // the manifest band — base lens always has one
 		expect( memHeadIdx ).toBeGreaterThan( -1 );
 		expect( proseIdx ).toBeGreaterThan( memHeadIdx );      // prose rides under its heading
-		expect( knowledgeIdx ).toBeGreaterThan( proseIdx );    // memory now precedes Knowledge, per Bryan's placement
-		expect( manifestIdx ).toBeGreaterThan( knowledgeIdx );
+		expect( manifestIdx ).toBeGreaterThan( proseIdx );     // memory precedes the Manifest
 	} );
 
-	it( 'each lens is its OWN top-level "## {Name} - Lens" band — no "## Lenses" wrapper', () => {
+	it( 'care groups by KIND — top-level "# Purpose" / "# Philosophy" bands, lenses as "## {lens}" sub-sections', () => {
 		const agent = loadBase();
 		const out = agent.compiledBlocks().map( b => b.text ).join( '\n\n' );
 		expect( out ).not.toContain( '## Lenses' );          // no container band
-		expect( out ).toMatch( /^# .+ - Lens$/m );           // a named per-lens heading rides the wire
+		expect( out ).not.toMatch( / - Lens$/m );            // the per-lens band heading is gone
+		expect( out ).toMatch( /^# Philosophy$/m );          // the KIND is the top-level band now
 	} );
 
 	it( 'per-block weight sums to the whole-string weight, for ANY consistent length function — the identity that makes a real tokenizer sum agree with the wire estimate', () => {
@@ -531,8 +534,8 @@ describe( 'ContextAssembler — unit', () => {
 	} );
 
 	it( 'the band headings track the re-ratified names: care→(no wrapper), memory→Memory, core→Knowledge, manifest→Manifest', () => {
-		// The care tier gets NO wrapper heading — each lens is its own top-level `## {Name} - Lens` band,
-		// built by `Agent.buildLensBand`, not a "## Lenses" parent.
+		// The care tier gets NO wrapper heading — care groups by KIND into top-level `# Purpose` / `# Philosophy`
+		// bands ( built by `Agent.buildCareBands` ), not a "## Lenses" parent.
 		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.care ) ).toBeNull();
 		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.memory ) ).toBe( '# Memory' );
 		// Knowledge / Manifest carry a directive line beneath the heading ( forced-read vs read-on-demand ).

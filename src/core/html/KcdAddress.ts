@@ -34,6 +34,11 @@ export const KcdAddress = new class KcdAddress {
 	 *  slot can point at ) shares — same three states MCP tool exposure already uses. Absent on a
 	 *  slot ⇒ 'on', the default. See PolicyEntry / SlotMode in primitives/types.ts. */
 	MODES        = [ 'off', 'on', 'suggested' ];
+	/** The closed slot-KIND vocabulary ( protocol §3 — `data-kcd-slot="<kind>"` ). Dredge roles
+	 *  ( reference / habit / contract / tool / rule ) plus the non-dredge kinds ( `link` = a nav row
+	 *  carrying an href, `table-data` = a plain faux-table row ); `domains` folds into `reference`.
+	 *  Every slot MUST name one — a bare `data-kcd-slot` is invalid ( KcdValidate: `unkinded-slot` ). */
+	SLOT_KINDS   = [ 'reference', 'habit', 'contract', 'tool', 'rule', 'link', 'table-data' ];
 
 	KNOWN_ATTRS = [
 		'data-kcd', 'data-kcd-frontmatter', 'data-kcd-field', 'data-kcd-type',

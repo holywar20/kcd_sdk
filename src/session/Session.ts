@@ -12,6 +12,8 @@
  * bridge whole via serialize / fromSerialized, the same trinity as Agent.
  */
 
+import { Transcript, type Turn, type WireMessage, type TranscriptRow } from './TurnEntry';
+
 export type SessionStatus = 'active' | 'archived';
 
 /** The generic font stacks a session's chat surface can pick between — the render side owns
@@ -77,6 +79,13 @@ export class Session {
 	status: SessionStatus;
 	zoom: number | null;
 	fontFamily: FontFamilyKey | null;
+
+	/** The session's DYNAMIC context — the typed, ordered transcript of turns ( user / assistant /
+	 *  tool-call / tool-result / injected-file, plus display-only thinking ). NON-PERSISTED object state,
+	 *  the mirror of agent.bindEnv: never in SerializedSession, rebuilt on arrival via bindTranscript().
+	 *  Its home of record is the DB `entries` rows ( hydrated on load — see bindTranscript ). Empty until
+	 *  bound, so it is never null. */
+	transcript: Transcript = Transcript.empty();
 
 	private constructor(
 		id: string,
@@ -189,6 +198,34 @@ export class Session {
 	setDisplay( zoom: number | null, fontFamily: FontFamilyKey | null ): void {
 		this.zoom = zoom;
 		this.fontFamily = fontFamily;
+	}
+
+	// ── Transcript ( the dynamic half of the wire ) ─────────────────────────────
+
+	/** Rebuild the transcript wholesale from a turn list — the flush-and-fill mirror of agent.bindEnv().
+	 *  Aggressive rebuild is cheap and always correct; the source is the DB `entries` rows on load, or the
+	 *  live turn list the renderer projects. Non-persisted: it is never written by serializeForWire. */
+	bindTranscript( turns: Turn[] ): void {
+		this.transcript = new Transcript( turns );
+	}
+
+	/** The DYNAMIC half of the wire — the transcript projected to neutral messages a connector maps to its
+	 *  provider format ( thinking excluded ). Joins agent.wireSystem() ( the stable half ) at send:
+	 *  the whole request is { system: agent.wireSystem(), messages: session.wireMessages() }. */
+	wireMessages(): WireMessage[] {
+		return this.transcript.wireMessages();
+	}
+
+	/** The inspector itinerary — every transcript entry ( thinking included ) as a flat, ordered display
+	 *  row. The Turns folder reads this; the System folder reads agent.wireSystem(). */
+	transcriptRows(): TranscriptRow[] {
+		return this.transcript.rows();
+	}
+
+	/** The session's own context cost — the wire weight of its transcript ( self-priced per entry ). The
+	 *  whole-context estimate folds this onto agent.estimateTokens(); a caller sums the two halves. */
+	estimateTokens(): number {
+		return this.transcript.estimateTokens();
 	}
 
 	/** A display title even when none was set — the explicit title, else a stamp-derived fallback. */

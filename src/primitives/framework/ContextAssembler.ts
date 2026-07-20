@@ -42,8 +42,10 @@
  * Sort: FIVE tiers, `care` → `memory` → `core` → `manifest` → `injected` ( compiled-context plan,
  * band model re-ratified 2026-07-13 ). `care` floats to the very top ( the cache-stable prefix — a
  * lens's identity rarely changes turn to turn ) and surfaces on the wire as one top-level
- * `## {Name} - Lens` band PER active lens — no "## Lenses" wrapper ( `Agent.buildLensBand` builds them,
- * since it knows lens names; `_lens_base`'s care folds into each, repeated per lens ). `memory` is the system-fired PRELOAD baseline ( `section: 'memory'`,
+ * by-KIND care band — one top-level `# Purpose` / `# Philosophy` block PER care kind, each merging every
+ * active lens's contribution as labeled `## {lens}` sub-sections ( `Agent.buildCareBands` builds them,
+ * since it knows lens names + primacy; primary leads and is marked, `_lens_base` follows as `Base lens` ).
+ * No "## Lenses" wrapper. `memory` is the system-fired PRELOAD baseline ( `section: 'memory'`,
  * injected by the orchestrator, not authored ) — it now sits BETWEEN the Lenses band and Knowledge
  * ( Bryan, 2026-07-13: "add a space for memory... after the lenses but before knowledge" ), reserved
  * even while empty. `core` is everything else that isn't a manifest table — the lens's own non-routing
@@ -213,8 +215,8 @@ export const ContextAssembler = new class ContextAssembler {
 	 *  2026-07-13: memory moved ABOVE core, "after the lenses but before knowledge"; routing renamed
 	 *  manifest ). Named ( not bare literals scattered through `tierOf`/`bandHeading`/`Agent.compiledBlocks` )
 	 *  so a caller references a tier by what it IS, and reordering one is a single edit here rather than a
-	 *  hunt for every magic number. Surfaced band names: care→per-lens `## {Name} - Lens` ( no wrapper,
-	 *  built by `Agent.buildLensBand` ), memory→Memory, core→Knowledge, manifest→Manifest ( `bandHeading` ). */
+	 *  hunt for every magic number. Surfaced band names: care→by-kind `# Purpose` / `# Philosophy` ( no
+	 *  wrapper, built by `Agent.buildCareBands` ), memory→Memory, core→Knowledge, manifest→Manifest ( `bandHeading` ). */
 	readonly TIER = { care: 0, memory: 1, core: 2, manifest: 3, injected: 4 } as const;
 
 	/** This block's sort tier ( see `TIER` ). Exposed ( not just a `sort()`-local closure ) so
@@ -240,11 +242,11 @@ export const ContextAssembler = new class ContextAssembler {
 	/** Display-band heading per tier ( compiled-context plan, band model re-ratified 2026-07-13 ) —
 	 *  deliberately NOT the internal region/tier vocabulary: "Knowledge," not "Know"/"core," since
 	 *  Know/Care/Do's future as internal categories is unsettled. The `care` tier gets NO wrapper heading
-	 *  here: each lens is its OWN top-level `## {Name} - Lens` band ( no "## Lenses" parent — Bryan's
-	 *  attention model: the output is grouped by kind, and a lens's personality is a top-level block, not
-	 *  a child of a Lenses container ), built by `Agent.buildLensBand` since it knows lens names. Knowledge
-	 *  / Manifest carry a directive line ( forced-read vs read-on-demand ). `null` for any tier with no
-	 *  settled heading — including `care` ( per-lens headings live one layer up ) and `injected`
+	 *  here: care is grouped by KIND into top-level `# Purpose` / `# Philosophy` bands ( no "## Lenses"
+	 *  parent — Bryan's attention model: the output is grouped by kind, and each source lens is a labeled
+	 *  `## {lens}` sub-section under it ), built by `Agent.buildCareBands` since it knows lens names + primacy.
+	 *  Knowledge / Manifest carry a directive line ( forced-read vs read-on-demand ). `null` for any tier with
+	 *  no settled heading — including `care` ( the kind headings live one layer up ) and `injected`
 	 *  ( session-dropped content is NOT the plan's "Turn History" band — see Phase 6 ). */
 	bandHeading( tier: number ): string | null {
 		return ( {
