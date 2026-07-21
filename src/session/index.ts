@@ -1,2 +1,3 @@
 export * from './Session';
+export * from './RoomSession';
 export * from './TurnEntry';

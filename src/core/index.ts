@@ -14,6 +14,7 @@ export * from '../agent';
 export * from '../session';
 export * from '../constellation';
 export * from './Assert';
+export * from './VaultLayout';
 export * from './FileTypes';
 export * from './TextTypes';
 export * from './Glob';

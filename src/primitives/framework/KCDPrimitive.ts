@@ -1,6 +1,7 @@
 import { KcdParse } from '../../core/html/KcdParse';
 import { KcdEmit } from '../../core/html/KcdEmit';
 import { KcdContext } from '../../core/html/KcdContext';
+import { VaultLayout } from '../../core/VaultLayout';
 import type { ArtifactType, KCDRole, LinkEntry, LinkType, PolicyEntry, SerializedArtifact, SlotMode, TaggedBlock, TypeCheckIssue, WriteMap } from '../types';
 
 export const DREDGE_MAX = 4;
@@ -296,40 +297,13 @@ export function classifyHref( href: string ): LinkType {
 
 /**
  * The path taxonomy: a vault-root-relative path (`_Claude/...`) to its ArtifactType.
- * One switch for every classifier — LensObject.classifyByPath wraps this for absolute
- * paths; getBacklinks feeds it hrefs directly (link hrefs are vault-root-relative
- * by project convention). HTML is the substrate, so the file form is `.html`.
+ * LensObject.classifyByPath wraps this for absolute paths; getBacklinks feeds it hrefs
+ * directly (link hrefs are vault-root-relative by project convention).
+ *
+ * The taxonomy itself lives in VaultLayout (`@kcd/core`) — one table that classification,
+ * the library index whitelist, and the deploy scaffold all read, so the structure can't drift
+ * between them again. This stays as the established entry point for existing callers.
  */
 export function classifyRelPath( rel: string, docRoot = '_Claude' ): ArtifactType {
-	const norm = rel.replace( /\\/g, '/' );
-
-	if ( !norm.startsWith( docRoot + '/' ) ) return 'unknown';
-
-	// Nav-index files are first-class navigational primitives, regardless of which folder they sit in.
-	if ( norm.endsWith( '/nav-index.html' ) ) return 'nav-index';
-
-	const sub = norm.slice( docRoot.length + 1 );
-
-	// context/ holds support material for any parent (lens, analyzer, generator) — always reference.
-	if ( sub.includes( '/context/' ) ) return 'reference';
-
-	if ( sub.startsWith( 'lenses/' ) ) {
-		// Only the lens file itself and direct per-lens dirs are type lens.
-		// Anything nested deeper (context/, support docs) is reference material.
-		const parts = sub.split( '/' );
-		if ( parts.length <= 3 ) return 'lens';
-		return 'reference';
-	}
-	if ( sub.startsWith( 'plans_complete/' ) ) return 'plan';
-	if ( sub.startsWith( 'plans/' ) )          return 'plan';
-	if ( sub.startsWith( 'references/' ) )     return 'reference';
-	if ( sub.startsWith( 'generators/' ) )     return 'generator';
-	if ( sub.startsWith( 'analyzers/' ) )      return 'analyzer';
-	if ( sub.startsWith( 'utilities/' ) )      return 'utility';
-	if ( sub.startsWith( 'habits/' ) )         return 'habit';
-	if ( sub.startsWith( 'contracts/' ) )      return 'contract';
-	if ( sub.startsWith( 'kcd/templates/' ) )  return 'template';
-	if ( sub.startsWith( 'kcd/' ) )            return 'framework';
-
-	return 'unknown';
+	return VaultLayout.classify( rel, docRoot );
 }
