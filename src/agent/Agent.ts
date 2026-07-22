@@ -4,12 +4,51 @@ import type { SlotResolution } from '../primitives/framework/SlotResolver';
 import { ContextAssembler, MANIFEST_SECTIONS } from '../primitives/framework/ContextAssembler';
 import { KcdContext } from '../core/html/KcdContext';
 import { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
-import type { ArtifactType, ContextSegment, PolicyEntry, SerializedArtifact, SerializedLens, SlotMode, TaggedBlock } from '../primitives/types';
+import type { ArtifactType, ContextSegment, PolicyEntry, SerializedArtifact, SerializedLens, SlotMode, SourceLayer, TaggedBlock } from '../primitives/types';
+
+/**
+ * One habit in the COMPOSITION view — an inventory entry, not a compiled block. Carries the two modes a
+ * composition surface needs to tell inheritance from decision: `natural` ( what it is with no override )
+ * and `mode` ( what it actually is ). A row at `mode: 'off'` is still here — that is the whole point of
+ * this view versus `slots()`. See `Agent.habitSlots()`.
+ */
+export interface HabitSlotCandidate {
+	path:        string;
+	/** the mutual-exclusion class, or null for a bare drop-in that contends nothing. */
+	habitClass:  string | null;
+	sourceLayer: SourceLayer;
+	/** the mode in force ( this agent's override, else the natural mode ). */
+	mode:        SlotMode;
+	/** the mode with NO agent override — what a click must match to CLEAR rather than write. */
+	natural:     SlotMode;
+	won:         boolean;
+}
+
+/** One habit-class's composition view: every candidate that declared the class, and which one wins. A
+ *  classless habit gets its own single-candidate entry with `habitClass: null`. */
+export interface HabitSlotView {
+	habitClass: string | null;
+	winner:     HabitSlotCandidate;
+	candidates: HabitSlotCandidate[];
+}
 import { DEFAULT_MODEL_KEY } from './Model';
 import type { ToolMode } from './ToolMode';
 import type { ToolDef } from './ToolDef';
 
-export type AgentStatus = 'idle' | 'thinking';
+/*
+ * An Agent deliberately has NO status ( removed 2026-07-21 ). It used to carry
+ * `status: 'idle' | 'thinking'`, which was run-state living on the wrong noun: an agent is a
+ * CONFIGURATION — an identity, a lens stack, a tool composition — and configuration does not run.
+ * A turn runs, inside a session. So the flag moved to `Session.turnStatus`, where the thing being
+ * described actually exists.
+ *
+ * It was also, in fact, dead: it was set around each turn, broadcast on an `agent_status` event, and
+ * mirrored renderer-side, but NO component ever read it — the UI's real busy signal was the Session
+ * store's local `pending`. Two sessions of the same agent running at once would also clobber it
+ * ( whichever finished first flipped the shared flag to idle while the other was still going ), so
+ * even its intended reading was wrong. Moving it onto the session makes that case correct by
+ * construction: each run owns its own flag.
+ */
 
 /**
  * The wire / DB-seed form of an Agent. Deliberately LIGHT and DECLARATIVE: the lens
@@ -94,7 +133,6 @@ export interface SerializedAgent {
 	system: Record<string, unknown>;
 	/** Runtime identity — defaulted in. An agent with no lenses is a draft, derived, not a status. */
 	createdAt: number;
-	status: AgentStatus;
 	/** Path-style folder string (e.g. "work/writing"). Absent = ungrouped. */
 	folder?: string;
 	/** Human scratch-pad — per-agent sticky note. Null = empty. */
@@ -120,7 +158,6 @@ export interface AgentOptions {
 	habitModes?: Record<string, SlotMode>;
 	fields?: Record<string, unknown>[];
 	system?: Record<string, unknown>;
-	status?: AgentStatus;
 	folder?: string;
 	notes?: string | null;
 }
@@ -194,7 +231,6 @@ export class Agent {
 
 	// ── Runtime identity ──
 	readonly createdAt: number;
-	status: AgentStatus;
 	folder: string | undefined;
 	notes: string | null;
 
@@ -256,7 +292,6 @@ export class Agent {
 		fields: Record<string, unknown>[],
 		system: Record<string, unknown>,
 		createdAt: number,
-		status: AgentStatus,
 		folder: string | undefined,
 		notes: string | null,
 	) {
@@ -279,7 +314,6 @@ export class Agent {
 		this.fields         = fields;
 		this.system         = system;
 		this.createdAt      = createdAt;
-		this.status         = status;
 		this.folder         = folder;
 		this.notes          = notes;
 		this.compose();   // materialize composed{X} from the lenses on the way in
@@ -310,7 +344,6 @@ export class Agent {
 			opts.fields ?? [],
 			opts.system ?? {},
 			Date.now(),
-			opts.status ?? 'idle',
 			opts.folder,
 			opts.notes ?? null,
 		);
@@ -340,7 +373,6 @@ export class Agent {
 			json.fields ?? [],
 			json.system ?? {},
 			json.createdAt,
-			json.status,
 			json.folder,
 			json.notes ?? null,
 		);
@@ -375,7 +407,6 @@ export class Agent {
 			fields:         this.fields.map( ( f ) => ( { ...f } ) ),
 			system:         { ...this.system },
 			createdAt:      this.createdAt,
-			status:         this.status,
 			folder:         this.folder,
 			notes:          this.notes,
 			baseHabitNodes:     this.baseHabitNodes.map( ( n ) => n.serialize() ),
@@ -437,37 +468,61 @@ export class Agent {
 		return { ...this.composedToolModes, ...this.toolModes };
 	}
 
-	/** The effective slot mode of one INHERITED lens habit ( keyed by path ): this agent's override if it
-	 *  authored one, else the lens's own dredged mode ( `suggested` when the node rides its body, `on`
-	 *  otherwise ). The habit sibling of `effectiveToolModes` — the ONE read the compile and the agent
-	 *  screen share, so the row's colour ( overridden vs inherited ) and what actually compiles can't drift.
-	 *  `null` for a path this agent carries no lens habit for. */
-	effectiveHabitMode( path: string ): SlotMode | null {
-		const override = this.habitModes[ path ];
-		if ( override ) return override;
-		const lensNode = this.getNodes().find( n => n.getType() === 'habit' && n.getPath() === path );
-		if ( lensNode ) return lensNode.included ? 'suggested' : 'on';
-		// an agent's OWN pick has no lens policy to inherit from — its un-overridden default is `suggested`
-		// ( full body ), matching `habitOff`'s long-standing binary default ( absent from `habitOff` = on,
-		// carrying its full body ) now that `habitModes` can express the third tier for these paths too.
-		const ownNode = this.baseHabitNodes.find( n => n.getPath() === path );
-		if ( ownNode ) return this.habitOff.includes( path ) ? 'off' : 'suggested';
+	/**
+	 * What a LENS supplies for one path, before any agent override — the authored mode off the lens POLICY,
+	 * or `on` for a node a lens dredges without naming in its table. `null` when no lens supplies the path
+	 * at all, which is also the "is there anything to inherit?" question every composition surface asks.
+	 *
+	 * Read from POLICY, deliberately — never from the node's live `included` flag, which `getContextBlocks`
+	 * MUTATES on every compile ( see its doc comment: "never off the node's live `included`, which we
+	 * mutate here" ). `effectiveHabitMode` used to read exactly that mutated flag, so the inherited mode it
+	 * reported depended on whether a compile had run since — and the agent screen's "is this overridden?"
+	 * could disagree with the write path's idea of the natural mode, writing a same-value override that
+	 * could never be cleared. Policy is authored state; it holds still.
+	 *
+	 * Floored at `on`: a lens that authors `off` is declining to push the thing, not forcing it out of an
+	 * agent that wears the lens — taking something fully off is the AGENT's call, and that floor is what
+	 * makes `off` unambiguously an agent-level decision on every row.
+	 */
+	lensNaturalMode( path: string ): SlotMode | null {
+		const norm  = ( s: string ): string => s.replace( /\\/g, '/' );
+		const entry = this.getPolicy().find( e => e.href && norm( path ).endsWith( norm( e.href ) ) );
+		if ( entry ) return entry.mode === 'off' ? 'on' : entry.mode;
+		return this.getNodes().some( n => n.getPath() === path ) ? 'on' : null;
+	}
+
+	/** One habit's NATURAL resting mode — what it is with no agent override at all: the lens's authored
+	 *  mode where a lens supplies it, else `suggested` for the agent's own pick ( adding a habit means
+	 *  wanting it; the legacy binary `habitOff` set still forces `off` ). `null` for a path this agent
+	 *  carries no habit for. THE read the write path compares a click against, so clicking a row's own
+	 *  resting value clears the override instead of re-storing it. */
+	naturalHabitMode( path: string ): SlotMode | null {
+		const lensMode = this.lensNaturalMode( path );
+		if ( lensMode !== null ) return lensMode;
+		if ( this.baseHabitNodes.some( n => n.getPath() === path ) ) return this.habitOff.includes( path ) ? 'off' : 'suggested';
 		return null;
 	}
 
-	/** The effective slot mode of one reference ( keyed by path ) — EITHER a lens-inherited reference OR
-	 *  one of this agent's own `baseReferences`, the reference sibling of `effectiveHabitMode`. This agent's
-	 *  override wins if it authored one; else a lens-inherited reference reads its own dredged mode ( off
-	 *  `included`, same convention as `effectiveHabitMode` ); else an own pick falls back to the legacy
-	 *  binary `referenceOff` default. `null` for a path this agent carries no reference for at all. */
-	effectiveReferenceMode( path: string ): SlotMode | null {
-		const override = this.referenceModes[ path ];
-		if ( override ) return override;
-		const lensNode = this.getNodes().find( n => n.getType() === 'reference' && n.getPath() === path );
-		if ( lensNode ) return lensNode.included ? 'suggested' : 'on';
-		const ownNode = this.baseReferenceNodes.find( n => n.getPath() === path );
-		if ( ownNode ) return this.referenceOff.includes( path ) ? 'off' : 'suggested';
+	/** The reference sibling of `naturalHabitMode` — identical shape, identical reason, one inventory
+	 *  ( `baseReferenceNodes` / `referenceOff` ) different. */
+	naturalReferenceMode( path: string ): SlotMode | null {
+		const lensMode = this.lensNaturalMode( path );
+		if ( lensMode !== null ) return lensMode;
+		if ( this.baseReferenceNodes.some( n => n.getPath() === path ) ) return this.referenceOff.includes( path ) ? 'off' : 'suggested';
 		return null;
+	}
+
+	/** The effective slot mode of one habit ( keyed by path ) — this agent's override if it authored one,
+	 *  else the natural mode. The habit sibling of `effectiveToolModes`: the ONE read the compile and the
+	 *  agent screen share, so a row's colour and what actually compiles can't drift. */
+	effectiveHabitMode( path: string ): SlotMode | null {
+		return this.habitModes[ path ] ?? this.naturalHabitMode( path );
+	}
+
+	/** The effective slot mode of one reference ( keyed by path ) — EITHER a lens-inherited reference OR one
+	 *  of this agent's own `baseReferences`. The reference sibling of `effectiveHabitMode`. */
+	effectiveReferenceMode( path: string ): SlotMode | null {
+		return this.referenceModes[ path ] ?? this.naturalReferenceMode( path );
 	}
 
 	// ── Lens surface ──────────────────────────────────────────────────────────
@@ -708,7 +763,15 @@ export class Agent {
 		const suggested = this.suggestedToolDefs();
 		const memory    = ( this.system[ 'memoryEnabled' ] !== false ) ? this.memory : '';
 		return this.compiledBlocks( {
-			before: this.rootContext ? [ Agent.extraBlock( 'root-context', this.rootContext ) ] : [],
+			before: Agent.joinSegments( [
+				// The agent's OWN authored instruction leads everything — it is the most specific statement of
+				// who this agent is, and it led the wire long before the compile existed ( the orchestrator's
+				// old `assembleSystem([ systemPrompt, ... ])` put it first ). Folding it in HERE is what closes
+				// the preview ≠ wire gap on the system half: the preview showed the compile WITHOUT the system
+				// prompt while the wire always carried it, so every context gauge read low by its weight.
+				this.systemPrompt ? [ Agent.extraBlock( 'system-prompt', this.systemPrompt ) ] : [],
+				this.rootContext  ? [ Agent.extraBlock( 'root-context',  this.rootContext  ) ] : []
+			] ),
 			memory: memory ? [ Agent.memoryBlock( memory ) ] : [],
 			after: Agent.joinSegments( [
 				manifest  ? [ Agent.extraBlock( 'tool-manifest', manifest ) ] : [],
@@ -717,8 +780,9 @@ export class Agent {
 		} );
 	}
 
-	/** The system half a real turn sends — `compiledContext()` projected to text. The exact string the
-	 *  renderer preview shows and ( Phase 5 ) the orchestrator will send. */
+	/** The system half a real turn sends — `compiledContext()` projected to text. THE one string: the
+	 *  renderer preview and the orchestrator's `_buildReq` both read this method, so preview == wire on
+	 *  the stable half by construction. Its dynamic twin is `session.wireMessages()`. */
 	wireSystem(): string {
 		return this.compiledContext().map( b => b.text ).join( '\n\n' );
 	}
@@ -802,10 +866,11 @@ export class Agent {
 	}
 
 	/** The coarse budget bucket one compiled block groups under — read straight off its `section` tag ( the
-	 *  root-context extra is System, the tool extras are Tools, everything else — identity, routing, memory,
-	 *  headings — is Lenses ). One read of a field the block already carries, no second compilation. */
+	 *  system-prompt + root-context extras are System, the tool extras are Tools, everything else —
+	 *  identity, routing, memory, headings — is Lenses ). One read of a field the block already carries,
+	 *  no second compilation. */
 	static bucketOf( b: TaggedBlock ): 'system' | 'lenses' | 'tools' {
-		if ( b.section === 'root-context' ) return 'system';
+		if ( b.section === 'system-prompt' || b.section === 'root-context' ) return 'system';
 		if ( b.section === 'tool-manifest' || b.section === 'suggested-tools' ) return 'tools';
 		return 'lenses';
 	}
@@ -957,6 +1022,66 @@ export class Agent {
 	slots(): SlotResolution[] {
 		if ( !this.lenses.length ) return [];
 		return SlotResolver.describe( this.getContextBlocks() );
+	}
+
+	/**
+	 * The habit cascade as a COMPOSITION surface sees it — every habit this agent carries, from either
+	 * layer, each with its effective mode, whether or not it currently rides the wire.
+	 *
+	 * This exists because `slots()` is the wrong source for an editor and always was. `slots()` reads
+	 * `getContextBlocks()` — the COMPILE — which correctly drops anything at `off`: an off habit emits no
+	 * blocks, so it vanishes from the resolution, its class reads uncovered, and the agent screen redrew
+	 * the row as an empty slot. Turning a habit off LOOKED like deleting it. The compile is right to drop
+	 * it; the editor is wrong to read the compile. This read is built from the INVENTORY instead — the
+	 * lens's dredged habit nodes plus the agent's own `baseHabitNodes` — so `off` is a state a row is IN,
+	 * not an absence, exactly as the four-state model requires.
+	 *
+	 * Same `SlotResolver.RANK` as the real resolution ( agent beats lens ), so the winner shown here is
+	 * still the winner that compiles. Pure: no `setIncluded` mutation, so calling it never perturbs what a
+	 * later compile produces — the bug that made the old path order-dependent.
+	 *
+	 * Classless habits ride along, one entry each with `habitClass: null` and a single candidate: nothing
+	 * contends a slot they don't have, but a composition surface still wants them in the same currency.
+	 */
+	habitSlots(): HabitSlotView[] {
+		const candidates: HabitSlotCandidate[] = [];
+		const seen = new Set<string>();
+		const add = ( node: KCDPrimitive, sourceLayer: SourceLayer ): void => {
+			const path = node.getPath();
+			// one artifact contributes ONE candidate, from its most specific layer — the agent's own pick of
+			// a habit its lens also carries is the same artifact, not a rival of itself. Agent is added first,
+			// so the lens copy of the same path is skipped.
+			if ( seen.has( path ) ) return;
+			seen.add( path );
+			const cls = node.getFrontmatter()[ 'habit-class' ];
+			candidates.push( {
+				path,
+				habitClass: typeof cls === 'string' && cls ? cls : null,
+				sourceLayer,
+				mode: ( sourceLayer === 'agent' ? this.effectiveHabitMode( path ) : this.habitModes[ path ] ?? this.lensNaturalMode( path ) ) ?? 'on',
+				natural: this.naturalHabitMode( path ) ?? 'on',
+				won: false
+			} );
+		};
+		for ( const n of this.baseHabitNodes ) add( n, 'agent' );
+		for ( const n of this.getNodes() ) if ( n.getType() === 'habit' ) add( n, 'lens' );
+
+		const views: HabitSlotView[] = [];
+		const byClass = new Map<string, HabitSlotCandidate[]>();
+		for ( const c of candidates ) {
+			if ( !c.habitClass ) { views.push( { habitClass: null, winner: { ...c, won: true }, candidates: [ { ...c, won: true } ] } ); continue; }
+			if ( !byClass.has( c.habitClass ) ) byClass.set( c.habitClass, [] );
+			byClass.get( c.habitClass )!.push( c );
+		}
+		for ( const [ habitClass, group ] of byClass ) {
+			const winner = group.reduce( ( best, c ) => SlotResolver.rank( c.sourceLayer ) < SlotResolver.rank( best.sourceLayer ) ? c : best );
+			views.push( {
+				habitClass,
+				winner:     { ...winner, won: true },
+				candidates: group.map( c => ( { ...c, won: c.path === winner.path } ) )
+			} );
+		}
+		return views;
 	}
 
 	/** The separator between system-prompt layers — the one place the live turn and the Constellation

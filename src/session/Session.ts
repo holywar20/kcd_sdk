@@ -12,9 +12,38 @@
  * bridge whole via serialize / fromSerialized, the same trinity as Agent.
  */
 
-import { Transcript, type Turn, type WireMessage, type TranscriptRow } from './TurnEntry';
+import { Transcript, type Turn, type WireMessage, type TranscriptTurn, type ContextPolicy } from './TurnEntry';
 
+/**
+ * A session's LIFECYCLE state — is this conversation live or filed away? Persisted, user-driven,
+ * changes rarely. Deliberately kept separate from `TurnStatus` below: "is this archived?" and "is this
+ * working right now?" are different questions on different clocks, and folding them into one field
+ * would make every read ambiguous.
+ */
 export type SessionStatus = 'active' | 'archived';
+
+/**
+ * A session's RUN state — is a turn in flight right now?
+ *
+ * This is the home the flag was moved TO ( 2026-07-21 ). It used to be `Agent.status`, which was wrong
+ * on two counts. Conceptually: an agent is a CONFIGURATION — an identity, a lens stack, a tool
+ * composition — and configuration does not run. A turn runs, and a turn happens inside a session, so
+ * the session is the narrowest thing that can honestly answer "are you busy?". Practically: because
+ * many sessions can share one agent, two concurrent runs clobbered the single shared flag — whichever
+ * finished first flipped it to idle while the other was still going. Per-session, that case is correct
+ * by construction.
+ *
+ * NOT PERSISTED, deliberately — it is never written to the session row ( see SessionService._toRow ).
+ * Run state has no meaning across a restart: the turn it described is dead, and persisting it would let
+ * a crash mid-turn resurrect a session permanently stuck on 'thinking' with no turn to ever clear it.
+ * Every session therefore hydrates 'idle', which is always true at load.
+ *
+ * It DOES cross the wire ( it is on SerializedSession ), because its whole point is being visible to
+ * surfaces that did not fire the turn. It does not replace the Session store's local `pending`: that is
+ * optimistic UI, flipped the instant the user hits send so the spinner is immediate. `pending` is local
+ * optimism for the sender; `turnStatus` is authoritative state for everyone else.
+ */
+export type TurnStatus = 'idle' | 'thinking';
 
 /** The generic font stacks a session's chat surface can pick between — the render side owns
  *  the actual CSS stacks; this is just the closed key set a session persists. */
@@ -44,6 +73,13 @@ export interface SerializedSession {
 	zoom: number | null;
 	/** This session's chat-surface font family. Null → the render side's default ('sans'). */
 	fontFamily: FontFamilyKey | null;
+	/** Which turns of the transcript ride the next request. PERSISTED ( unlike the transcript itself ):
+	 *  it is a session CONFIGURATION the user sets deliberately, so reopening a session restores the
+	 *  window it was left on. Absent on an older wire/row → the `all` default. */
+	policy?: ContextPolicy;
+	/** Is a turn in flight right now — see `TurnStatus`. Rides the wire so every surface can see it;
+	 *  never written to the session row. Absent → 'idle', which is always true on arrival. */
+	turnStatus?: TurnStatus;
 }
 
 export interface SessionOptions {
@@ -58,7 +94,11 @@ export interface SessionOptions {
 	status?: SessionStatus;
 	zoom?: number | null;
 	fontFamily?: FontFamilyKey | null;
+	policy?: ContextPolicy;
 }
+
+/** The window every session is born on — the whole transcript rides until the user narrows it. */
+const DEFAULT_POLICY: ContextPolicy = { kind: 'all' };
 
 /**
  * Session — the conversation-identity primitive. Pure data + a handful of mutators; no `fs`,
@@ -80,6 +120,17 @@ export class Session {
 	zoom: number | null;
 	fontFamily: FontFamilyKey | null;
 
+	/** Which turns of the transcript ride the next request. PERSISTED session configuration — the
+	 *  deliberate counterpart to the non-persisted `transcript` below: the transcript is the durable
+	 *  account of what happened, this is the lens over it. Changing it NEVER edits history; it only
+	 *  changes what the next `wireMessages()` projects. */
+	policy: ContextPolicy;
+
+	/** Is a turn in flight right now — the run-state that used to live ( wrongly, and dead ) on the
+	 *  Agent. See `TurnStatus` for the full reasoning. Runtime-only: born 'idle', never persisted, so a
+	 *  crash mid-turn can never leave a session stuck 'thinking'. */
+	turnStatus: TurnStatus = 'idle';
+
 	/** The session's DYNAMIC context — the typed, ordered transcript of turns ( user / assistant /
 	 *  tool-call / tool-result / injected-file, plus display-only thinking ). NON-PERSISTED object state,
 	 *  the mirror of agent.bindEnv: never in SerializedSession, rebuilt on arrival via bindTranscript().
@@ -98,6 +149,7 @@ export class Session {
 		status: SessionStatus,
 		zoom: number | null,
 		fontFamily: FontFamilyKey | null,
+		policy: ContextPolicy,
 	) {
 		this.id         = id;
 		this.agentId    = agentId;
@@ -109,6 +161,7 @@ export class Session {
 		this.status     = status;
 		this.zoom       = zoom;
 		this.fontFamily = fontFamily;
+		this.policy     = policy;
 	}
 
 	// ── Static entry points ──────────────────────────────────────────────────
@@ -128,6 +181,7 @@ export class Session {
 			opts.status ?? 'active',
 			opts.zoom ?? null,
 			opts.fontFamily ?? null,
+			opts.policy ?? DEFAULT_POLICY,
 		);
 	}
 
@@ -144,6 +198,7 @@ export class Session {
 			json.status ?? 'active',
 			json.zoom ?? null,
 			json.fontFamily ?? null,
+			json.policy ?? DEFAULT_POLICY,
 		);
 	}
 
@@ -160,6 +215,8 @@ export class Session {
 			status:     this.status,
 			zoom:       this.zoom,
 			fontFamily: this.fontFamily,
+			policy:     this.policy,
+			turnStatus: this.turnStatus,
 		};
 	}
 
@@ -209,23 +266,38 @@ export class Session {
 		this.transcript = new Transcript( turns );
 	}
 
-	/** The DYNAMIC half of the wire — the transcript projected to neutral messages a connector maps to its
-	 *  provider format ( thinking excluded ). Joins agent.wireSystem() ( the stable half ) at send:
-	 *  the whole request is { system: agent.wireSystem(), messages: session.wireMessages() }. */
+	/** Narrow ( or widen ) which turns ride the next request. Pure configuration: it does NOT touch the
+	 *  transcript, so nothing is ever lost by changing the window. The caller persists ( DB
+	 *  update_session_policy ). */
+	setPolicy( policy: ContextPolicy ): void { this.policy = policy; }
+
+	/** Flip the run state around a turn. Deliberately has NO persistence counterpart — the caller
+	 *  broadcasts it and nothing writes it ( see `TurnStatus` ). Bracket every turn idle → thinking →
+	 *  idle from a `finally`, so a failure can't strand a session lit. */
+	setTurnStatus( status: TurnStatus ): void { this.turnStatus = status; }
+
+	/** The DYNAMIC half of the wire — the IN-WINDOW transcript projected to neutral messages a connector
+	 *  maps to its provider format ( thinking excluded ). Joins agent.wireSystem() ( the stable half ) at
+	 *  send: the whole request is { system: agent.wireSystem(), messages: session.wireMessages() }. The
+	 *  policy is applied HERE, at the projection — the transcript itself is never edited. */
 	wireMessages(): WireMessage[] {
-		return this.transcript.wireMessages();
+		return this.transcript.windowed( this.policy ).wireMessages();
 	}
 
-	/** The inspector itinerary — every transcript entry ( thinking included ) as a flat, ordered display
-	 *  row. The Turns folder reads this; the System folder reads agent.wireSystem(). */
-	transcriptRows(): TranscriptRow[] {
-		return this.transcript.rows();
+	/** The inspector itinerary — one BLOCK per turn, each carrying the entries that happened inside it
+	 *  ( thinking included ). DELIBERATELY UNWINDOWED: the Turns folder is the account of what actually
+	 *  happened, and a narrow policy must not make history look like it vanished. ( Marking which turns
+	 *  are in-window is a display concern for the folder itself. ) The System folder reads
+	 *  agent.wireSystem(). */
+	transcriptTurns(): TranscriptTurn[] {
+		return this.transcript.turnRows();
 	}
 
-	/** The session's own context cost — the wire weight of its transcript ( self-priced per entry ). The
-	 *  whole-context estimate folds this onto agent.estimateTokens(); a caller sums the two halves. */
+	/** The session's own context cost — the wire weight of the IN-WINDOW transcript ( self-priced per
+	 *  entry ), so it prices what will actually ride rather than everything ever said. The whole-context
+	 *  estimate folds this onto agent.estimateTokens(); a caller sums the two halves. */
 	estimateTokens(): number {
-		return this.transcript.estimateTokens();
+		return this.transcript.windowed( this.policy ).estimateTokens();
 	}
 
 	/** A display title even when none was set — the explicit title, else a stamp-derived fallback. */

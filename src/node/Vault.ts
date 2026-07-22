@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { LensObject, Glob, KcdExcise } from '../core';
+import { LensObject, Glob, KcdExcise, VaultLayout } from '../core';
 import type { ArtifactRef, ArtifactType } from '../core';
 import { scan } from '../scanner';
 import type { ScannedFile } from '../scanner';
@@ -55,6 +55,9 @@ export interface RefIssue {
  * Node-side by design: it touches disk. The renderer receives serialized
  * artifacts over the bridge and never needs a Vault.
  */
+/** Navigation stubs, not artifacts — excluded from `countArtifacts`, same as the library chart. */
+const NAV_INDEX_FILE = 'nav-index.html';
+
 export class Vault {
 
 	/** Absolute vault root — projectRoot/docRoot, resolved once. */
@@ -121,6 +124,41 @@ export class Vault {
 	/** Scan the whole vault, returning every artifact file with parsed frontmatter and links. */
 	scan(): ScannedFile[] {
 		return scan( this.root );
+	}
+
+	/**
+	 * How many artifacts this vault holds — a COUNT, not a scan.
+	 *
+	 * Walks the same `VaultLayout` indexed directories the real index walks and counts `.html` files
+	 * without opening any of them. `scan()` parses frontmatter and links on every file, which is the
+	 * right cost when you need the artifacts and far too much when you only need the number: this
+	 * answers a landing card for EVERY registered project, including the ones that are not open and
+	 * therefore have no in-memory index to ask.
+	 *
+	 * `nav-index.html` is excluded, matching the library chart — a navigation stub is scaffolding for
+	 * the artifacts, not one of them, and counting it would inflate a fresh vault to look non-empty.
+	 *
+	 * Total: an unreadable directory is skipped, not thrown. A count is orientation, and a permission
+	 * error on one folder should cost that folder's files, not the whole number.
+	 */
+	countArtifacts(): number {
+		let total = 0;
+		const walk = ( dir: string ): void => {
+			let entries: fs.Dirent[];
+			try {
+				entries = fs.readdirSync( dir, { withFileTypes: true } );
+			} catch {
+				return;
+			}
+			for ( const entry of entries ) {
+				if ( entry.isDirectory() ) { walk( path.join( dir, entry.name ) ); continue; }
+				const name = entry.name.toLowerCase();
+				if ( !name.endsWith( '.html' ) || name === NAV_INDEX_FILE ) continue;
+				total += 1;
+			}
+		};
+		for ( const dir of VaultLayout.indexedDirs() ) walk( path.join( this.root, dir ) );
+		return total;
 	}
 
 	/** Scanned files whose vault-relative path matches a glob ( * within a segment, ** across ). */

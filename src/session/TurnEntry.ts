@@ -58,6 +58,21 @@ export interface Turn {
 	entries: TurnEntry[];
 }
 
+/**
+ * Which turns ride the wire on the NEXT request. A property of the Session ( persisted, changed by a
+ * deliberate user action ), never of the turns themselves — flipping it reshapes the window without
+ * touching a single entry. That separation is the whole point: the transcript is the durable account of
+ * what happened, the policy is a lens over it, and no policy change can ever delete history.
+ *
+ * `all` sends everything · `lastN` sends the trailing N TURNS ( a turn already IS a prompt plus
+ * everything that answered it, so this needs no exchange-grouping scaffolding ) · `manual` sends exactly
+ * the named turn ids.
+ */
+export type ContextPolicy =
+	| { kind: 'all' }
+	| { kind: 'lastN'; n: number }
+	| { kind: 'manual'; ids: string[] };
+
 // ── The neutral wire currency ( @kcd/core, SDK-free ) ──────────────────────────────────────────
 
 /** A content block, mirror-shaped to the Anthropic block union so the orchestrator maps 1:1 ( or passes
@@ -92,6 +107,21 @@ export interface TranscriptRow {
 	 *  thumbnail — the same bytes that ride the wire, so the itinerary stays a flat row list without the
 	 *  renderer re-reading anything. Absent on text rows. */
 	media?: { mediaType: string; data: string; width?: number; height?: number };
+}
+
+/** One TURN as the inspector shows it — a single block carrying the entries that happened inside it.
+ *  The display currency matches the MODEL ( a Session holds Turns; a Turn holds entries ), rather than
+ *  flattening both levels away: a turn is the unit a user reasons about ( "what happened when I asked
+ *  that?" ) and the unit the window policy operates on, so the display should not pretend it is a
+ *  featureless stream of entries. */
+export interface TranscriptTurn {
+	id: string;
+	/** Epoch ms the turn opened — the block's timestamp, and the honest answer to "when did this happen". */
+	startedAt: number;
+	/** Everything that happened inside this turn, in order ( thinking included ). */
+	rows: TranscriptRow[];
+	/** The turn's whole wire weight — the sum of its wire-bearing rows. */
+	tokens: number;
 }
 
 /** How an injected file frames into the wire as a user message — a brief marker so the model reads it
@@ -139,6 +169,24 @@ export class Transcript {
 
 	isEmpty(): boolean {
 		return this.turns.length === 0;
+	}
+
+	/**
+	 * This transcript narrowed to the turns a policy admits — a PURE query returning a NEW Transcript
+	 * over the kept turns. Nothing is mutated and nothing is dropped from the original: the policy
+	 * decides what rides the next request, it does not edit history ( the standing ruling ). Callers
+	 * project the result ( `wireMessages()` / `estimateTokens()` ); the unwindowed original still answers
+	 * `rows()`, because the inspector's itinerary shows everything that happened.
+	 */
+	windowed( policy: ContextPolicy ): Transcript {
+		if ( policy.kind === 'all' ) return new Transcript( [ ...this.turns ] );
+		if ( policy.kind === 'manual' ) {
+			const wanted = new Set( policy.ids );
+			return new Transcript( this.turns.filter( ( t ) => wanted.has( t.id ) ) );
+		}
+		// lastN — the trailing n turns; n <= 0 windows to nothing rather than silently meaning "all".
+		if ( policy.n <= 0 ) return new Transcript( [] );
+		return new Transcript( this.turns.slice( -policy.n ) );
 	}
 
 	// ── Appends ( in-flight — the orchestrator lands entries here as a turn runs ) ──
@@ -227,16 +275,25 @@ export class Transcript {
 
 	// ── Projection: to the INSPECTOR ───────────────────────────────────────────
 
-	/** The flat, time-ordered itinerary the Turns folder renders — every entry ( thinking included ) as a
-	 *  display row with its self-priced wire weight. */
-	rows(): TranscriptRow[] {
-		const out: TranscriptRow[] = [];
-		for ( const turn of this.turns ) {
-			for ( const entry of turn.entries ) {
-				out.push( this._row( entry ) );
-			}
-		}
-		return out;
+	/**
+	 * The time-ordered itinerary the Turns folder renders — one BLOCK per turn, each carrying the entries
+	 * that happened inside it ( thinking included ) with their self-priced wire weight.
+	 *
+	 * Grouped rather than flat because a turn is the unit a user reasons about and the unit the window
+	 * policy operates on. A flat entry stream reads as an undifferentiated log; blocks let the display be
+	 * honest about the structure that actually exists — this is what you asked, and here is everything
+	 * that happened because of it.
+	 */
+	turnRows(): TranscriptTurn[] {
+		return this.turns.map( ( turn ) => {
+			const rows = turn.entries.map( ( entry ) => this._row( entry ) );
+			return {
+				id:        turn.id,
+				startedAt: turn.startedAt,
+				rows,
+				tokens:    rows.reduce( ( sum, r ) => sum + r.tokens, 0 )
+			};
+		} );
 	}
 
 	private _row( entry: TurnEntry ): TranscriptRow {
