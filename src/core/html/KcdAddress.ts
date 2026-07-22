@@ -45,7 +45,8 @@ export const KcdAddress = new class KcdAddress {
 		'data-kcd-region', 'data-kcd-section', 'data-kcd-heading', 'data-kcd-merge', 'data-kcd-merge-key', 'data-kcd-slot',
 		'data-kcd-param', 'data-kcd-params', 'data-kcd-mode', 'data-kcd-habit-class',
 		'data-kcd-table', 'data-kcd-head', 'data-kcd-chips', 'data-kcd-tag',
-		'data-kcd-audience', 'data-kcd-chrome', 'data-kcd-live', 'data-kcd-script'
+		'data-kcd-audience', 'data-kcd-chrome', 'data-kcd-live', 'data-kcd-script',
+		'data-kcd-address'
 	];
 
 	// ── Patterns ──────────────────────────────────────────────────────────────────
@@ -64,11 +65,44 @@ export const KcdAddress = new class KcdAddress {
 		date:   v => this.DATE_RE.test( v ),
 		path:   v => v !== '',
 		url:    v => this.URL_RE.test( v ),
-		list:   () => true
+		list:   () => true,
+		// address ( protocol §1.1 ): a LOCATION, not an assertion that anything occupies it. Checked for
+		// well-formedness only — occupancy is never validated, because vacancy is a legal state.
+		address: v => v === '' || this.isAddressValue( v )
 	};
 
 	isFieldType( declared: string | undefined ): declared is string { return !!declared && declared in this.FIELD; }
 	validates( declared: string, value: string ): boolean { const f = this.FIELD[ declared ]; return !!f && f( value ); }
+
+	// ── Addresses ( protocol §1.1 ) ────────────────────────────────────────────────
+	// An address is a location that MAY be occupied. Two value shapes, told apart by their own form:
+	// an artifact NAME ( a slug — resolved through the same name index `base`/`lens` use, so it
+	// survives any move ), or a project-root-relative PATH ( for targets that have no name ).
+	// Well-formed means: no whitespace, not absolute, and no `../` chain — a `../` escapes the project
+	// root, which is the one thing that can never resolve ( see `resolveHref` ).
+
+	/** A `../` segment anywhere in the value — the shape that cannot resolve from the project root. */
+	DOTDOT_RE = /(?:^|\/)\.\.(?:\/|$)/;
+
+	isAddressValue( v: string ): boolean {
+		if ( v === '' || /\s/.test( v ) )               return false;
+		if ( this.SLUG_RE.test( v ) )                   return true;    // an artifact name
+		if ( v.startsWith( '/' ) || /^[A-Za-z]:/.test( v ) ) return false;    // absolute
+		if ( this.DOTDOT_RE.test( v ) )                 return false;    // escapes the project root
+		return true;                                                     // project-root-relative path
+	}
+
+	isAddress( el: HtmlEl ): boolean { return HtmlTree.has( el, 'data-kcd-address' ); }
+
+	/**
+	 * An address element's value. The visible TEXT is the address by default ( the core law's
+	 * one-element-two-duties rule, with no machine copy ); the attribute carries it only when the
+	 * prose has to read differently — the same escape hatch `href` already provides.
+	 */
+	addressOf( el: HtmlEl ): string {
+		const attr = HtmlTree.get( el, 'data-kcd-address' );
+		return ( attr !== undefined && attr !== '' ? attr : HtmlTree.textOf( el ) ).trim();
+	}
 
 	// ── Component predicates ( protocol §2 ) ───────────────────────────────────────
 	isArticle(     el: HtmlEl ): boolean { return HtmlTree.has( el, 'data-kcd' ); }
@@ -98,6 +132,9 @@ export const KcdAddress = new class KcdAddress {
 	// ── Value extraction ( the core law §1.1–§1.2: the field's content IS the value ) ──
 	// Link fields ( an <a>, or a path/url type ) yield their href; everything else yields its text.
 	fieldValue( el: HtmlEl, declared: string | undefined ): { isLink: boolean; value: string } {
+		// `address` is never a link, even on an <a> — an address asserts no occupancy, so it cannot
+		// take its value from an href without becoming the very thing it exists to replace.
+		if ( declared === 'address' ) return { isLink: false, value: this.addressOf( el ) };
 		const isLink = el.tag === 'a' || declared === 'path' || declared === 'url';
 		if ( !isLink ) return { isLink: false, value: HtmlTree.textOf( el ).trim() };
 		let href = HtmlTree.get( el, 'href' );

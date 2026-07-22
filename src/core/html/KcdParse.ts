@@ -23,7 +23,7 @@ import { KcdAddress } from './KcdAddress';
 import { KcdValidate } from './KcdValidate';
 import { classifyHref } from '../../primitives/framework/KCDPrimitive';
 import { KCDValidationError } from '../../primitives/errors';
-import type { ArtifactType, LinkEntry, PolicyEntry, SerializedArtifact, SlotMode } from '../../primitives/types';
+import type { AddressEntry, ArtifactType, LinkEntry, PolicyEntry, SerializedArtifact, SlotMode } from '../../primitives/types';
 
 /** Section name → the dredge ROLE a bare ( unstamped ) slot infers — the fallback mirror of the canonical
  *  slot-kind law ( `data-kcd-slot="<kind>"`, protocol §3 ). The explicit attribute always wins; this only
@@ -82,7 +82,7 @@ export const KcdParse = new class KcdParse {
 
 	/** Strict: a conforming document → its object model; a malformed one THROWS. The protected door. */
 	parse( html: string, path: string ): ParsedArtifact {
-		const report = KcdValidate.validate( html );
+		const report = KcdValidate.validate( html, { path } );
 		if ( !report.ok ) {
 			const first = report.errors[ 0 ];
 			throw new KCDValidationError(
@@ -95,7 +95,7 @@ export const KcdParse = new class KcdParse {
 
 	/** Lenient: returns null instead of throwing — for the scanner's skip-and-continue sweep. */
 	tryParse( html: string, path: string ): ParsedArtifact | null {
-		const report = KcdValidate.validate( html );
+		const report = KcdValidate.validate( html, { path } );
 		if ( !report.ok ) return null;
 		return this.build( HtmlTree.parse( html ), path );
 	}
@@ -106,7 +106,7 @@ export const KcdParse = new class KcdParse {
 		const article = HtmlTree.first( root, el => KcdAddress.isArticle( el ) )!;
 		const type = ( HtmlTree.get( article, 'data-kcd' ) ?? 'unknown' ) as ArtifactType;
 
-		const acc: Scan = { links: [], slots: [], params: [] };
+		const acc: Scan = { links: [], addresses: [], slots: [], params: [] };
 		this.scan( article, undefined, undefined, acc );
 
 		const slots = acc.slots;
@@ -117,6 +117,7 @@ export const KcdParse = new class KcdParse {
 			sections:    this.sections( article ),
 			body:        HtmlTree.innerHtml( article ),
 			links:       acc.links,
+			addresses:   acc.addresses,
 			included:    true,
 			policy:      this.policy( slots ),
 			params:      acc.params,
@@ -197,6 +198,10 @@ export const KcdParse = new class KcdParse {
 				const href = HtmlTree.get( kid, 'href' )!;
 				acc.links.push( { text: HtmlTree.textOf( kid ).trim(), href, type: classifyHref( href ), section: sect } );
 			}
+			// An address is collected, never probed — protocol §1.1. Occupancy is not this pass's business.
+			if ( KcdAddress.isAddress( kid ) ) {
+				acc.addresses.push( { value: KcdAddress.addressOf( kid ), text: HtmlTree.textOf( kid ).trim(), section: sect } );
+			}
 			if ( KcdAddress.isSlot( kid ) )  acc.slots.push( this.readSlot( kid, reg, sect ) );
 			if ( KcdAddress.isParam( kid ) ) acc.params.push( this.readParam( kid, sect ) );
 
@@ -242,4 +247,4 @@ export const KcdParse = new class KcdParse {
 	}
 }();
 
-interface Scan { links: LinkEntry[]; slots: ParsedSlot[]; params: ParsedParam[]; }
+interface Scan { links: LinkEntry[]; addresses: AddressEntry[]; slots: ParsedSlot[]; params: ParsedParam[]; }

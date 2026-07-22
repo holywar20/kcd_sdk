@@ -95,6 +95,20 @@ export interface LinkEntry {
 }
 
 /**
+ * An ADDRESS ( protocol §1.1 ) — a location that may or may not be occupied. Distinct from a
+ * `LinkEntry` in exactly one way, and it is the whole point: a link asserts that something is
+ * there, an address does not. Vacancy is legal, so nothing here is ever validated for existence.
+ */
+export interface AddressEntry {
+	/** The address itself — an artifact `name` slug, or a project-root-relative path. */
+	value: string;
+	/** The visible prose. Equal to `value` unless the attribute carried the address separately. */
+	text: string;
+	/** H2 section the address was found in; undefined if in preamble before first H2. */
+	section?: string;
+}
+
+/**
  * A slot's wire mode — the SAME idiom for every artifact a slot can point at (reference, habit,
  * contract, plan, MCP tool, anything else routable). No per-artifact-type special casing. Mirrors
  * `ToolMode` (kcd_sdk/src/agent/ToolMode.ts) — same three values, same off→on→suggested framing;
@@ -131,6 +145,8 @@ export interface SerializedArtifact {
 	sections: Record<string, string>;
 	body: string;
 	links: LinkEntry[];
+	/** Addresses declared in the body — locations that may or may not be occupied ( protocol §1.1 ). */
+	addresses?: AddressEntry[];
 	/** Tuned state: whether this artifact contributes to the outbound request.
 	 *  Absent = included (the default). Runtime tuning — never written to disk markdown. */
 	included?: boolean;

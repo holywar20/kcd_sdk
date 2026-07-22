@@ -108,6 +108,24 @@ export class Vault {
 		return LensObject.resolveHref( href, this.projectRoot );
 	}
 
+	/**
+	 * Is this vault-relative path part of the LIBRARY — i.e. a governed artifact rather than scratch?
+	 *
+	 * `VaultLayout` already marks six directories `indexed: false` and calls them, in its own words,
+	 * "scratch and output space, not a gap". Validation has never honoured that: `scan()` walks the
+	 * whole root, so backups, work notes, and `.js` dev utilities were all graded as KCD documents.
+	 * That accounted for roughly half of every issue this vault has ever reported. Reported drift in
+	 * a frozen backup is not drift; it is a category error.
+	 */
+	isLibraryPath( relPath: string ): boolean {
+		return !VaultLayout.isEphemeralHref( relPath );
+	}
+
+	/** Is anything on disk at this href/address? A plain fact — never a verdict ( protocol §1.1 ). */
+	exists( href: string ): boolean {
+		return fs.existsSync( this.resolveHref( href ) );
+	}
+
 	/** A scanned file → its ArtifactRef ( vault-relative path + type + display name ). */
 	toRef( file: ScannedFile ): ArtifactRef {
 		return {
@@ -345,7 +363,11 @@ export class Vault {
 	referenceIssues( onlyFile?: string ): RefIssue[] {
 		const files   = this.scan();
 		const names   = new Set( files.map( f => typeof f.frontmatter[ 'name' ] === 'string' ? f.frontmatter[ 'name' ] as string : '' ) );
-		const targets = onlyFile ? files.filter( f => f.path === this.toAbs( onlyFile ) ) : files;
+		// Only the LIBRARY is graded. A named file is always checked ( the caller asked for it ); a
+		// whole-vault sweep skips scratch space per the registry.
+		const targets = onlyFile
+			? files.filter( f => f.path === this.toAbs( onlyFile ) )
+			: files.filter( f => this.isLibraryPath( f.relativePath ) );
 		const issues: RefIssue[] = [];
 
 		for ( const f of targets ) {
@@ -357,6 +379,10 @@ export class Vault {
 					issues.push( { path: f.relativePath, severity: 'warn', message: `link target missing on disk: "${ href }"`, ref: href } );
 			}
 
+			// NOTE: addresses are deliberately absent from this loop. An address carries no `href`, so it
+			// never enters `rawLinks` and is never probed — protocol §1.1. Vacancy is a legal state; see
+			// `vacantAddresses` for the on-request report.
+
 			for ( const key of [ 'base', 'lens' ] ) {
 				const v = f.frontmatter[ key ];
 				if ( typeof v !== 'string' || v === '' || v === 'cross' ) continue;
@@ -365,6 +391,37 @@ export class Vault {
 			}
 		}
 		return issues;
+	}
+
+	/**
+	 * Which addresses in the vault are currently VACANT — nothing occupies them yet.
+	 *
+	 * Deliberately NOT part of `referenceIssues`, and deliberately not an issue of any severity
+	 * ( protocol §1.1, rule 3 ). A vacant address is a legal state; surfacing it in the health stream
+	 * would recreate exactly the noise the address primitive was introduced to remove. This is an
+	 * on-request inventory for someone who wants to know what has been promised and not yet written —
+	 * a to-do list, not a defect list.
+	 *
+	 * An address resolves either as an artifact NAME ( through the same name index `base`/`lens` use,
+	 * so it survives a move ) or as a project-root-relative PATH.
+	 */
+	vacantAddresses( onlyFile?: string ): { path: string; address: string; text: string }[] {
+		const files = this.scan();
+		const names = new Set( files
+			.map( f => typeof f.frontmatter[ 'name' ] === 'string' ? f.frontmatter[ 'name' ] as string : '' )
+			.filter( n => n !== '' ) );
+
+		const targets = onlyFile ? files.filter( f => f.path === this.toAbs( onlyFile ) ) : files;
+		const out: { path: string; address: string; text: string }[] = [];
+
+		for ( const f of targets ) {
+			for ( const a of f.rawAddresses ?? [] ) {
+				if ( names.has( a.value ) ) continue;                       // occupied — an artifact answers to it
+				if ( fs.existsSync( this.resolveHref( a.value ) ) ) continue; // occupied — a file sits there
+				out.push( { path: f.relativePath, address: a.value, text: a.text } );
+			}
+		}
+		return out;
 	}
 
 }

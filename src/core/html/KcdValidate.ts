@@ -16,6 +16,7 @@
 import { HtmlTree } from './HtmlTree';
 import type { HtmlEl, HtmlNode } from './HtmlTree';
 import { KcdAddress } from './KcdAddress';
+import { VaultLayout } from '../VaultLayout';
 
 export interface ValidateIssue { code: string; where: string; msg: string; }
 export interface ValidateReport { ok: boolean; type: string | null; name: string | null; errors: ValidateIssue[]; warnings: ValidateIssue[]; }
@@ -57,15 +58,18 @@ export const KcdValidate = new class KcdValidate {
 		scope:            { type: 'enum', pattern: this.SCOPE_RE },
 		'habit-class':    { type: 'slug' },
 		lens:             { type: 'slug' },
-		todo:             { type: 'path' },
-		completed:        { type: 'path' }
+		// todo / completed are ADDRESSES, not paths ( protocol §1.1 ). A lens declares WHERE its log
+		// lives; it does not assert that one has been written. Most lenses name a log file that does
+		// not exist yet, and that is a legal state rather than a defect.
+		todo:             { type: 'address' },
+		completed:        { type: 'address' }
 	};
 
 	/**
 	 * Validate one artifact.
 	 * @param input  an HTML string, a real DOM element/Document, or an already-normalized HtmlEl root.
 	 */
-	validate( input: string | HtmlEl | any ): ValidateReport {
+	validate( input: string | HtmlEl | any, opts?: { path?: string } ): ValidateReport {
 		const root: HtmlEl =
 			typeof input === 'string'              ? HtmlTree.parse( input )   :
 			input && input.nodeType !== undefined  ? HtmlTree.fromDOM( input ) :
@@ -90,6 +94,7 @@ export const KcdValidate = new class KcdValidate {
 
 		const name = this.checkFrontmatter( article, rootType, err, warn );
 		this.checkStructure( article, rootType, err, warn );
+		this.checkAddressing( article, err, opts?.path );
 		if ( rootType === 'habit' ) this.checkHabit( article, err, warn );
 
 		return this.result( rootType, name, errors, warnings );
@@ -268,6 +273,41 @@ export const KcdValidate = new class KcdValidate {
 	}
 
 	// ── Helpers ───────────────────────────────────────────────────────────────────
+	// ── Addressing pass ( protocol §1.1 ) ─────────────────────────────────────────
+	/**
+	 * The link-versus-address law, enforced on the body.
+	 *
+	 * A link ASSERTS that a document is there. An address does not — it names a location that may be
+	 * occupied now, later, or never. Two rules follow, and only one of them is about occupancy:
+	 *
+	 *  1. An address must be WELL-FORMED. Its occupancy is never checked here or anywhere else;
+	 *     vacancy is a legal state and reporting it would recreate the noise the primitive removes.
+	 *  2. A link may never point into ephemeral space. Those directories are not installed into a
+	 *     user's vault at all, so the assertion a link makes is false by construction — regardless of
+	 *     whether the target happens to exist on the authoring machine.
+	 */
+	checkAddressing( article: HtmlEl, err: Emit, selfPath?: string ): void {
+		// The ban binds LIBRARY artifacts only. A document that itself lives in ephemeral space never
+		// ships either, so its links to its own neighbourhood assert nothing false. Without the path we
+		// cannot tell, and the safe default is to check — an unknown document is treated as shippable.
+		const selfEphemeral = selfPath !== undefined && VaultLayout.isEphemeralHref( selfPath );
+		for ( const el of HtmlTree.collect( article, d => KcdAddress.isAddress( d ) ) ) {
+			const value = KcdAddress.addressOf( el );
+			if ( !KcdAddress.isAddressValue( value ) )
+				err( 'bad-address', 'address', `"${ value }" is not a well-formed address — expected an artifact name or a project-root-relative path, with no "../" and no absolute root` );
+		}
+
+		if ( selfEphemeral ) return;
+
+		for ( const a of HtmlTree.collect( article, d => d.tag === 'a' && HtmlTree.has( d, 'href' ) ) ) {
+			const href = ( HtmlTree.get( a, 'href' ) ?? '' ).trim();
+			if ( href === '' || href.startsWith( '#' ) || href.includes( '{' ) ) continue;
+			if ( /^(?:https?:)?\/\//.test( href ) || /^mailto:/.test( href ) )   continue;
+			if ( VaultLayout.isEphemeralHref( href ) )
+				err( 'ephemeral-link', 'address', `"${ href }" links into ephemeral space ( ${ VaultLayout.ephemeralDirs().join( ', ' ) } ), which is not installed into a vault — use <code data-kcd-address> instead` );
+		}
+	}
+
 	checkList( field: HtmlEl, key: string, err: Emit ): void {
 		const tags = HtmlTree.collect( field, el => KcdAddress.isTag( el ) );
 		for ( const t of tags ) if ( HtmlTree.textOf( t ).trim() === '' ) err( 'empty-tag', `field:${ key }`, 'empty chip in a list field' );

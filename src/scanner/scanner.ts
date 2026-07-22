@@ -22,6 +22,11 @@ export interface RawLink {
 	href: string;
 }
 
+export interface RawAddress {
+	value: string;
+	text: string;
+}
+
 export interface ScannedFile {
 	/** Absolute path to the file. */
 	path: string;
@@ -31,6 +36,8 @@ export interface ScannedFile {
 	frontmatter: Record<string, unknown>;
 	/** All links found in the document — `<a href>` for HTML, `[text](href)` for `.js` comment bodies. */
 	rawLinks: RawLink[];
+	/** Addresses declared in the body ( protocol §1.1 ) — collected, never probed for occupancy. */
+	rawAddresses: RawAddress[];
 	/** The document body — inner HTML for an artifact, the post-frontmatter source for a `.js` file. */
 	body: string;
 }
@@ -93,12 +100,13 @@ function parseFile( absPath: string, absRoot: string ): ScannedFile | null {
 			relativePath,
 			frontmatter: parsed.frontmatter,
 			rawLinks:    parsed.links.map( l => ( { text: l.text, href: l.href } ) ),
+			rawAddresses: ( parsed.addresses ?? [] ).map( a => ( { value: a.value, text: a.text } ) ),
 			body:        parsed.body,
 		};
 	}
 
 	const { frontmatter, body } = parseJsFrontmatter( raw );
-	return { path: absPath, relativePath, frontmatter, rawLinks: extractLinks( body ), body };
+	return { path: absPath, relativePath, frontmatter, rawLinks: extractLinks( body ), rawAddresses: [], body };
 }
 
 function parseJsFrontmatter( content: string ): { frontmatter: Record<string, unknown>; body: string } {

@@ -189,4 +189,39 @@ export class VaultLayout {
 		return [ ...out ]
 	}
 
+	/**
+	 * The inverse of `indexedDirs` — scratch and output space. These directories are not part of the
+	 * library and are NOT installed into a user's vault, so occupancy inside them can never be
+	 * asserted. Protocol §1.1 therefore forbids a link into one; an address is the correct encoding.
+	 *
+	 * Derived from the registry rather than written out, so the ban tracks the layout automatically
+	 * and there is no second list to keep in step.
+	 */
+	static ephemeralDirs(): string[] {
+		const indexed = new Set( VaultLayout.indexedDirs() )
+		const out = new Set<string>()
+		for( const entry of LAYOUT ) {
+			const top = entry.dir.split( '/' )[ 0 ]
+			if( !indexed.has( top ) ) out.add( top )
+		}
+		return [ ...out ]
+	}
+
+	/**
+	 * Does a project-root-relative href land in ephemeral space? Hrefs resolve against the PROJECT
+	 * root ( `resolveHref` ), so a vault target carries its doc-root segment — `_Claude/work/x` — and
+	 * that segment is stripped before the first path element is judged.
+	 */
+	static isEphemeralHref( href: string, docRoot = '_Claude' ): boolean {
+		const parts = href.replace( /\\/g, '/' ).replace( /^\.\//, '' ).split( '/' ).filter( p => p !== '' )
+
+		// Accepts both an href ( `_Claude/work/x` ) and an absolute file path
+		// ( `C:/…/_Claude/work/x` ), by anchoring on the doc-root segment wherever it appears. Without
+		// the anchor the leading segment is taken as-is, which is the plain relative-href case.
+		const anchor = parts.lastIndexOf( docRoot )
+		const top    = anchor >= 0 ? parts[ anchor + 1 ] : parts[ 0 ]
+
+		return top !== undefined && VaultLayout.ephemeralDirs().includes( top )
+	}
+
 }
