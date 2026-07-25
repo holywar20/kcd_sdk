@@ -15,6 +15,11 @@ export {
 } from './VaultUtilities';
 export { VaultDeploy, type DeployReport, type DeployItem, type DeployItemKind } from './VaultDeploy';
 export {
+	Survey,
+	type SurveyReport, type SurveyComponent, type ComponentKind,
+	type SurveyLanguage, type SurveyEntryPoint, type SurveyTests,
+} from './Survey';
+export {
 	SdkFileAccess, LIST_CAP, READ_CAP_BYTES, GLOB_CAP, GLOB_WALK_CAP,
 	SEARCH_MATCH_CAP, SEARCH_WALK_CAP, SEARCH_YIELD_EVERY, SEARCH_ES_TIMEOUT_MS,
 	type FileWarn, type SearchToken
