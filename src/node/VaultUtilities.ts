@@ -1,7 +1,18 @@
 import * as fs from 'fs';
+import * as path from 'path';
 import { KCDPrimitive, SlotResolver } from '../primitives';
-import type { SlotMode } from '../primitives';
+import type { SlotMode, LinkEntry, AddressEntry } from '../primitives';
 import type { Vault } from './Vault';
+import type { ArtifactRef } from '../core';
+import { InstallManifest } from '../core';
+
+/** Where the seed source lives, vault-relative — protocol §10's one payload-per-host document. */
+const ROOT_CONTEXT_PATH = 'root-context.html';
+
+/** The deployed convention every href in this project uses. `Vault` does not expose `docRoot`
+ *  publicly ( it is private on the class ), so this is not DERIVED — same choice
+ *  `VaultDeploy._navIndexHtml` already made, for the same reason. */
+const DOC_ROOT_PREFIX = '_Claude';
 
 /**
  * One validation finding — the merged currency of the two health axes below. Carries
@@ -53,6 +64,156 @@ export interface LensView {
 	path:   string;
 	slots:  LensSlot[];
 	tokens: number;
+}
+
+/** Query options — all optional and AND-combined; `groupBy: 'type'` switches the return shape. */
+export interface QueryOptions {
+	glob?:    string;
+	type?:    string;
+	text?:    string;
+	groupBy?: 'type';
+}
+
+/** Either the matching refs, or — with `groupBy: 'type'` — a type census sorted by count descending. */
+export type QueryResult = ArtifactRef[] | { type: string; count: number }[];
+
+/** One artifact's link graph: what it points at, its addresses ( occupied or not ), and who points at it. */
+export interface LinksResult {
+	outbound:  LinkEntry[];
+	addresses: ( AddressEntry & { occupied: boolean } )[];
+	inbound:   { path: string; relativePath: string }[];
+}
+
+/** One §10 seed payload, parsed off `root-context.html` — a host, its target file, how it writes,
+ *  and the raw payload text. */
+export interface SeedBlock {
+	host:    string;
+	/** Project-root-relative — where a §10 seed always targets ( it names a file OUTSIDE the vault ). */
+	target:  string;
+	mode:    'prepend' | 'create-only';
+	payload: string;
+}
+
+/** The result of applying one seed — a report always, a write only when `applied` is true. */
+export interface SeedApplyReport {
+	host:            string;
+	target:          string;
+	mode:            'prepend' | 'create-only';
+	targetExisted:   boolean;
+	/** `prepend` only — did a `<!-- kcd:begin/end -->` block already exist to replace? */
+	hadManagedBlock: boolean;
+	/** Would writing actually change the file's content? False = already up to date. */
+	changed:         boolean;
+	applied:         boolean;
+}
+
+/** The result of taking a seed's managed block back out — `fileRemoved` is true only when our block
+ *  WAS the whole file, so nothing of the project's own was ever at stake. */
+export interface SeedRemoveReport {
+	host:            string;
+	target:          string;
+	targetExisted:   boolean;
+	hadManagedBlock: boolean;
+	fileRemoved:     boolean;
+	changed:         boolean;
+	applied:         boolean;
+}
+
+/** How much of the vault a project wants kept out of git. `none` removes the managed block. */
+export type IgnoreScope = 'scratch' | 'vault' | 'none';
+
+/** The result of maintaining the `.gitignore` managed block — a report always, a write only when
+ *  `applied` is true, same confirm-gated shape as `SeedApplyReport`. */
+export interface IgnoreReport {
+	target:          string;
+	scope:           IgnoreScope;
+	/** The lines the block would hold. Empty for `none`. */
+	entries:         string[];
+	targetExisted:   boolean;
+	hadManagedBlock: boolean;
+	changed:         boolean;
+	applied:         boolean;
+}
+
+/** One row of the entry document's Lenses table — a real lens's picker identity. */
+export interface LensIndexRow {
+	what:  string;
+	where: string;
+	why:   string;
+}
+
+/** The result of a `lens-index` splice — the recomputed rows, the spliced document, and whether
+ *  applying it would actually change anything. */
+export interface LensIndexReport {
+	rows:    LensIndexRow[];
+	html:    string;
+	changed: boolean;
+}
+
+/** The result of a `reset` — a report always, a write only when `applied` is true. */
+export interface ResetReport {
+	/** The deployed target, vault-relative. */
+	path:          string;
+	/** Its canonical counterpart — an absolute path into the bundle's `substrateSource`, or `''`
+	 *  when no `InstallManifest` row covers this target at all. */
+	canonicalPath: string;
+	/** Does anything exist at the canonical path to restore FROM? */
+	hasCanonical:  boolean;
+	/** Did the deployed target exist before this call? */
+	targetExisted: boolean;
+	/** Byte-identical to canonical already? `false` when either side is unreadable. */
+	identical:     boolean;
+	/** True only when `confirm` was set AND a write actually happened. */
+	applied:       boolean;
+}
+
+/**
+ * One step of a kcd/ migration — flattening a self-hosting vault's canonical substrate OUT of a
+ * deployed `kcd/` folder, per project ( 2026-07-25 ). Three kinds, because a `kcd/` file is in one
+ * of three real states, not one: `delete-duplicate` ( the real, live, possibly-customized copy
+ * already exists at its flat home — the `kcd/` copy is a stale original, safe to drop and repoint
+ * ); `relocate` ( content exists ONLY in `kcd/` — it must actually move, links healed along the
+ * way ); `extract-template` ( a `templates/` scaffold — never belongs in a deployed vault at all,
+ * per this project's own "templates stay in the bundle" ruling; reported, never applied here,
+ * because where it goes is a PACKAGING decision this generic vault utility has no business
+ * knowing ).
+ */
+export type MigrationActionKind = 'delete-duplicate' | 'relocate' | 'extract-template';
+
+export interface MigrationAction {
+	kind:          MigrationActionKind;
+	/** Vault-relative, always under `kcd/`. */
+	kcdPath:       string;
+	/** `relocate` only — vault-relative destination. */
+	targetPath?:   string;
+	/** `delete-duplicate` only — the real, already-deployed copy's vault-relative path. */
+	deployedPath?: string;
+	/** `delete-duplicate` only — did the `kcd/` copy's content actually differ from the deployed
+	 *  one? Informational; the action is identical either way ( the deployed copy always wins ). */
+	diverged?:     boolean;
+}
+
+/** A migration plan — every action `planKcdMigration` decided, plus anything it found that no
+ *  action here covers ( `kcd.css`'s plain `<link>` tag is the first known case — see
+ *  `fixStylesheetLinks` ). */
+export interface MigrationPlan {
+	actions: MigrationAction[];
+	notes:   string[];
+}
+
+export interface MigrationApplyReport {
+	action:  MigrationAction;
+	applied: boolean;
+	error?:  string;
+}
+
+/** One stylesheet `<link>` fix — `kcd.css`'s relative depth changes with every file it's linked
+ *  from, and it is plain HTML, not a `data-kcd-*` href, so no existing heal mechanism sees it. */
+export interface StylesheetFixReport {
+	path:    string;
+	oldHref: string;
+	newHref: string;
+	applied: boolean;
 }
 
 /**
@@ -241,5 +402,461 @@ export class VaultUtilities {
 	private static lensPath( nameOrPath: string ): string {
 		if ( nameOrPath.includes( '/' ) || /\.html?$/i.test( nameOrPath ) ) return nameOrPath;
 		return `lenses/${ nameOrPath }/${ nameOrPath }.html`;
+	}
+
+	/**
+	 * The single read-query over a vault — glob, type, and text, AND-combined over one scan.
+	 * `glob` short-circuits through the Vault's own path filter; `type`/`text` narrow the
+	 * survivors. `groupBy: 'type'` returns a census instead of refs — the cheapest orientation
+	 * call, and how `kcd_query`'s inspector example works. Moved out of the MCP handler ( 1.i ):
+	 * this was the one tool whose filtering logic lived only on one face.
+	 */
+	static query( vault: Vault, opts: QueryOptions = {} ): QueryResult {
+		const needle = opts.text?.toLowerCase();
+
+		let files = opts.glob ? vault.glob( opts.glob ) : vault.scan();
+		if ( opts.type ) files = files.filter( f => vault.classify( f.path ) === opts.type );
+		if ( needle )     files = files.filter( f => ( f.body + '\n' + JSON.stringify( f.frontmatter ) ).toLowerCase().includes( needle ) );
+
+		if ( opts.groupBy === 'type' ) {
+			const counts: Record<string, number> = {};
+			for ( const f of files ) {
+				const t = vault.classify( f.path );
+				counts[ t ] = ( counts[ t ] ?? 0 ) + 1;
+			}
+			return Object.entries( counts )
+				.sort( ( a, b ) => b[ 1 ] - a[ 1 ] )
+				.map( ( [ type, count ] ) => ( { type, count } ) );
+		}
+
+		return files.map( f => vault.toRef( f ) );
+	}
+
+	/**
+	 * The link graph around one artifact: `outbound` ( what it declares, resolved ), `addresses`
+	 * ( its own, each flagged `occupied` — a fact, never a verdict, protocol §1.1 ), and `inbound`
+	 * ( every other file whose links resolve here, found by scanning + resolving the whole vault ).
+	 * Moved out of the MCP handler ( 1.i ), same reason as `query`.
+	 */
+	static links( vault: Vault, path: string ): LinksResult {
+		const abs      = vault.toAbs( path );
+		const artifact = KCDPrimitive.fromHtml( vault.read( path ), abs );
+		const outbound = artifact.getLinks();
+
+		// Addresses ride their own list, never mixed into outbound — collapsing them would hand the
+		// caller back the exact ambiguity the primitive exists to remove.
+		const names = new Set( vault.scan()
+			.map( f => typeof f.frontmatter[ 'name' ] === 'string' ? f.frontmatter[ 'name' ] as string : '' )
+			.filter( n => n !== '' ) );
+		const addresses = ( artifact.serialize().addresses ?? [] ).map( a => ( {
+			...a,
+			occupied: names.has( a.value ) || vault.exists( a.value ),
+		} ) );
+
+		const inbound = vault.scan()
+			.filter( f => f.rawLinks.some( l => vault.resolveHref( l.href ) === abs ) )
+			.map( f => ( { path: f.relativePath, relativePath: f.relativePath } ) );
+
+		return { outbound, addresses, inbound };
+	}
+
+	/**
+	 * Parse every §10 seed payload out of the seed source. A seed is the "§5 non-executing script
+	 * idiom with a markdown type" — `<script type="text/kcd-md" data-kcd-seed="host"
+	 * data-kcd-target="…" data-kcd-mode="…">payload</script>` — one block per agent host. Attribute
+	 * order is NOT assumed ( each is matched independently within the captured tag ), so a document
+	 * author reordering them cannot silently break extraction. A `<script>` without
+	 * `type="text/kcd-md"` is skipped, not an error — root-context may grow other script content
+	 * later.
+	 */
+	static parseSeeds( vault: Vault ): SeedBlock[] {
+		return VaultUtilities.parseSeedsFrom( vault.read( ROOT_CONTEXT_PATH ) );
+	}
+
+	/**
+	 * The same parse, against raw HTML rather than a deployed vault.
+	 *
+	 * The two currencies are genuinely different, not a convenience wrapper: at INSTALL time there is
+	 * no vault yet, and the caller needs the seed declarations out of the BUNDLE's `root-context.html`
+	 * — which is the only place the set of agent entry-point filenames is written down. Anchoring an
+	 * install on "the folder containing CLAUDE.md" without this would mean hardcoding that filename in
+	 * the CLI, and there would then be two lists of host targets that could disagree.
+	 */
+	static parseSeedsFrom( html: string ): SeedBlock[] {
+		const out: SeedBlock[] = [];
+		const scriptRe = /<script\s+([^>]*?)>([\s\S]*?)<\/script>/g;
+
+		let m: RegExpExecArray | null;
+		while ( ( m = scriptRe.exec( html ) ) !== null ) {
+			const [ , attrs, body ] = m;
+			if ( !/type="text\/kcd-md"/.test( attrs ) ) continue;
+
+			const host   = /data-kcd-seed="([^"]+)"/.exec( attrs )?.[ 1 ];
+			const target = /data-kcd-target="([^"]+)"/.exec( attrs )?.[ 1 ];
+			const mode   = /data-kcd-mode="([^"]+)"/.exec( attrs )?.[ 1 ] as SeedBlock[ 'mode' ] | undefined;
+			if ( !host || !target ) continue; // malformed seed — both are protocol-required
+
+			out.push( { host, target, mode: mode ?? 'prepend', payload: body.trim() } );
+		}
+		return out;
+	}
+
+	/**
+	 * Apply one seed to its target, confirm-gated like `reset`: no `confirm` only reports what
+	 * would change, nothing on disk moves.
+	 *
+	 * `create-only` writes the whole file, and only when nothing is there yet — re-running this
+	 * against an existing target is always a no-op by design (`changed: false`), never a silent
+	 * overwrite of a project's own content.
+	 *
+	 * `prepend` maintains a MANAGED BLOCK at the top of the target, delimited by
+	 * `<!-- kcd:begin -->` / `<!-- kcd:end -->` — re-extraction replaces only what lies between the
+	 * markers and leaves everything below them alone, which is what lets a vault deploy over a
+	 * project whose `CLAUDE.md` already says things of its own. First extraction ( no markers yet )
+	 * PREPENDS the block above whatever the file already held; a target that does not exist yet gets
+	 * just the block.
+	 */
+	static applySeed( projectRoot: string, seed: SeedBlock, opts?: { confirm?: boolean } ): SeedApplyReport {
+		const targetAbs = path.resolve( projectRoot, seed.target );
+		const existed   = fs.existsSync( targetAbs );
+
+		if ( seed.mode === 'create-only' ) {
+			const changed = !existed;
+			if ( changed && opts?.confirm ) {
+				fs.mkdirSync( path.dirname( targetAbs ), { recursive: true } );
+				fs.writeFileSync( targetAbs, seed.payload + '\n', 'utf-8' );
+			}
+			return { host: seed.host, target: seed.target, mode: seed.mode, targetExisted: existed, hadManagedBlock: false, changed, applied: !!opts?.confirm && changed };
+		}
+
+		const current  = existed ? fs.readFileSync( targetAbs, 'utf-8' ) : '';
+		const blockRe  = /<!--\s*kcd:begin\s*-->[\s\S]*?<!--\s*kcd:end\s*-->/;
+		const hadBlock = blockRe.test( current );
+		const block    = `<!-- kcd:begin -->\n${ seed.payload }\n<!-- kcd:end -->`;
+		const next     = hadBlock ? current.replace( blockRe, block ) : block + ( current ? '\n\n' + current : '\n' );
+		const changed  = next !== current;
+
+		if ( changed && opts?.confirm ) {
+			fs.mkdirSync( path.dirname( targetAbs ), { recursive: true } );
+			fs.writeFileSync( targetAbs, next, 'utf-8' );
+		}
+		return { host: seed.host, target: seed.target, mode: seed.mode, targetExisted: existed, hadManagedBlock: hadBlock, changed, applied: !!opts?.confirm && changed };
+	}
+
+	/**
+	 * The inverse of `applySeed` — take OUR managed block back out of a host entry file, leaving
+	 * everything the project wrote itself exactly where it was.
+	 *
+	 * The uninstall half of the seed contract, and the reason `clear` can be offered at all: because
+	 * `applySeed` never owned more than the region between its markers, removal is subtraction rather
+	 * than deletion. The file survives with the user's own instructions intact. It is deleted ONLY
+	 * when our block was the entire content — i.e. we created it and nobody added anything since —
+	 * which is the one case where leaving an empty file behind would be litter rather than courtesy.
+	 *
+	 * `create-only` seeds are never removed: that mode writes a whole file and then never touches it
+	 * again, so after the first install the content is indistinguishable from the project's own.
+	 * Guessing there would mean deleting something we cannot prove we wrote.
+	 */
+	static removeSeed( projectRoot: string, seed: SeedBlock, opts?: { confirm?: boolean } ): SeedRemoveReport {
+		const targetAbs = path.resolve( projectRoot, seed.target );
+		const existed   = fs.existsSync( targetAbs );
+		const base      = { host: seed.host, target: seed.target, targetExisted: existed };
+
+		if ( !existed || seed.mode === 'create-only' ) {
+			return { ...base, hadManagedBlock: false, fileRemoved: false, changed: false, applied: false };
+		}
+
+		const current  = fs.readFileSync( targetAbs, 'utf-8' );
+		const blockRe  = /<!--\s*kcd:begin\s*-->[\s\S]*?<!--\s*kcd:end\s*-->\r?\n?/;
+		const hadBlock = blockRe.test( current );
+		if ( !hadBlock ) return { ...base, hadManagedBlock: false, fileRemoved: false, changed: false, applied: false };
+
+		const next        = current.replace( blockRe, '' ).replace( /^\s+/, '' );
+		const fileRemoved = next.trim().length === 0;
+
+		if ( opts?.confirm ) {
+			if ( fileRemoved ) fs.rmSync( targetAbs );
+			else fs.writeFileSync( targetAbs, next, 'utf-8' );
+		}
+		return { ...base, hadManagedBlock: true, fileRemoved, changed: true, applied: !!opts?.confirm };
+	}
+
+	/**
+	 * Maintain a managed block in the project's `.gitignore`, confirm-gated like every other write.
+	 *
+	 * WHY THIS IS A FUNCTION AND NOT A PARAGRAPH OF ADVICE: an install writes six paths into a
+	 * version-controlled repository, and "I do not want this in my git history" is the one objection
+	 * a cautious developer actually has. It was previously answered with prose telling them to edit
+	 * `.gitignore` themselves — which is a chore attached to the least confident moment of the
+	 * install. It also replaces "workspace mode" outright ( ruled 2026-07-26 ): a vault outside the
+	 * repository breaks `inferProjectRoot`'s upward walk and is an alternate topology, whereas the
+	 * concern behind it is fully served by three lines in a file.
+	 *
+	 * The three scopes are the three honest answers, and `none` exists so the choice is reversible:
+	 *
+	 *   scratch  the default recommendation — `audits/` and `work/` are regenerable churn; the rest
+	 *            of the vault is project knowledge and belongs in history
+	 *   vault    the whole vault, for someone who wants to try this without touching their repo
+	 *   none     remove the managed block entirely, restoring whatever they had before
+	 *
+	 * Managed-block idiom deliberately mirrors `applySeed`'s ( `# kcd:begin` / `# kcd:end`, comment
+	 * syntax swapped for the file format ) so there is ONE mechanism for "a file we co-own with the
+	 * user" rather than two that drift. The block is APPENDED, not prepended — a `.gitignore`'s own
+	 * rules should stay where its author put them.
+	 */
+	static gitignore( projectRoot: string, docRoot: string, scope: IgnoreScope, opts?: { confirm?: boolean } ): IgnoreReport {
+		const targetAbs = path.resolve( projectRoot, '.gitignore' );
+		const existed   = fs.existsSync( targetAbs );
+		const current   = existed ? fs.readFileSync( targetAbs, 'utf-8' ) : '';
+
+		const entries =
+			scope === 'vault'   ? [ `${ docRoot }/` ] :
+			scope === 'scratch' ? [ `${ docRoot }/audits/`, `${ docRoot }/work/`, `${ docRoot }/scratch/` ] :
+			[];
+
+		// [\s\S]*? so a block spanning lines is matched lazily; the trailing \n? absorbs the blank
+		// line a removal would otherwise leave behind.
+		const blockRe  = /#\s*kcd:begin\s*[\s\S]*?#\s*kcd:end\s*\n?/;
+		const hadBlock = blockRe.test( current );
+
+		let next: string;
+		if ( entries.length === 0 ) {
+			next = hadBlock ? current.replace( blockRe, '' ).replace( /\n{3,}$/, '\n' ) : current;
+		} else {
+			const block = `# kcd:begin\n${ entries.join( '\n' ) }\n# kcd:end\n`;
+			next = hadBlock
+				? current.replace( blockRe, block )
+				: current + ( current && !current.endsWith( '\n' ) ? '\n' : '' ) + ( current ? '\n' : '' ) + block;
+		}
+
+		const changed = next !== current;
+		if ( changed && opts?.confirm ) fs.writeFileSync( targetAbs, next, 'utf-8' );
+
+		return { target: '.gitignore', scope, entries, targetExisted: existed, hadManagedBlock: hadBlock, changed, applied: !!opts?.confirm && changed };
+	}
+
+	/**
+	 * The entry document's Lenses table, freshly computed from the vault's real lens files —
+	 * `what`/`where`/`why` sourced from each lens's OWN frontmatter, never hand-copied. This is
+	 * deliberately authoritative-over-editorial: a lens's description is the one place its pitch is
+	 * written, and a curated-but-separate copy in the entry document is exactly the kind of thing
+	 * that drifts silently. `_lens-base` ( and any other `_`-prefixed, auto-loaded infrastructure
+	 * lens ) is excluded — it is never picked, it is automatic.
+	 */
+	static lensIndex( vault: Vault ): LensIndexRow[] {
+		return vault.scan()
+			.filter( f => vault.classify( f.path ) === 'lens' )
+			.filter( f => !path.basename( f.relativePath ).startsWith( '_' ) )
+			.map( f => ( {
+				// The FOLDER name, not frontmatter.name — this is the slug `!name` and
+				// `kcd_compile`'s own `lenses/{name}/{name}.html` convention actually resolve. At
+				// least three lenses' authored `name` disagrees with their folder ( hyphen vs.
+				// underscore ) — using frontmatter here would put an unresolvable slug in the one
+				// table whose whole job is telling an agent what to type.
+				what:  path.basename( path.dirname( f.relativePath ) ),
+				where: `${ DOC_ROOT_PREFIX }/${ f.relativePath }`.replace( /\\/g, '/' ),
+				why:   typeof f.frontmatter[ 'description' ] === 'string' ? f.frontmatter[ 'description' ] as string : '',
+			} ) )
+			.sort( ( a, b ) => a.what.localeCompare( b.what ) );
+	}
+
+	/**
+	 * Splice freshly-computed rows into the entry document's `data-kcd-section="lenses"` table,
+	 * leaving every other section — hard rules, stacking, framework reference, all hand-authored
+	 * prose — untouched. Locates the table by its OWN structural markers ( the section id, the
+	 * head row, the section's own closing tag ), not a line-number or whitespace assumption, so a
+	 * human editing prose elsewhere in the document cannot break the splice. Throws rather than
+	 * guessing if the section is not found in the expected shape — a silent wrong-place write to a
+	 * hard-rule-protected document is worse than a loud refusal.
+	 */
+	static spliceLensIndex( rootHtml: string, rows: LensIndexRow[] ): LensIndexReport {
+		// This project's entry document is CRLF ( Windows-authored ) — every line-ending match here
+		// is `\r?\n`, and every line the splice EMITS uses `\r\n` too, so the write never mixes
+		// conventions mid-file. A bare `\n` assumption is exactly what broke this on the first real run.
+		const sectionRe = /<section data-kcd-section="lenses">[\s\S]*?<\/section>/;
+		const section    = sectionRe.exec( rootHtml );
+		if ( !section ) throw new Error( 'spliceLensIndex: no <section data-kcd-section="lenses"> found in the entry document' );
+
+		const headRe = /<div data-kcd-head>[\s\S]*?<\/div>\r?\n/;
+		const head   = headRe.exec( section[ 0 ] );
+		if ( !head ) throw new Error( 'spliceLensIndex: found the lenses section but not its table head row' );
+
+		const headEndInSection = head.index + head[ 0 ].length;
+		const closeRe          = /\r?\n(\t*)<\/div>\r?\n(\t*)<\/section>$/;
+		const close             = closeRe.exec( section[ 0 ] );
+		if ( !close ) throw new Error( 'spliceLensIndex: found the lenses table head but not its closing tags' );
+
+		const rendered = rows.map( r =>
+			`\t\t\t<div data-kcd-slot="reference" data-kcd-mode="on">\r\n` +
+			`\t\t\t\t<span data-kcd-field="what"  data-kcd-type="text">${ r.what }</span>\r\n` +
+			`\t\t\t\t<a    data-kcd-field="where" data-kcd-type="path" href="${ r.where }">${ r.what }</a>\r\n` +
+			`\t\t\t\t<span data-kcd-field="why"   data-kcd-type="text">${ r.why }</span>\r\n` +
+			`\t\t\t</div>`
+		).join( '\r\n' );
+
+		const newSection = section[ 0 ].slice( 0, headEndInSection ) + rendered + section[ 0 ].slice( close.index );
+		const html        = rootHtml.slice( 0, section.index ) + newSection + rootHtml.slice( section.index + section[ 0 ].length );
+
+		return { rows, html, changed: html !== rootHtml };
+	}
+
+	/**
+	 * Restore ONE deployed artifact to canonical from the bundle — the opposite of `VaultDeploy`,
+	 * which only ever FILLS ( `force: false`, an existing file is never touched ). Reset is the
+	 * deliberate overwrite `VaultDeploy` refuses to be.
+	 *
+	 * The canonical counterpart of a deployed path is resolved through `InstallManifest`, the same
+	 * table `VaultDeploy` fills FROM — no second mapping to drift out of step with the first. A
+	 * target with no covering row ( content the manifest never declared ) simply has no canonical
+	 * counterpart; that is a normal, reportable outcome, not an error.
+	 *
+	 * CONFIRM-FIRST, per-artifact: called with no `opts` ( or `confirm: false` ), this only
+	 * reports — `applied` is always `false` and nothing on disk changes. Pass `confirm: true` to
+	 * actually overwrite, and only once the caller has seen the report. A target already
+	 * `identical` to canonical is left untouched even with `confirm: true` — reset does not
+	 * touch mtimes for no reason.
+	 */
+	static reset( vault: Vault, targetPath: string, substrateSource: string, opts?: { confirm?: boolean } ): ResetReport {
+		const rel = targetPath.replace( /\\/g, '/' ).replace( /^\/+/, '' );
+		const targetAbs = vault.toAbs( rel );
+
+		const entry = InstallManifest.entryFor( rel );
+		if ( !entry )
+			return { path: rel, canonicalPath: '', hasCanonical: false, targetExisted: fs.existsSync( targetAbs ), identical: false, applied: false };
+
+		// `entry.vaultHome` may be a directory row ( e.g. `habits` ) covering `rel` as a descendant —
+		// the tail below it carries over onto the bundle side unchanged.
+		const tail = rel === entry.vaultHome ? '' : rel.slice( entry.vaultHome.length + 1 );
+		const canonicalPath = path.join( substrateSource, entry.bundleSource, tail );
+
+		const hasCanonical  = fs.existsSync( canonicalPath ) && fs.statSync( canonicalPath ).isFile();
+		const targetExisted = fs.existsSync( targetAbs );
+
+		if ( !hasCanonical )
+			return { path: rel, canonicalPath, hasCanonical, targetExisted, identical: false, applied: false };
+
+		const canonicalContent = fs.readFileSync( canonicalPath, 'utf-8' );
+		const identical = targetExisted && fs.readFileSync( targetAbs, 'utf-8' ) === canonicalContent;
+
+		const apply = !!opts?.confirm && !identical;
+		if ( apply ) vault.write( rel, canonicalContent );
+
+		return { path: rel, canonicalPath, hasCanonical, targetExisted, identical, applied: apply };
+	}
+
+	/**
+	 * Categorize every file under `kcd/` into one of the three real migration states. `overrides`
+	 * maps a `kcd/`-stripped PREFIX to its real target prefix ( e.g. `{ 'docs/': 'references/kcd_sdk/'
+	 * }` ) for the cases where the flat mirror of a `kcd/` path is not an actual home — deliberately a
+	 * CALLER-supplied table, not baked in here: a different project's `kcd/` shape will need different
+	 * overrides, and this function stays generic by not guessing at one project's history.
+	 *
+	 * Duplicate detection runs on the UN-overridden flat path — a file already deployed at its
+	 * natural mirror is a duplicate regardless of where an unrelated file's override sends it.
+	 */
+	static planKcdMigration( vault: Vault, overrides: Record<string, string> = {} ): MigrationPlan {
+		const actions: MigrationAction[] = [];
+		const notes: string[] = [];
+
+		for ( const f of vault.scan() ) {
+			const rel = f.relativePath.replace( /\\/g, '/' );
+			if ( rel !== 'kcd' && !rel.startsWith( 'kcd/' ) ) continue;
+			const stripped = rel.slice( 4 ); // 'kcd/'.length
+
+			if ( stripped.startsWith( 'templates/' ) ) {
+				actions.push( { kind: 'extract-template', kcdPath: rel } );
+				continue;
+			}
+
+			if ( vault.exists( `${ DOC_ROOT_PREFIX }/${ stripped }` ) ) {
+				const diverged = vault.read( rel ) !== vault.read( stripped );
+				actions.push( { kind: 'delete-duplicate', kcdPath: rel, deployedPath: stripped, diverged } );
+				continue;
+			}
+
+			let target = stripped;
+			for ( const [ from, to ] of Object.entries( overrides ) ) {
+				if ( stripped.startsWith( from ) ) { target = to + stripped.slice( from.length ); break; }
+			}
+			actions.push( { kind: 'relocate', kcdPath: rel, targetPath: target } );
+		}
+
+		if ( actions.some( a => a.kcdPath === 'kcd/kcd.css' ) )
+			notes.push( 'kcd/kcd.css is linked via a plain <link> tag, not a data-kcd-* href — no heal here sees it. Run fixStylesheetLinks() once its new home is settled.' );
+
+		return { actions, notes };
+	}
+
+	/**
+	 * Apply a plan's `delete-duplicate` and `relocate` actions — confirm-gated like every other
+	 * write in this class. `extract-template` is reported, never applied: its destination is OUTSIDE
+	 * the vault, in whatever package consumes this project, and that mapping is not this generic
+	 * utility's to know. `relocate` reuses `vault.move()` verbatim — link-healing for free, same
+	 * proven mechanism `kcd_move` already runs. `delete-duplicate` cannot use `move()` ( its
+	 * destination already exists, which `move()` refuses by design ) — so it re-derives the same
+	 * repoint-then-remove shape by hand: every inbound link to the `kcd/` copy is rewritten to point
+	 * at the real deployed copy, then the stale file is removed, then the same post-condition
+	 * `move()`/`delete()` both assert — no link may still resolve to the old path — is checked here too.
+	 */
+	static applyKcdMigration( vault: Vault, plan: MigrationPlan, opts?: { confirm?: boolean } ): MigrationApplyReport[] {
+		const reports: MigrationApplyReport[] = [];
+
+		for ( const action of plan.actions ) {
+			if ( action.kind === 'extract-template' ) {
+				reports.push( { action, applied: false, error: 'extract-template is not applied here — relocate it outside the vault, then delete the kcd/ source separately' } );
+				continue;
+			}
+			if ( !opts?.confirm ) { reports.push( { action, applied: false } ); continue; }
+
+			try {
+				if ( action.kind === 'delete-duplicate' ) {
+					const kcdAbs  = vault.toAbs( action.kcdPath );
+					const newHref = `${ DOC_ROOT_PREFIX }/${ action.deployedPath }`;
+					for ( const edit of vault.inboundEdits( kcdAbs, newHref ) ) vault.rewriteHref( edit );
+					fs.unlinkSync( kcdAbs );
+					vault.assertNoResidual( kcdAbs, 'migrate' );
+				} else {
+					vault.move( action.kcdPath, action.targetPath! );
+				}
+				reports.push( { action, applied: true } );
+			} catch ( e ) {
+				reports.push( { action, applied: false, error: e instanceof Error ? e.message : String( e ) } );
+			}
+		}
+		return reports;
+	}
+
+	/**
+	 * Fix every document's stylesheet `<link>` to point at `kcd.css`'s CURRENT location, recomputed
+	 * fresh from each file's own depth. Deliberately unconditional — every document in the vault
+	 * shares the one stylesheet, so this recomputes every link rather than trying to detect which
+	 * ones point at a stale path; a link already correct is simply reported `applied: false`
+	 * ( nothing to do ), not skipped.
+	 */
+	static fixStylesheetLinks( vault: Vault, cssHome: string, opts?: { confirm?: boolean } ): StylesheetFixReport[] {
+		const reports: StylesheetFixReport[] = [];
+		const linkRe = /<link\s+rel="stylesheet"\s+href="([^"]+)"\s*\/?>/;
+
+		for ( const f of vault.scan() ) {
+			const rel = f.relativePath.replace( /\\/g, '/' );
+			if ( rel === cssHome ) continue; // the stylesheet itself is not HTML
+
+			const raw = vault.read( rel );
+			const m   = linkRe.exec( raw );
+			if ( !m ) continue;
+
+			const depth   = rel.split( '/' ).length - 1;
+			const newHref = ( depth === 0 ? '' : '../'.repeat( depth ) ) + cssHome;
+			const oldHref = m[ 1 ];
+			if ( oldHref === newHref ) { reports.push( { path: rel, oldHref, newHref, applied: false } ); continue; }
+
+			if ( opts?.confirm ) {
+				const before = raw.slice( 0, m.index );
+				const after  = raw.slice( m.index + m[ 0 ].length );
+				vault.write( rel, before + m[ 0 ].replace( oldHref, newHref ) + after );
+			}
+			reports.push( { path: rel, oldHref, newHref, applied: !!opts?.confirm } );
+		}
+		return reports;
 	}
 }

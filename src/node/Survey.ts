@@ -64,6 +64,10 @@ export interface SurveyReport {
 }
 
 /** Never walked. Build output and vendor trees describe the toolchain, not the project. */
+/** The vault folder name, skipped by default — a survey is of the project BESIDE the vault. Its own
+ *  literal rather than an import of LensObject: Survey is otherwise dependency-free over fs+path. */
+const DEFAULT_DOC_ROOT = '_Claude';
+
 const SKIP_DIRS = new Set( [
 	'node_modules', '.git', '.svn', '.hg', 'dist', 'build', 'out', 'target', 'bin', 'obj',
 	'.next', '.nuxt', '.venv', 'venv', '__pycache__', '.tox', '.gradle', '.idea', '.vscode',
@@ -159,10 +163,19 @@ interface RawFile { rel: string; size: number; inTestDir: boolean; base: string 
  */
 export class Survey {
 
-	/** Walk `projectRoot` and produce the report. Never throws on odd trees. */
-	static run( projectRoot: string, opts?: { maxFiles?: number } ): SurveyReport {
+	/**
+	 * Walk `projectRoot` and produce the report. Never throws on odd trees.
+	 *
+	 * The vault is EXCLUDED. A survey reconnoitres the project the vault sits beside, so counting the
+	 * vault's own artifacts as the user's code is not a rounding error — it is the wrong answer to the
+	 * only question this asks. Left unskipped, a freshly installed vault ( ~44 framework documents )
+	 * swamps a small project entirely, and every agent reading the roster concludes the project is
+	 * made of KCD HTML. Found 2026-07-25, when a 6-file test project surveyed as 50 files.
+	 */
+	static run( projectRoot: string, opts?: { maxFiles?: number; docRoot?: string } ): SurveyReport {
 		const root     = path.resolve( projectRoot );
 		const maxFiles = opts?.maxFiles ?? MAX_FILES;
+		const docRoot  = opts?.docRoot ?? DEFAULT_DOC_ROOT;
 
 		const files:     RawFile[] = [];
 		const manifests: { dir: string; file: string; ecosystem: string }[] = [];
@@ -179,7 +192,7 @@ export class Survey {
 				const abs = path.join( dir, entry.name );
 
 				if ( entry.isDirectory() ) {
-					if ( SKIP_DIRS.has( entry.name ) || entry.name.startsWith( '.' ) ) continue;
+					if ( SKIP_DIRS.has( entry.name ) || entry.name === docRoot || entry.name.startsWith( '.' ) ) continue;
 					directories++;
 					const isTest = TEST_DIRS.has( entry.name.toLowerCase() );
 					walk( abs, inTestDir || isTest );

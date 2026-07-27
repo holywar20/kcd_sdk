@@ -5,8 +5,11 @@ import type { ArtifactType } from '../primitives/types'
  *
  * The layout used to be written down three times — the SDK's path classifier, the library index's
  * whitelist, and a hand-drawn deployment canvas — and the three had already drifted apart. This
- * table is the single definition all of them derive from: classification, the index whitelist, the
- * deploy scaffold, and the generated `vault-layout` reference.
+ * table is the single definition all of them derive from: classification, the index whitelist, and
+ * the generated `vault-layout` reference. Filling a vault's CONTENTS is `InstallManifest`'s job, not
+ * this table's — a vault used to carry its own canonical mirror under a `kcd` row here, but "canonical
+ * is not deployed": the framework's master copy lives in the installed package now, and this table
+ * only ever describes empty structure.
  *
  * Node-free by design. It is pure data plus string math, so the renderer reads the same structure
  * the main process and the deploy step do.
@@ -15,12 +18,9 @@ import type { ArtifactType } from '../primitives/types'
  * indexed — absence is the safe default, which is what keeps the whitelist meaningful.
  */
 
-/** The three deployment layers. `agent` = the Know+Care+Do artifacts an agent is built from;
- *  `substrate` = the locked canonical framework library; `data` = everything a project produces. */
-export type VaultLayer = 'agent' | 'substrate' | 'data'
-
-/** What a deploy does with a directory — create it empty, or fill it from the canonical master. */
-export type ScaffoldMode = 'mkdir' | 'copy'
+/** The two deployment layers left once the substrate moved into the package: `agent` = the
+ *  Know+Care+Do artifacts an agent is built from; `data` = everything a project produces. */
+export type VaultLayer = 'agent' | 'data'
 
 /** One directory of the canonical layout. */
 export interface LayoutEntry {
@@ -32,7 +32,6 @@ export interface LayoutEntry {
 	layer: VaultLayer
 	/** Whether the library index descends into it. */
 	indexed: boolean
-	scaffold: ScaffoldMode
 	/** The one-line description the generated reference publishes. */
 	purpose: string
 }
@@ -44,49 +43,39 @@ export interface LayoutEntry {
  */
 const LAYOUT: readonly LayoutEntry[] = [
 
-	// ── Canonical substrate — the locked framework library, copied in at deploy ──
-	{
-		dir: 'kcd', type: 'framework', layer: 'substrate', indexed: true, scaffold: 'copy',
-		purpose: 'The locked canonical framework library. Never edited in a deployed instance — changes belong in the framework\'s own repo.'
-	},
-	{
-		dir: 'kcd/templates', type: 'template', layer: 'substrate', indexed: true, scaffold: 'copy',
-		purpose: 'Authoring scaffolds — copy one, fill the placeholders, delete the scaffold note.'
-	},
-
 	// ── Agent layer — the Know + Care + Do artifacts an agent is composed from ──
 	{
-		dir: 'lenses', type: 'lens', layer: 'agent', indexed: true, scaffold: 'mkdir',
+		dir: 'lenses', type: 'lens', layer: 'agent', indexed: true,
 		purpose: 'Know+Care personalities. One folder per lens, each holding its lens file and a context/ of support material.'
 	},
 	{
-		dir: 'analyzers', type: 'analyzer', layer: 'agent', indexed: true, scaffold: 'mkdir',
+		dir: 'analyzers', type: 'analyzer', layer: 'agent', indexed: true,
 		purpose: 'Read-anywhere, write-one-report agents.'
 	},
 	{
-		dir: 'generators', type: 'generator', layer: 'agent', indexed: true, scaffold: 'mkdir',
+		dir: 'generators', type: 'generator', layer: 'agent', indexed: true,
 		purpose: 'Manifest-driven write agents — broad write authority, no judgment of their own.'
 	},
 	{
-		dir: 'habits', type: 'habit', layer: 'agent', indexed: true, scaffold: 'mkdir',
+		dir: 'habits', type: 'habit', layer: 'agent', indexed: true,
 		purpose: 'Atomic behavior fragments. Flat files, no subfolders.'
 	},
 
 	// ── Data / output layer — what a project accumulates as it runs ──
 	{
-		dir: 'references', type: 'reference', layer: 'data', indexed: true, scaffold: 'mkdir',
+		dir: 'references', type: 'reference', layer: 'data', indexed: true,
 		purpose: 'The project knowledge store, categorized by folder — the folder IS the category.'
 	},
 	{
-		dir: 'contracts', type: 'contract', layer: 'data', indexed: true, scaffold: 'mkdir',
+		dir: 'contracts', type: 'contract', layer: 'data', indexed: true,
 		purpose: 'Behavioral agreements — composable prose a third party can evaluate against.'
 	},
 	{
-		dir: 'utilities', type: 'utility', layer: 'data', indexed: true, scaffold: 'mkdir',
+		dir: 'utilities', type: 'utility', layer: 'data', indexed: true,
 		purpose: 'The registered tool tier — draft/ (unapproved) and deployed/ (approved), with a registry.'
 	},
 	{
-		dir: 'plans', type: 'plan', layer: 'data', indexed: true, scaffold: 'mkdir',
+		dir: 'plans', type: 'plan', layer: 'data', indexed: true,
 		purpose: 'Promoted plans that authorize action, plus the plans_complete/ and plans_deferred/ buckets beneath.'
 	},
 
@@ -96,27 +85,27 @@ const LAYOUT: readonly LayoutEntry[] = [
 	// table is genuinely unrecognized, which is a different and useful signal. Agentic work generates
 	// drift and throwaway content fast; these are where it is allowed to land.
 	{
-		dir: 'work', type: 'unknown', layer: 'data', indexed: false, scaffold: 'mkdir',
+		dir: 'work', type: 'unknown', layer: 'data', indexed: false,
 		purpose: 'Per-lens scratch space (AI/, human/, plans/). Cheap and discardable until something is promoted out of it.'
 	},
 	{
-		dir: 'logs', type: 'unknown', layer: 'data', indexed: false, scaffold: 'mkdir',
+		dir: 'logs', type: 'unknown', layer: 'data', indexed: false,
 		purpose: 'Session log plus per-lens completed/, todo/, and agent-status/.'
 	},
 	{
-		dir: 'reports', type: 'unknown', layer: 'data', indexed: false, scaffold: 'mkdir',
+		dir: 'reports', type: 'unknown', layer: 'data', indexed: false,
 		purpose: 'Analyzer output.'
 	},
 	{
-		dir: 'audits', type: 'unknown', layer: 'data', indexed: false, scaffold: 'mkdir',
+		dir: 'audits', type: 'unknown', layer: 'data', indexed: false,
 		purpose: 'Generator raw output and vault backups. Deliberately unindexed — backup copies here are what made the library accrue duplicate references.'
 	},
 	{
-		dir: 'scratch', type: 'unknown', layer: 'data', indexed: false, scaffold: 'mkdir',
+		dir: 'scratch', type: 'unknown', layer: 'data', indexed: false,
 		purpose: 'Free scratch space with no per-lens structure.'
 	},
 	{
-		dir: 'dev-utilities', type: 'unknown', layer: 'data', indexed: false, scaffold: 'mkdir',
+		dir: 'dev-utilities', type: 'unknown', layer: 'data', indexed: false,
 		purpose: 'The dev command deck — JSON-declared scripts run against the project, not governed artifacts.'
 	}
 
@@ -124,6 +113,11 @@ const LAYOUT: readonly LayoutEntry[] = [
 
 /** The filename that is a nav-index wherever it sits. */
 const NAV_INDEX_FILE = 'nav-index.html'
+
+/** Framework-layer documents that live directly at vault root — `InstallManifest` deploys them
+ *  there, but they sit outside every `LAYOUT` directory row, so `classify` special-cases them the
+ *  same way it does `NAV_INDEX_FILE`. */
+const FRAMEWORK_ROOT_FILES = [ 'root.html', 'root-context.html', 'kcd_framework.html' ]
 
 /** Path depth at which a file under `lenses/` stops being the lens itself: `lenses/{name}/{file}`
  *  is the lens, anything deeper is support material. */
@@ -138,8 +132,8 @@ export class VaultLayout {
 
 	/**
 	 * The row governing a vault-relative path ( the part BELOW the doc root ), or null when nothing
-	 * owns it. Longest matching directory prefix wins, so `kcd/templates/x.html` resolves to the
-	 * templates row and not the `kcd` row it also sits under.
+	 * owns it. Longest matching directory prefix wins, so a more specific row always beats a shorter
+	 * one it also sits under.
 	 */
 	static entryFor( sub: string ): LayoutEntry | null {
 		const norm = sub.replace( /\\/g, '/' )
@@ -155,10 +149,10 @@ export class VaultLayout {
 	/**
 	 * A vault-root-relative path ( `_Claude/...` ) to its artifact type — the one path taxonomy.
 	 *
-	 * Three rules run before the table, because none of them is decided by which folder a file sits
-	 * in: a nav-index is a nav-index anywhere; a `context/` descendant is support material for
-	 * whatever owns it; and inside `lenses/`, only the lens's own file is the lens. Everything else
-	 * is the table.
+	 * Four rules run before the table, because none of them is decided by which folder a file sits
+	 * in: a nav-index is a nav-index anywhere; a root-level framework file is `framework` regardless
+	 * of the table; a `context/` descendant is support material for whatever owns it; and inside
+	 * `lenses/`, only the lens's own file is the lens. Everything else is the table.
 	 */
 	static classify( relPath: string, docRoot = '_Claude' ): ArtifactType {
 		const norm = relPath.replace( /\\/g, '/' )
@@ -166,6 +160,7 @@ export class VaultLayout {
 		if( norm.endsWith( '/' + NAV_INDEX_FILE ) ) return 'nav-index'
 
 		const sub = norm.slice( docRoot.length + 1 )
+		if( FRAMEWORK_ROOT_FILES.includes( sub ) ) return 'framework'
 		if( sub.includes( '/context/' ) ) return 'reference'
 
 		const entry = VaultLayout.entryFor( sub )

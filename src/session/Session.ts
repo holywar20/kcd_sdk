@@ -12,7 +12,7 @@
  * bridge whole via serialize / fromSerialized, the same trinity as Agent.
  */
 
-import { Transcript, type Turn, type WireMessage, type TranscriptTurn, type ContextPolicy } from './TurnEntry';
+import { Transcript, type Turn, type WireMessage, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type SessionPolicies } from './TurnEntry';
 
 /**
  * A session's LIFECYCLE state — is this conversation live or filed away? Persisted, user-driven,
@@ -73,10 +73,12 @@ export interface SerializedSession {
 	zoom: number | null;
 	/** This session's chat-surface font family. Null → the render side's default ('sans'). */
 	fontFamily: FontFamilyKey | null;
-	/** Which turns of the transcript ride the next request. PERSISTED ( unlike the transcript itself ):
-	 *  it is a session CONFIGURATION the user sets deliberately, so reopening a session restores the
-	 *  window it was left on. Absent on an older wire/row → the `all` default. */
-	policy?: ContextPolicy;
+	/** Every POLICY acting on this session's context, by name — what rides the next request and whether
+	 *  the transcript compacts itself. PERSISTED ( unlike the transcript itself ): these are session
+	 *  CONFIGURATION the user sets deliberately, so reopening a session restores the policies it was left
+	 *  on. Absent on an older wire/row, as is a BARE legacy retention policy — both hydrate through
+	 *  `Session.policiesFrom`, which is the one place the old shape is understood. */
+	policies?: SessionPolicies;
 	/** Is a turn in flight right now — see `TurnStatus`. Rides the wire so every surface can see it;
 	 *  never written to the session row. Absent → 'idle', which is always true on arrival. */
 	turnStatus?: TurnStatus;
@@ -94,11 +96,16 @@ export interface SessionOptions {
 	status?: SessionStatus;
 	zoom?: number | null;
 	fontFamily?: FontFamilyKey | null;
-	policy?: ContextPolicy;
+	policies?: SessionPolicies;
 }
 
-/** The window every session is born on — the whole transcript rides until the user narrows it. */
-const DEFAULT_POLICY: ContextPolicy = { kind: 'all' };
+/** The policies every session is born on — the whole transcript rides ( nothing narrowed ) and it never
+ *  compacts itself until the user turns that on. Both defaults are deliberately inert: a fresh session
+ *  hides nothing and rewrites nothing. */
+const DEFAULT_POLICIES: SessionPolicies = {
+	retention:  { kind: 'all' },
+	compaction: { enabled: false, threshold: 120_000 },
+};
 
 /**
  * Session — the conversation-identity primitive. Pure data + a handful of mutators; no `fs`,
@@ -120,11 +127,11 @@ export class Session {
 	zoom: number | null;
 	fontFamily: FontFamilyKey | null;
 
-	/** Which turns of the transcript ride the next request. PERSISTED session configuration — the
+	/** Every POLICY acting on this session's context, by name. PERSISTED session configuration — the
 	 *  deliberate counterpart to the non-persisted `transcript` below: the transcript is the durable
-	 *  account of what happened, this is the lens over it. Changing it NEVER edits history; it only
+	 *  account of what happened, these are the lenses over it. Changing one NEVER edits history; it only
 	 *  changes what the next `wireMessages()` projects. */
-	policy: ContextPolicy;
+	policies: SessionPolicies;
 
 	/** Is a turn in flight right now — the run-state that used to live ( wrongly, and dead ) on the
 	 *  Agent. See `TurnStatus` for the full reasoning. Runtime-only: born 'idle', never persisted, so a
@@ -149,7 +156,7 @@ export class Session {
 		status: SessionStatus,
 		zoom: number | null,
 		fontFamily: FontFamilyKey | null,
-		policy: ContextPolicy,
+		policies: SessionPolicies,
 	) {
 		this.id         = id;
 		this.agentId    = agentId;
@@ -161,7 +168,7 @@ export class Session {
 		this.status     = status;
 		this.zoom       = zoom;
 		this.fontFamily = fontFamily;
-		this.policy     = policy;
+		this.policies   = policies;
 	}
 
 	// ── Static entry points ──────────────────────────────────────────────────
@@ -181,7 +188,7 @@ export class Session {
 			opts.status ?? 'active',
 			opts.zoom ?? null,
 			opts.fontFamily ?? null,
-			opts.policy ?? DEFAULT_POLICY,
+			Session.policiesFrom( opts.policies ),
 		);
 	}
 
@@ -198,8 +205,30 @@ export class Session {
 			json.status ?? 'active',
 			json.zoom ?? null,
 			json.fontFamily ?? null,
-			json.policy ?? DEFAULT_POLICY,
+			Session.policiesFrom( json.policies ),
 		);
+	}
+
+	/**
+	 * Hydrate a policy bag from anything a wire / row might hold — the ONE place the legacy shape is
+	 * understood, so every other reader can assume the container.
+	 *
+	 * Three inputs land here: the container itself, a BARE legacy retention policy ( `{ kind: … }`, what
+	 * sessions stored before compaction existed — it becomes the `retention` entry ), and nothing at all.
+	 * Deliberately forgiving in the same spirit as the service-side parse: an unreadable policy must never
+	 * make a session's history unreachable, and every default is inert.
+	 */
+	static policiesFrom( raw: unknown ): SessionPolicies {
+		const v = ( raw ?? null ) as Record<string, unknown> | null;
+		if ( !v || typeof v !== 'object' ) return { ...DEFAULT_POLICIES };
+		// the bare legacy shape — a retention policy stored before there was a bag to put it in
+		if ( typeof v[ 'kind' ] === 'string' ) {
+			return { retention: v as RetentionPolicy, compaction: { ...DEFAULT_POLICIES.compaction } };
+		}
+		return {
+			retention:  ( v[ 'retention' ]  as RetentionPolicy  ) ?? { ...DEFAULT_POLICIES.retention  },
+			compaction: ( v[ 'compaction' ] as CompactionPolicy ) ?? { ...DEFAULT_POLICIES.compaction },
+		};
 	}
 
 	/** The bridge wire form, the save form, the reconstruction source — one function, many purposes. */
@@ -215,7 +244,7 @@ export class Session {
 			status:     this.status,
 			zoom:       this.zoom,
 			fontFamily: this.fontFamily,
-			policy:     this.policy,
+			policies:   this.policies,
 			turnStatus: this.turnStatus,
 		};
 	}
@@ -266,10 +295,16 @@ export class Session {
 		this.transcript = new Transcript( turns );
 	}
 
-	/** Narrow ( or widen ) which turns ride the next request. Pure configuration: it does NOT touch the
-	 *  transcript, so nothing is ever lost by changing the window. The caller persists ( DB
-	 *  update_session_policy ). */
-	setPolicy( policy: ContextPolicy ): void { this.policy = policy; }
+	/** Set ONE named policy, leaving its siblings alone. Pure configuration: no policy touches the
+	 *  transcript, so nothing is ever lost by changing one. The caller persists the whole bag ( DB
+	 *  update_session_policy ).
+	 *
+	 *  Named rather than whole-bag ( `setPolicies( bag )` ) because every real caller is a single control
+	 *  changing a single lever — a whole-bag setter would make each of them read, spread, and write back
+	 *  the others, which is exactly how one control silently reverts another. */
+	setPolicy<K extends keyof SessionPolicies>( name: K, policy: SessionPolicies[ K ] ): void {
+		this.policies = { ...this.policies, [ name ]: policy };
+	}
 
 	/** Flip the run state around a turn. Deliberately has NO persistence counterpart — the caller
 	 *  broadcasts it and nothing writes it ( see `TurnStatus` ). Bracket every turn idle → thinking →
@@ -281,7 +316,7 @@ export class Session {
 	 *  send: the whole request is { system: agent.wireSystem(), messages: session.wireMessages() }. The
 	 *  policy is applied HERE, at the projection — the transcript itself is never edited. */
 	wireMessages(): WireMessage[] {
-		return this.transcript.windowed( this.policy ).wireMessages();
+		return this.transcript.windowed( this.policies.retention ).wireMessages();
 	}
 
 	/** The inspector itinerary — one BLOCK per turn, each carrying the entries that happened inside it
@@ -297,12 +332,20 @@ export class Session {
 	 *  entry ), so it prices what will actually ride rather than everything ever said. The whole-context
 	 *  estimate folds this onto agent.estimateTokens(); a caller sums the two halves. */
 	estimateTokens(): number {
-		return this.transcript.windowed( this.policy ).estimateTokens();
+		return this.transcript.windowed( this.policies.retention ).estimateTokens();
 	}
 
-	/** A display title even when none was set — the explicit title, else a stamp-derived fallback. */
+	/**
+	 * A display title even when none was set. An untitled session is a session whose first prompt has not
+	 * been named yet — either it has not taken a turn, or the house agent's naming pass is still thinking —
+	 * so the placeholder says exactly that and nothing more.
+	 *
+	 * It used to be a creation timestamp, back when a titleless session was a permanent state. It isn't
+	 * one any more: a title arrives on its own within a turn, and a stamp would have read like a real name
+	 * that just happened to be useless.
+	 */
 	displayTitle(): string {
 		if ( this.title ) return this.title;
-		return 'Session ' + new Date( this.createdAt ).toISOString().slice( 0, 16 ).replace( 'T', ' ' );
+		return 'New session';
 	}
 }

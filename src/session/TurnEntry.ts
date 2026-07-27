@@ -1,5 +1,6 @@
 import { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
 import { Assert } from '../core/Assert';
+import { type SlotMode } from '../primitives/types';
 
 /**
  * TurnEntry / Turn / Transcript — the typed, sequential account of what happened in a session,
@@ -68,10 +69,61 @@ export interface Turn {
  * everything that answered it, so this needs no exchange-grouping scaffolding ) · `manual` sends exactly
  * the named turn ids.
  */
-export type ContextPolicy =
+export type RetentionPolicy =
 	| { kind: 'all' }
 	| { kind: 'lastN'; n: number }
 	| { kind: 'manual'; ids: string[] };
+
+/**
+ * Whether a session compacts itself, and when. The second POLICY — and the first one an AGENT drives
+ * rather than code: crossing the threshold hands the transcript to the house agent, which writes a
+ * structured summary that lands as a turn in turn order and narrows the window to itself.
+ *
+ * `enabled` is the switch ( off = the transcript is never compacted, whatever its size ). `threshold` is
+ * the input-token count a completed turn must cross to trigger one; a manual press ignores it entirely.
+ * Like retention, this NEVER deletes: compaction is a windowing decision over a transcript that stays
+ * whole on disk.
+ */
+export type CompactionPolicy = { enabled: boolean; threshold: number };
+
+/**
+ * Every policy acting on one session's context, by name.
+ *
+ * A POLICY is anything that manipulates what rides the next request. It may be programmatic and
+ * declarative ( `retention` — a pure rule over the turn list ) or agent-driven ( `compaction` — a house
+ * agent writing a summary ). They live in one named bag rather than as loose fields so that the third
+ * and fourth are additive: a new policy is an entry here plus the code that reads it, never a reshape
+ * of the session record.
+ */
+export type SessionPolicies = {
+	retention:  RetentionPolicy;
+	compaction: CompactionPolicy;
+};
+
+/**
+ * One COMPACTION of a session's transcript, as both processes read it — a structured summary standing in
+ * for the turns it covers. The wire twin of main's `session_compactions` row.
+ *
+ * `throughTurnId` carries the window rule: a compaction covers the PREFIX of the transcript up to and
+ * including that turn ( a DB turn id, i.e. an exchange's traceId — never a renderer-synthetic id, which
+ * is regenerated on every reload ). `fromTurnId` is what the pass actually READ, which diverges the
+ * moment a second compaction reads the first one plus what followed; it feeds display, never the window.
+ *
+ * `mode` is the SlotMode three-state, and `'off'` is the one that matters: an inert compaction stays in
+ * the timeline as history while the raw turns ride again. Nothing here ever deletes a turn.
+ */
+export interface SessionCompaction {
+	id:            string;
+	sessionId:     string;
+	createdAt:     number;
+	fromTurnId:    string;
+	throughTurnId: string;
+	summary:       string;
+	model:         string;
+	mode:          SlotMode;
+	tokensIn:      number;
+	tokensOut:     number;
+}
 
 // ── The neutral wire currency ( @kcd/core, SDK-free ) ──────────────────────────────────────────
 
@@ -178,7 +230,7 @@ export class Transcript {
 	 * project the result ( `wireMessages()` / `estimateTokens()` ); the unwindowed original still answers
 	 * `rows()`, because the inspector's itinerary shows everything that happened.
 	 */
-	windowed( policy: ContextPolicy ): Transcript {
+	windowed( policy: RetentionPolicy ): Transcript {
 		if ( policy.kind === 'all' ) return new Transcript( [ ...this.turns ] );
 		if ( policy.kind === 'manual' ) {
 			const wanted = new Set( policy.ids );
@@ -215,7 +267,7 @@ export class Transcript {
 	 * scratchpad never rides the wire.
 	 *
 	 * No windowing here: it projects whatever turns are bound. The policy that decides WHICH turns ride
-	 * ( ContextPolicy ) is applied by the caller binding only the in-window set — a Phase 3 seam.
+	 * ( RetentionPolicy ) is applied by the caller binding only the in-window set — a Phase 3 seam.
 	 *
 	 * `opts.clearToolResultsBefore` ( ms ) stubs any tool-result older than the cutoff — the cheapest
 	 * context-engineering lever ( operate on the transcript, don't just append ); the full text stays on

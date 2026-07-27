@@ -7,6 +7,17 @@
  */
 export type Tier = 'local' | 'remote' | 'frontier';
 
+/**
+ * Every effort stop any model in the system offers — the DECLARATION vocabulary, not a wire format.
+ *
+ * Five names spanning TWO unrelated dials that merely share their first three: gpt-oss / harmony's
+ * `reasoning_effort` (three stops) and Claude Code's `--effort` (all five). A model declares the subset it
+ * accepts (`capabilities.reasoning.effort`) and each connector maps that to its own wire form — so the
+ * narrow wire union in `openai-compat.ts` stays THREE on purpose, and this type must never be substituted
+ * for it. Sending `xhigh` to a llama-server that can't parse it is the exact 400 the declaration prevents.
+ */
+export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
+
 export interface ModelDescriptor {
 	/** Registry key — the value stored on a SerializedAgent. */
 	key: string;
@@ -25,6 +36,26 @@ export interface ModelDescriptor {
 	/** The wire id sent to the provider's API. */
 	modelId: string;
 	maxTokens: number;
+	/**
+	 * The FAMILY this model was minted from, when its connector serves a family rather than a single
+	 * model. Absent on every hand-authored single (a local folder model, a remote endpoint, the test
+	 * brain) — those are top-level entries and nothing groups them.
+	 *
+	 * Present means the picker shows ONE row for `label` and offers this model inside it, which is the
+	 * whole point: a connector stays one registered entry no matter how many models it can reach, and a
+	 * twenty-model dropdown never happens. It is also the hook for family-specific handling — anything
+	 * true of "Claude on the subscription" rather than of one Claude model keys off this.
+	 *
+	 * NOT a vendor field. Two connectors reaching the same vendor stay two independent families with two
+	 * separate rows; this identifies which registered CONNECTOR ENTRY produced the model, never who makes
+	 * it. Grouping across connectors was considered and rejected.
+	 */
+	family?: {
+		/** The seed key — the stable id of the family, matching the first segment of every member's key. */
+		key:   string;
+		/** The family's display name; the label the collapsed picker row shows. */
+		label: string;
+	};
 	/**
 	 * How a turn on this model is actually paid for — orthogonal to `price` (which is the
 	 * per-token rate WHEN metered). `'subscription'` means the turn draws against a flat-rate
@@ -71,12 +102,21 @@ export interface ModelDescriptor {
 		 */
 		reasoning?: {
 			/**
-			 * The wire effort dial's levels, in order. Absent/empty → the model has NO effort dial: the
-			 * connector must not send `reasoning_effort` (Google's Gemma shim 400s on it; a self-hosted
-			 * llama-server merely ignores it) and the composer hides the slider. gpt-oss / harmony carries
-			 * `['low','medium','high']`; a budget-based reasoner (Anthropic thinking) carries none.
+			 * The effort dial's levels, in order — a DECLARATION of what this model accepts, not a wire
+			 * format. Absent/empty → the model has NO effort dial: no effort value is ever sent (Google's
+			 * Gemma shim 400s on an unsupported `reasoning_effort`; a self-hosted llama-server merely
+			 * ignores it) and the composer hides the slider.
+			 *
+			 * The five levels span TWO unrelated dials that happen to share their first three names, so
+			 * read this as "which stops does this model offer" and let each connector map it to its own
+			 * wire form:
+			 *   - gpt-oss / harmony `reasoning_effort` → `['low','medium','high']` (three only; the wire
+			 *     union in `openai-compat.ts` is deliberately NOT widened past them — sending `xhigh` to a
+			 *     llama-server that can't take it is exactly the 400 this field exists to prevent).
+			 *   - Claude Code's `--effort` → all five, `low` through `max`.
+			 * A budget-based reasoner that exposes no dial at all (metered Anthropic thinking) carries none.
 			 */
-			effort?: ( 'low' | 'medium' | 'high' )[];
+			effort?: ReasoningEffort[];
 			/**
 			 * How the reasoning comes back: `readable` (the words stream into the thinking box), `measured`
 			 * (a token count only, text redacted — the headless-frontier shape), or `none` (no thinking).
@@ -158,10 +198,23 @@ export interface ModelConfigField {
 export type ModelRosterEntry = ModelDescriptor & { status: ModelStatus; doc: string; config: ModelConfigField[]; rootContextText: string | null };
 
 /**
- * The fallback model key. `Agent.create` / `fromSerialized` default to it
- * when none is set. A bare key STRING, not a model source — the live descriptor list now
- * lives in the main-side `ModelRegistry` (inline defaults + folder scan); this only names
- * the default to resolve against it. The folder model whose manifest declares this key is
- * what `local.gemma` resolves to.
+ * The fallback model key — the ONE model every resolution path terminates on, and the only model key
+ * allowed to be hard-wired anywhere. `Agent.create` / `fromSerialized` default to it when none is set,
+ * and the constellation's navigator / evaluator / artifact steps fall back to it when no operational
+ * model threads through.
+ *
+ * It is the built-in TEST BRAIN, deliberately: a scripted generator with no external dependency, which
+ * always exists and always answers. Model availability is contingent on things outside our control — a
+ * local runtime installed, a remote host reachable, a credential present — so the terminal step of every
+ * fallback chain has to be something that cannot be absent. That lets a user exercise a project's
+ * machinery before configuring any real brain, and keeps a malformed snapshot or an unstaffed node from
+ * dead-ending a run.
+ *
+ * It was previously `local.gemma`, which defeated the purpose: it names a specific local model that most
+ * installs will not have, so the "safe" fallback could itself fail to resolve.
+ *
+ * A bare key STRING, not a model source — the live descriptor list lives in the main-side
+ * `ModelRegistry` (inline defaults + folder scan); this only names the default to resolve against it,
+ * and that roster keys its Test Brain entry off this constant so the two cannot disagree.
  */
-export const DEFAULT_MODEL_KEY = 'local.gemma';
+export const DEFAULT_MODEL_KEY = 'test.lorem';

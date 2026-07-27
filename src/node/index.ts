@@ -12,6 +12,10 @@ export {
 	VaultUtilities,
 	type HealthReport, type HealthIssue, type CompileResult,
 	type LensView, type LensSlot, type SlotState,
+	type ResetReport, type QueryOptions, type QueryResult, type LinksResult,
+	type SeedBlock, type SeedApplyReport, type LensIndexRow, type LensIndexReport,
+	type MigrationActionKind, type MigrationAction, type MigrationPlan, type MigrationApplyReport,
+	type StylesheetFixReport,
 } from './VaultUtilities';
 export { VaultDeploy, type DeployReport, type DeployItem, type DeployItemKind } from './VaultDeploy';
 export {

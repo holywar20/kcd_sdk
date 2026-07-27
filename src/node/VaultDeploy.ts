@@ -1,13 +1,13 @@
 import * as fs from 'fs'
 import * as path from 'path'
-import { LensObject, VaultLayout } from '../core'
+import { LensObject, VaultLayout, InstallManifest } from '../core'
 
 /**
  * VaultDeploy — install a KCD vault into a directory, and report on one that already exists.
  *
- * Driven entirely by the `VaultLayout` table: the structure is defined once in code, and this
- * creates it. That is the whole reason the table exists — a deployment that reads the same rows the
- * classifier and the index whitelist read cannot drift from them.
+ * Driven by two tables: `VaultLayout` for the empty structure ( the same rows the classifier and the
+ * index whitelist read, so a deployment cannot drift from them ), and `InstallManifest` for what
+ * fills it — the framework content copied in from the bundle's `substrateSource`.
  *
  * TWO OPERATIONS, ONE ANSWER. `inspect()` reports what is missing and changes nothing; `apply()`
  * does the same walk and fills the gaps. They share their reasoning, so the report is never a
@@ -21,7 +21,7 @@ import { LensObject, VaultLayout } from '../core'
  */
 
 /** What a single deploy step is responsible for. `dir` is an empty directory from the layout table;
- *  `substrate` is the canonical framework library, copied from a master; `file` is a seeded document. */
+ *  `substrate` is one `InstallManifest` row, filled from the bundle; `file` is a seeded document. */
 export type DeployItemKind = 'dir' | 'substrate' | 'file'
 
 /** One step of a deployment — what it is, where it goes ( vault-relative ), and whether it was
@@ -44,17 +44,9 @@ export interface DeployReport {
 	applied: boolean
 }
 
-/** The canonical substrate directory name, relative to the vault root. */
-const SUBSTRATE_DIR = 'kcd'
-
-/** Never copied out of the canonical substrate. The framework library is its own git repository in
- *  the project that hosts it; transplanting that into a new project would hand it a stale, unrelated
- *  history that looks like its own. */
+/** Never copied out of the bundle. Defensive — the bundle itself should never carry a `.git`, but a
+ *  `substrateSource` pointed at a live checkout ( dev, self-hosting ) might. */
 const COPY_EXCLUDE = [ '.git' ]
-
-/** Seeded from the substrate into the deployed tree — the base lens is auto-loaded into every
- *  session, so a vault without one has no floor to stand on. */
-const BASE_LENS = 'lenses/_lens_base.html'
 
 export class VaultDeploy {
 
@@ -91,54 +83,70 @@ export class VaultDeploy {
 			if( !present && write ) fs.mkdirSync( abs, { recursive: true } )
 		}
 
-		items.push( ...VaultDeploy._substrate( vault, opts?.substrateSource, write ) )
-		items.push( VaultDeploy._baseLens( vault, opts?.substrateSource, write ) )
+		items.push( ...VaultDeploy._manifest( vault, opts?.substrateSource, write ) )
 		items.push( VaultDeploy._navIndex( vault, write ) )
+		items.push( VaultDeploy._commandDeck( vault, write ) )
 
 		const missing = items.filter( ( i ) => !i.present ).length
 		return { root: projectRoot, docRoot, items, missing, applied: write }
 	}
 
 	/**
-	 * The canonical framework library, copied from a master. `force: false` is what makes this a
-	 * FILL rather than a reset — an existing file is never overwritten, so a project that has been
-	 * running for months keeps whatever it has and only gains what it lacks.
+	 * Every `InstallManifest` row, filled from the bundle. `force: false` is what makes this a FILL
+	 * rather than a reset — an existing file is never overwritten, so a project that has been running
+	 * for months keeps whatever it has and only gains what it lacks.
 	 *
-	 * A missing or unreadable source is reported, not thrown: a deploy that cannot find its master
-	 * should say so plainly and leave the rest of the structure in place, because the directories
-	 * are still worth having.
+	 * A missing bundle, or a row absent from it, is reported per-row rather than thrown: a deploy that
+	 * cannot find part of its source should say so plainly and keep filling everything else, because
+	 * one missing optional row is not a reason to leave the rest of the vault half-built.
 	 */
-	private static _substrate( vault: string, source: string | undefined, write: boolean ): DeployItem[] {
-		const dest = path.join( vault, SUBSTRATE_DIR )
+	private static _manifest( vault: string, source: string | undefined, write: boolean ): DeployItem[] {
+		const items: DeployItem[] = []
 
-		if( !source || !fs.existsSync( source ) ) {
-			return [ {
+		for( const entry of InstallManifest.all() ) {
+			const dest = path.join( vault, entry.vaultHome )
+			const src  = source ? path.join( source, entry.bundleSource ) : undefined
+
+			if( !src || !fs.existsSync( src ) ) {
+				items.push( {
+					kind:    'substrate',
+					path:    entry.vaultHome,
+					present: fs.existsSync( dest ),
+					note:    !source
+						? 'no substrate source given'
+						: `${ entry.required ? 'required' : 'optional' } — not found in bundle at "${ entry.bundleSource }"`
+				} )
+				continue
+			}
+
+			// "Present" means COMPLETE, not merely existing — a row missing files ( the real drift
+			// case ) must report as incomplete or the maintenance read would call a partial vault healthy.
+			const isDir = fs.statSync( src ).isDirectory()
+			const gaps  = isDir ? VaultDeploy._missingUnder( src, dest ) : ( fs.existsSync( dest ) ? [] : [ entry.bundleSource ] )
+			const item: DeployItem = {
 				kind:    'substrate',
-				path:    SUBSTRATE_DIR,
-				present: fs.existsSync( dest ),
-				note:    source ? `canonical substrate not found at "${ source }"` : 'no substrate source given'
-			} ]
-		}
+				path:    entry.vaultHome,
+				present: gaps.length === 0,
+				note:    gaps.length === 0 ? 'complete' : `${ gaps.length } file(s) missing: ${ gaps.slice( 0, 5 ).join( ', ' ) }${ gaps.length > 5 ? '…' : '' }`
+			}
 
-		// "Present" means COMPLETE, not merely existing — a substrate missing files ( the real drift
-		// case ) must report as incomplete or the maintenance read would call a partial vault healthy.
-		const gaps = VaultDeploy._missingUnder( source, dest )
-		const item: DeployItem = {
-			kind:    'substrate',
-			path:    SUBSTRATE_DIR,
-			present: gaps.length === 0,
-			note:    gaps.length === 0 ? 'complete' : `${ gaps.length } file(s) missing: ${ gaps.slice( 0, 5 ).join( ', ' ) }${ gaps.length > 5 ? '…' : '' }`
+			if( gaps.length > 0 && write ) {
+				if( isDir ) {
+					fs.mkdirSync( dest, { recursive: true } )
+					fs.cpSync( src, dest, {
+						recursive: true,
+						force:     false,          // never overwrite — this fills, it does not reset
+						errorOnExist: false,
+						filter:    ( s ) => !COPY_EXCLUDE.includes( path.basename( s ) )
+					} )
+				} else {
+					fs.mkdirSync( path.dirname( dest ), { recursive: true } )
+					fs.copyFileSync( src, dest )
+				}
+			}
+			items.push( item )
 		}
-
-		if( gaps.length > 0 && write ) {
-			fs.cpSync( source, dest, {
-				recursive: true,
-				force:     false,          // never overwrite — this fills, it does not reset
-				errorOnExist: false,
-				filter:    ( src ) => !COPY_EXCLUDE.includes( path.basename( src ) )
-			} )
-		}
-		return [ item ]
+		return items
 	}
 
 	/** Every file under `source` ( excluding the copy-excluded names ) with no counterpart under
@@ -159,25 +167,6 @@ export class VaultDeploy {
 		return out
 	}
 
-	/** Seed the deployed base lens from the substrate's copy. Every session auto-loads it, so a vault
-	 *  without one has no floor — but an existing one is never replaced: it is the most-edited
-	 *  document in a mature project. */
-	private static _baseLens( vault: string, source: string | undefined, write: boolean ): DeployItem {
-		const dest    = path.join( vault, BASE_LENS )
-		const present = fs.existsSync( dest )
-		const item: DeployItem = { kind: 'file', path: BASE_LENS, present, note: 'auto-loaded into every session' }
-		if( present || !write || !source ) return item
-
-		const from = path.join( source, BASE_LENS )
-		if( !fs.existsSync( from ) ) {
-			item.note = `substrate has no ${ BASE_LENS } to seed from`
-			return item
-		}
-		fs.mkdirSync( path.dirname( dest ), { recursive: true } )
-		fs.copyFileSync( from, dest )
-		return item
-	}
-
 	/** The vault's root nav-index — the entry map a reader ( human or agent ) lands on. Written only
 	 *  when absent, and deliberately minimal: it is a starting point the project grows, not a
 	 *  generated artifact that would fight being edited. */
@@ -188,6 +177,28 @@ export class VaultDeploy {
 		const item: DeployItem = { kind: 'file', path: rel, present, note: 'the vault entry map' }
 		if( present || !write ) return item
 		fs.writeFileSync( dest, VaultDeploy._navIndexHtml(), 'utf-8' )
+		return item
+	}
+
+	/**
+	 * The command deck's one file. The deck's location is CONVENTION, not configuration — it is always
+	 * `<docRoot>/dev-utilities/commands.json` — so the deck panel computes that path rather than asking
+	 * the user for it. That only holds if the file reliably exists, which is this step's whole job: every
+	 * deployed project gets one, and a repair on an older project fills it in.
+	 *
+	 * Seeded EMPTY. JSON carries no comments, so there is nowhere to explain the schema in the file, and a
+	 * placeholder entry would render as a launcher button that does nothing — worse than an empty deck,
+	 * which states the path it read and invites the first real command. The directory itself comes from
+	 * the layout table like every other folder.
+	 */
+	private static _commandDeck( vault: string, write: boolean ): DeployItem {
+		const rel     = 'dev-utilities/commands.json'
+		const dest    = path.join( vault, rel )
+		const present = fs.existsSync( dest )
+		const item: DeployItem = { kind: 'file', path: rel, present, note: 'the command deck\'s launchers' }
+		if( present || !write ) return item
+		fs.mkdirSync( path.dirname( dest ), { recursive: true } )
+		fs.writeFileSync( dest, '[]\n', 'utf-8' )
 		return item
 	}
 
@@ -206,7 +217,7 @@ export class VaultDeploy {
 <head>
 	<meta charset="utf-8">
 	<title>Vault — Navigation Index</title>
-	<link rel="stylesheet" href="kcd/kcd.css">
+	<link rel="stylesheet" href="kcd.css">
 </head>
 <body>
 

@@ -8,6 +8,7 @@ export type {
 	KCDRole,
 	LinkType,
 	LinkEntry,
+	AddressEntry,
 	PolicyEntry,
 	ReaderFn,
 	SerializedArtifact,
