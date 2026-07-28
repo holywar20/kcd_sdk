@@ -112,6 +112,17 @@ export type SessionPolicies = {
  * `mode` is the SlotMode three-state, and `'off'` is the one that matters: an inert compaction stays in
  * the timeline as history while the raw turns ride again. Nothing here ever deletes a turn.
  */
+/**
+ * How many completed EXCHANGES a session needs before compacting it is worth doing. Below this the
+ * summary would cost more tokens than the turns it replaced, and the user would be paying a model call
+ * to make their context bigger.
+ *
+ * Lives here so BOTH sides read the same number: the renderer disables the button below it, and the
+ * service refuses below it. Two gates, one constant — the alternative is a button that enables at four
+ * and a service that refuses at five.
+ */
+export const MIN_COMPACTION_TURNS = 4;
+
 export interface SessionCompaction {
 	id:            string;
 	sessionId:     string;
@@ -141,6 +152,29 @@ export interface WireMessage {
 	content: string | WireBlock[];
 }
 
+/**
+ * How a row PRESENTS — an icon and a colour token, carried ON the row rather than looked up by every
+ * surface that draws one ( Bryan, 2026-07-28, the Godot resource pattern: attach the render-side data to
+ * the data object, hand the UI a completed object, and every surface renders it the same ).
+ *
+ * Three surfaces already draw these rows — the chat's turn itinerary, the inspector's Turns folder, and
+ * the reader drawer's digest — and each was about to grow its own private kind→icon/hue table. One
+ * drifting copy per surface is exactly the failure this kills.
+ *
+ * `color` is the NAME of a CSS custom property, not `var( … )`: naming the shared token is a vocabulary
+ * decision the model can legitimately own, whereas emitting CSS syntax from the SDK is not. The renderer
+ * wraps it.
+ *
+ * Being per-ROW and not per-KIND is the point — it lets an instance differ. A FAILED tool result is the
+ * proof: same kind, different icon and colour, decided where the `isError` flag actually lives.
+ */
+export interface RowDisplay {
+	/** Icon-library key ( see the renderer's icon lib ). */
+	icon: string;
+	/** A CSS custom-property NAME — `'--thinking'`, `'--accent'`, … The renderer wraps it in `var()`. */
+	color: string;
+}
+
 /** One inspector itinerary row — a flat, display-ready view of an entry ( thinking included ), carrying
  *  its self-priced wire token weight ( 0 for the display-only thinking row ). The renderer formats;
  *  this is the currency the Turns folder reads. */
@@ -155,6 +189,9 @@ export interface TranscriptRow {
 	tokens: number;
 	/** True for the display-only kinds that never ride the wire ( thinking ). */
 	displayOnly: boolean;
+	/** Icon + colour token for this row — see RowDisplay. Every surface that draws a row reads this
+	 *  rather than keeping its own kind→look table. */
+	display: RowDisplay;
 	/** For a NON-TEXT row ( image ), a self-contained display source the inspector renders inline as a
 	 *  thumbnail — the same bytes that ride the wire, so the itinerary stays a flat row list without the
 	 *  renderer re-reading anything. Absent on text rows. */
@@ -357,6 +394,7 @@ export class Transcript {
 			text:   Transcript._entryText( entry ),
 			tokens: displayOnly ? 0 : Transcript._entryTokens( entry ),
 			displayOnly,
+			display: Transcript._display( entry ),
 			// a non-text row carries its bytes so the inspector can thumbnail it inline
 			...( entry.kind === 'image'
 				? { media: {
@@ -405,6 +443,33 @@ export class Transcript {
 			case 'tool-result':   return entry.content;
 			case 'injected-file': return frameFile( entry.name, entry.text );
 			case 'image':         return ( entry.name ?? '(image)' ) + ( entry.width && entry.height ? ` ${ entry.width }×${ entry.height }` : '' );
+			default:              return Assert.never( entry );
+		}
+	}
+
+	/**
+	 * How ONE entry presents — the single kind→look table for the whole app ( see RowDisplay ).
+	 *
+	 * Colours are the house tokens each kind already wears elsewhere, so the itinerary agrees with the
+	 * surfaces around it by construction: `--know` for the human and `--care` for the model ( the chat's
+	 * own per-role turn tints ), `--thinking` amber for reasoning, `--accent` for an action.
+	 *
+	 * A tool result is deliberately NOT the tool call's icon: a call and what it returned are different
+	 * events, and giving them one glyph made a tool loop read as a stutter rather than a round trip. It
+	 * also branches on `isError` — the one place that flag is known, and the reason this is computed per
+	 * row instead of being a static lookup on `kind`.
+	 */
+	static _display( entry: TurnEntry ): RowDisplay {
+		switch ( entry.kind ) {
+			case 'user':          return { icon: 'user',      color: '--know' };
+			case 'assistant':     return { icon: 'sparkle',   color: '--care' };
+			case 'thinking':      return { icon: 'lightbulb', color: '--thinking' };
+			case 'tool-call':     return { icon: 'pulse',     color: '--accent' };
+			case 'tool-result':   return entry.isError
+				? { icon: 'warning', color: '--error' }
+				: { icon: 'package', color: '--plugin' };
+			case 'injected-file': return { icon: 'file',      color: '--reference' };
+			case 'image':         return { icon: 'camera',    color: '--external' };
 			default:              return Assert.never( entry );
 		}
 	}
