@@ -12,7 +12,7 @@
  * bridge whole via serialize / fromSerialized, the same trinity as Agent.
  */
 
-import { Transcript, type Turn, type WireMessage, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type SessionPolicies } from './TurnEntry';
+import { Transcript, type Turn, type WireMessage, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type SessionPolicies, type SessionCompaction } from './TurnEntry';
 
 /**
  * A session's LIFECYCLE state — is this conversation live or filed away? Persisted, user-driven,
@@ -144,6 +144,12 @@ export class Session {
 	 *  Its home of record is the DB `entries` rows ( hydrated on load — see bindTranscript ). Empty until
 	 *  bound, so it is never null. */
 	transcript: Transcript = Transcript.empty();
+
+	/** The COMPACTIONS acting on this session — the summaries that stand in for the turns they cover. The
+	 *  same species as `transcript`: NON-PERSISTED object state, never in SerializedSession, rebuilt on
+	 *  arrival via bindCompactions(). Its home of record is the `session_compactions` table. Empty until
+	 *  bound, so the projection below is a no-op on a session that has never compacted. */
+	compactions: SessionCompaction[] = [];
 
 	private constructor(
 		id: string,
@@ -295,6 +301,14 @@ export class Session {
 		this.transcript = new Transcript( turns );
 	}
 
+	/** Rebuild the compaction list wholesale — the flush-and-fill twin of bindTranscript(). Bound from the
+	 *  same load as the transcript, and rebound whenever a pass writes a new one, so the very next send is
+	 *  narrowed by it rather than waiting for a reload. Oldest→newest; the projection re-sorts defensively
+	 *  rather than trusting the caller's order. */
+	bindCompactions( compactions: SessionCompaction[] ): void {
+		this.compactions = compactions;
+	}
+
 	/** Set ONE named policy, leaving its siblings alone. Pure configuration: no policy touches the
 	 *  transcript, so nothing is ever lost by changing one. The caller persists the whole bag ( DB
 	 *  update_session_policy ).
@@ -311,12 +325,29 @@ export class Session {
 	 *  idle from a `finally`, so a failure can't strand a session lit. */
 	setTurnStatus( status: TurnStatus ): void { this.turnStatus = status; }
 
-	/** The DYNAMIC half of the wire — the IN-WINDOW transcript projected to neutral messages a connector
-	 *  maps to its provider format ( thinking excluded ). Joins agent.wireSystem() ( the stable half ) at
-	 *  send: the whole request is { system: agent.wireSystem(), messages: session.wireMessages() }. The
-	 *  policy is applied HERE, at the projection — the transcript itself is never edited. */
+	/** The transcript as it will actually RIDE — EVERY policy applied, in the ratified order: retention
+	 *  first ( which turns survive ), compaction second ( the summary standing in for the prefix, over
+	 *  whatever retention kept ). Running compaction last is what stops a narrow retention from smuggling
+	 *  a covered turn back in.
+	 *
+	 *  Private and SHARED, because wireMessages() and estimateTokens() are the two readers that must never
+	 *  disagree about what rides — the moment they compose the policies separately, the gauge starts lying
+	 *  about the send. A third policy composes here and both readers get it for free.
+	 *
+	 *  Neither policy edits the transcript. Both are lenses over it, so narrowing and re-widening loses
+	 *  nothing and the itinerary still shows everything that happened. */
+	private _projected(): Transcript {
+		return this.transcript
+			.windowed( this.policies.retention )
+			.compacted( this.compactions );
+	}
+
+	/** The DYNAMIC half of the wire — the projected transcript as neutral messages a connector maps to its
+	 *  provider format ( thinking excluded ). Joins agent.wireSystem() ( the stable half ) at send: the
+	 *  whole request is { system: agent.wireSystem(), messages: session.wireMessages() }. Every policy is
+	 *  applied HERE, at the projection — the transcript itself is never edited. */
 	wireMessages(): WireMessage[] {
-		return this.transcript.windowed( this.policies.retention ).wireMessages();
+		return this._projected().wireMessages();
 	}
 
 	/** The inspector itinerary — one BLOCK per turn, each carrying the entries that happened inside it
@@ -328,11 +359,13 @@ export class Session {
 		return this.transcript.turnRows();
 	}
 
-	/** The session's own context cost — the wire weight of the IN-WINDOW transcript ( self-priced per
-	 *  entry ), so it prices what will actually ride rather than everything ever said. The whole-context
-	 *  estimate folds this onto agent.estimateTokens(); a caller sums the two halves. */
+	/** The session's own context cost — the wire weight of the PROJECTED transcript ( self-priced per
+	 *  entry ), so it prices what will actually ride rather than everything ever said: a compacted session
+	 *  is priced on its summary, which is the whole reason a user compacts one. Reads the same _projected()
+	 *  the wire does, so the number cannot drift from the send. The whole-context estimate folds this onto
+	 *  agent.estimateTokens(); a caller sums the two halves. */
 	estimateTokens(): number {
-		return this.transcript.windowed( this.policies.retention ).estimateTokens();
+		return this._projected().estimateTokens();
 	}
 
 	/**

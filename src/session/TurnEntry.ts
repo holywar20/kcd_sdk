@@ -219,6 +219,24 @@ function frameFile( name: string, text: string ): string {
 	return `[injected file — ${ name }]\n${ text }`;
 }
 
+/**
+ * How a compaction frames into the wire — a marked REPORT about the conversation, never a transcript of
+ * it. The framing says "summary" on purpose: a summary of turns that were both roles, dropped in unmarked,
+ * is how a model comes to treat a paraphrase of its own past output as something it actually said — and a
+ * paraphrase asserted with the confidence of a verbatim quote is exactly the failure compaction is most
+ * likely to cause.
+ *
+ * Exported because BOTH processes frame the same artifact — main projects it onto the wire, the renderer
+ * prices and previews it. One definition, or the preview quietly costs a different number than the send.
+ */
+export function frameCompaction( summary: string ): string {
+	return '[compacted summary of the earlier conversation — a REPORT about what happened, not a transcript'
+		+ ' of it. Details here are paraphrased and may have lost exact wording; re-read source files rather'
+		+ ' than trusting quotations below.]\n\n'
+		+ summary
+		+ '\n\n[end compacted summary]';
+}
+
 /** Anthropic prices an image by pixel AREA — roughly ( width × height ) / 750 tokens — NOT by byte count
  *  or chars÷4, so a large screenshot and a small icon cost wildly different amounts. When dimensions are
  *  unknown ( not yet measured at attach time ) we fall back to a single conservative constant near the
@@ -276,6 +294,46 @@ export class Transcript {
 		// lastN — the trailing n turns; n <= 0 windows to nothing rather than silently meaning "all".
 		if ( policy.n <= 0 ) return new Transcript( [] );
 		return new Transcript( this.turns.slice( -policy.n ) );
+	}
+
+	/**
+	 * This transcript with its compacted prefix replaced by the summary standing in for it — the second
+	 * POLICY over context, and a PURE query exactly as `windowed` is: a new Transcript, nothing mutated and
+	 * nothing dropped from the original. Compose it AFTER windowed( retention ) — retention first,
+	 * compaction second, over whatever retention kept, so a narrow retention can never smuggle a covered
+	 * turn back in.
+	 *
+	 * The NEWEST active compaction wins and older ones fall inside its prefix, which is what makes
+	 * compacting twice compose instead of conflict. One with `mode: 'off'` is skipped entirely — it stays
+	 * in the timeline as history while every turn it covered rides again.
+	 *
+	 * The summary rides as a synthetic USER turn: it stands in for turns that were BOTH roles, and
+	 * attributing it to the assistant would have the model reading a paraphrase as its own verbatim words.
+	 * Synthetic because it exists only HERE, in the throwaway projection — the bound transcript keeps every
+	 * real turn, so `turnRows()` still shows what actually happened.
+	 */
+	compacted( compactions: SessionCompaction[] ): Transcript {
+		const active = compactions
+			.filter( ( c ) => c.mode !== 'off' )
+			.sort( ( a, b ) => a.createdAt - b.createdAt );
+		const newest = active[ active.length - 1 ];
+		if ( !newest ) return new Transcript( [ ...this.turns ] );
+		// Id-match is the contract ( `throughTurnId` IS the window rule ). The FALLBACK is what keeps this
+		// honest when the covered turn isn't here to cut — retention already dropped it, or its exchange
+		// was deleted from the DB. Without it, a manual retention that kept some covered turns but not
+		// `throughTurnId` itself would ride the summary AND the turns it replaces, paying twice for the
+		// same history. The compaction's own timestamp follows every turn it covers and precedes every
+		// turn after it, so it cuts the same line by a different key.
+		const at   = this.turns.findIndex( ( t ) => t.id === newest.throughTurnId );
+		const kept = at === -1
+			? this.turns.filter( ( t ) => t.startedAt > newest.createdAt )
+			: this.turns.slice( at + 1 );
+		const summary: Turn = {
+			id:        `compaction-${ newest.id }`,
+			startedAt: newest.createdAt,
+			entries:   [ { at: newest.createdAt, kind: 'user', text: frameCompaction( newest.summary ) } ],
+		};
+		return new Transcript( [ summary, ...kept ] );
 	}
 
 	// ── Appends ( in-flight — the orchestrator lands entries here as a turn runs ) ──

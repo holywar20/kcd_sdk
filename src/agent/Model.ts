@@ -194,8 +194,15 @@ export interface ModelConfigField {
  * single shape the picker (descriptor fields), the context-window gauge (`status`), the Models config
  * surface (`doc`), and the session deck (`config`) read from ONE pull, so the renderer never
  * hand-joins a separate registry + server-state read again.
+ *
+ * `visible` is whether the user wants this model OFFERED — false only for a family member they have
+ * unchecked on the Models panel. It is a FLAG on a row that is still present, deliberately, rather than
+ * the row being dropped main-side: the roster is also what names a model (`labelFor`), sizes the context
+ * gauge, and fills the inspector, so an agent already bound to a hidden model must still find its
+ * descriptor here. Hiding governs the pickers, never the binding — the surfaces that OFFER a choice
+ * (the model store's `menuFor`, the renderer Registry's model catalog) are what skip an invisible row.
  */
-export type ModelRosterEntry = ModelDescriptor & { status: ModelStatus; doc: string; config: ModelConfigField[]; rootContextText: string | null };
+export type ModelRosterEntry = ModelDescriptor & { status: ModelStatus; doc: string; config: ModelConfigField[]; rootContextText: string | null; visible: boolean };
 
 /**
  * The fallback model key — the ONE model every resolution path terminates on, and the only model key
