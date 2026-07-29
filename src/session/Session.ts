@@ -325,17 +325,22 @@ export class Session {
 	 *  idle from a `finally`, so a failure can't strand a session lit. */
 	setTurnStatus( status: TurnStatus ): void { this.turnStatus = status; }
 
-	/** The transcript as it will actually RIDE — EVERY policy applied, in the ratified order: retention
-	 *  first ( which turns survive ), compaction second ( the summary standing in for the prefix, over
-	 *  whatever retention kept ). Running compaction last is what stops a narrow retention from smuggling
-	 *  a covered turn back in.
+	/** The transcript as it will actually RIDE — retention first ( which turns survive, read off each
+	 *  turn's own `include` flag ), compaction second ( the summary put in front of what survived ).
+	 *
+	 *  The order no longer carries the weight it used to. Compaction ran last to stop a narrow retention
+	 *  from smuggling a covered turn back in — impossible now, because a covered turn was marked
+	 *  `include: false` once by `compactThrough()` and `windowed()` has already dropped it before
+	 *  `compacted()` is reached. The sequence is what reads naturally, not a rule holding a bug shut.
 	 *
 	 *  Private and SHARED, because wireMessages() and estimateTokens() are the two readers that must never
 	 *  disagree about what rides — the moment they compose the policies separately, the gauge starts lying
 	 *  about the send. A third policy composes here and both readers get it for free.
 	 *
-	 *  Neither policy edits the transcript. Both are lenses over it, so narrowing and re-widening loses
-	 *  nothing and the itinerary still shows everything that happened. */
+	 *  Neither step edits the transcript: both build a new one, and the itinerary still shows every turn
+	 *  that ever happened. Note the asymmetry in what re-widening buys, though — a retention change hands
+	 *  back the turns it dropped, while a compacted turn is gone from the wire for good. It stays in the
+	 *  account of what happened; it is simply no longer context. */
 	private _projected(): Transcript {
 		return this.transcript
 			.windowed( this.policies.retention )
