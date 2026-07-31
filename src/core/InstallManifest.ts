@@ -27,15 +27,20 @@ export interface ManifestEntry {
 	purpose: string
 }
 
+/** The base lens's filename — `_`-prefixed because it is INFRASTRUCTURE, not an authored domain lens
+ *  ( the KCD naming rule, see `KcdAddress` ). Declared here rather than in each reader because the
+ *  string was being re-spelled at five call sites that all had to agree about the inheritance floor. */
+const BASE_LENS_FILE = '_lens-base.html'
+
 const MANIFEST: readonly ManifestEntry[] = [
 
 	{
-		bundleSource: 'lenses/_lens_base.html', vaultHome: 'lenses/_lens_base.html', required: true,
+		bundleSource: `lenses/${ BASE_LENS_FILE }`, vaultHome: `lenses/${ BASE_LENS_FILE }`, required: true,
 		purpose: 'The base lens, auto-loaded into every session. A vault without it has no floor to stand on.'
 	},
 	{
-		bundleSource: 'lenses/lens_crafter', vaultHome: 'lenses/lens_crafter', required: true,
-		purpose: 'The authoring lens. REQUIRED, not a nicety: the bundled kcd-onboard skill defers all lens-authoring taste to it ( `kcd_compile { lenses: ["lens_crafter"] }` ) before writing anything, so a vault without it leaves the only shipped skill compiling nothing at the exact step where it starts producing value. Shipped as a directory so the lens keeps its `{name}/{name}.html` + `context/` anatomy.'
+		bundleSource: 'lenses/lens-crafter', vaultHome: 'lenses/lens-crafter', required: true,
+		purpose: 'The authoring lens. REQUIRED, not a nicety: the bundled kcd-configure skill defers all lens-authoring taste to it ( `kcd_compile { lenses: ["lens-crafter"] }` ) before writing anything, so a vault without it leaves the one shipped skill compiling nothing at the exact step where it starts producing value. Shipped as a directory so the lens keeps its `{name}/{name}.html` + `context/` anatomy.'
 	},
 	{
 		bundleSource: 'habits', vaultHome: 'habits', required: true,
@@ -59,7 +64,7 @@ const MANIFEST: readonly ManifestEntry[] = [
 	},
 	{
 		bundleSource: 'references/how-to', vaultHome: 'references/how-to', required: true,
-		purpose: 'Procedural references the bundled lenses link into by path. Currently read-a-survey, which lens_crafter loads when proposing artifacts for an unfamiliar codebase — the "read this INSTEAD of exploring" instruction that the whole survey-as-anchor design rests on.'
+		purpose: 'Procedural references the bundled lenses link into by path. Currently read-a-survey, which lens-crafter loads when proposing artifacts for an unfamiliar codebase — the "read this INSTEAD of exploring" instruction that the whole survey-as-anchor design rests on.'
 	},
 	{
 		bundleSource: 'utilities/deployed', vaultHome: 'utilities/deployed', required: false,
@@ -85,6 +90,21 @@ const MANIFEST: readonly ManifestEntry[] = [
 ]
 
 export class InstallManifest {
+
+	/** The base lens's vault-relative home — THE one place the inheritance floor is named. Every reader
+	 *  that has to tell the floor apart from an authored lens ( `Agent.domainLenses`, Starmind's
+	 *  `Agents.withBase` / `_lensPathsOf`, `VaultUtilities.compile` ) resolves it through here. */
+	static readonly BASE_LENS = `lenses/${ BASE_LENS_FILE }`
+
+	/** Is this path the base lens — the auto-loaded floor rather than an authored domain lens? Matches on
+	 *  the trailing SEGMENT, so it is true for a vault-relative path, an OS-absolute one, and either slash
+	 *  flavour, and false for a same-suffixed name that merely ends in the same characters. Null / empty
+	 *  ( an in-memory lens with no path ) is not the base lens. */
+	static isBaseLens( path: string | null | undefined ): boolean {
+		if( !path ) return false
+		const segments = path.replace( /\\/g, '/' ).split( '/' )
+		return segments[ segments.length - 1 ] === BASE_LENS_FILE
+	}
 
 	/** Every row, in table order. */
 	static all(): readonly ManifestEntry[] {

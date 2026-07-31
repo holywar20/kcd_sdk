@@ -64,7 +64,7 @@ out += 'name: migration-map\n'
 out += 'description: File-by-file mapping of .md → .html migration status across _Claude/ — regenerated from live filesystem + validate-html-migration.ps1 (size) + kcd_sdk KcdValidate (protocol)\n'
 out += 'type: reference\n'
 out += 'status: active\n'
-out += 'author: lens_crafter\n'
+out += 'author: lens-crafter\n'
 out += 'updated: 2026-07-01\n'
 out += '---\n\n'
 out += '# MD → HTML Migration Map\n\n'
@@ -111,6 +111,6 @@ for ( const g of sortedGroupNames ) {
 	out += '\n---\n\n'
 }
 
-const outPath = path.join( claudeDir, 'work', 'lens_crafter', 'migration', 'migration-map.md' )
+const outPath = path.join( claudeDir, 'work', 'lens-crafter', 'migration', 'migration-map.md' )
 fs.writeFileSync( outPath, out, 'utf-8' )
 console.log( `Regenerated ${ path.relative( repoRoot, outPath ) } — ${ rows.length } rows across ${ groups.size } groups.` )

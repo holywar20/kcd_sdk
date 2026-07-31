@@ -32,6 +32,15 @@ export interface LayoutEntry {
 	layer: VaultLayer
 	/** Whether the library index descends into it. */
 	indexed: boolean
+	/** The document types this directory ACCEPTS on a write, when that is broader than the single type
+	 *  it implies. Absent ⇒ exactly `[ type ]`, which is the common case.
+	 *
+	 *  This exists because "what is here" and "may this land here" are different questions, and a write
+	 *  guard that answers the first cannot answer the second. `utilities/` implies `utility`, which is not
+	 *  a document type at all — so without this the directory would accept no document, and the registry
+	 *  that belongs there could never be written. Collapsing the two questions into one equality check is
+	 *  what made a valid on-disk document impossible to save back. */
+	accepts?: readonly ArtifactType[]
 	/** The one-line description the generated reference publishes. */
 	purpose: string
 }
@@ -63,6 +72,9 @@ const LAYOUT: readonly LayoutEntry[] = [
 
 	// ── Data / output layer — what a project accumulates as it runs ──
 	{
+		// No `accepts` row: every document here is a `reference`. The subfolders ARE the categories, and
+		// there is deliberately no type per category — `note` and `how-to` briefly had one and were
+		// retired for exactly that reason ( see ArtifactType ).
 		dir: 'references', type: 'reference', layer: 'data', indexed: true,
 		purpose: 'The project knowledge store, categorized by folder — the folder IS the category.'
 	},
@@ -72,6 +84,10 @@ const LAYOUT: readonly LayoutEntry[] = [
 	},
 	{
 		dir: 'utilities', type: 'utility', layer: 'data', indexed: true,
+		// `utility` is not a document type — the protocol says so outright — so a directory implying it
+		// accepts NO document at all unless this says otherwise. The registry the purpose line names is a
+		// document about utilities, which is a reference.
+		accepts: [ 'utility', 'reference', 'nav-index' ],
 		purpose: 'The registered tool tier — draft/ (unapproved) and deployed/ (approved), with a registry.'
 	},
 	{
@@ -111,9 +127,6 @@ const LAYOUT: readonly LayoutEntry[] = [
 
 ]
 
-/** The filename that is a nav-index wherever it sits. */
-const NAV_INDEX_FILE = 'nav-index.html'
-
 /** Framework-layer documents that live directly at vault root — `InstallManifest` deploys them
  *  there, but they sit outside every `LAYOUT` directory row, so `classify` special-cases them the
  *  same way it does `NAV_INDEX_FILE`. */
@@ -124,6 +137,11 @@ const FRAMEWORK_ROOT_FILES = [ 'root.html', 'root-context.html', 'kcd_framework.
 const LENS_MAX_DEPTH = 3
 
 export class VaultLayout {
+
+	/** The filename that IS a nav-index, wherever it sits — the name carries the type, so a nav-index
+	 *  under any other filename is not one. Public because three places had their own copy of the
+	 *  string; the table that owns the taxonomy should own this too. */
+	static readonly NAV_INDEX_FILE = 'nav-index.html'
 
 	/** Every row, in table order — for the doc generator and anything enumerating the structure. */
 	static all(): readonly LayoutEntry[] {
@@ -157,7 +175,7 @@ export class VaultLayout {
 	static classify( relPath: string, docRoot = '_Claude' ): ArtifactType {
 		const norm = relPath.replace( /\\/g, '/' )
 		if( !norm.startsWith( docRoot + '/' ) ) return 'unknown'
-		if( norm.endsWith( '/' + NAV_INDEX_FILE ) ) return 'nav-index'
+		if( norm.endsWith( '/' + VaultLayout.NAV_INDEX_FILE ) ) return 'nav-index'
 
 		const sub = norm.slice( docRoot.length + 1 )
 		if( FRAMEWORK_ROOT_FILES.includes( sub ) ) return 'framework'
@@ -168,6 +186,35 @@ export class VaultLayout {
 		if( entry.dir === 'lenses' && sub.split( '/' ).length > LENS_MAX_DEPTH ) return 'reference'
 
 		return entry.type
+	}
+
+	/**
+	 * Every document type that may legally be WRITTEN at this path — the write-time counterpart of
+	 * `classify`. Classification answers "what is here"; this answers "what may land here", and the two
+	 * differ wherever a directory holds a family rather than a single type.
+	 *
+	 * Always includes what `classify` returns, so the two can never disagree about the obvious case. An
+	 * empty array means anything goes: `unknown` is scratch space, and scratch that refused writes would
+	 * be useless.
+	 */
+	static acceptedTypes( relPath: string, docRoot = '_Claude' ): readonly ArtifactType[] {
+		const implied = VaultLayout.classify( relPath, docRoot )
+		if( implied === 'unknown' ) return []
+
+		const norm  = relPath.replace( /\\/g, '/' )
+		const entry = VaultLayout.entryFor( norm.slice( docRoot.length + 1 ) )
+		const extra = entry?.accepts ?? []
+
+		return extra.includes( implied ) ? extra : [ implied, ...extra ]
+	}
+
+	/**
+	 * May a document declaring `declared` be written at this path? The one question a write guard should
+	 * ask. An empty accepted set is untyped space and takes anything.
+	 */
+	static accepts( relPath: string, declared: ArtifactType, docRoot = '_Claude' ): boolean {
+		const allowed = VaultLayout.acceptedTypes( relPath, docRoot )
+		return allowed.length === 0 || allowed.includes( declared )
 	}
 
 	/**

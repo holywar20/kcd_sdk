@@ -171,11 +171,24 @@ export class Survey {
 	 * only question this asks. Left unskipped, a freshly installed vault ( ~44 framework documents )
 	 * swamps a small project entirely, and every agent reading the roster concludes the project is
 	 * made of KCD HTML. Found 2026-07-25, when a 6-file test project surveyed as 50 files.
+	 *
+	 * The AGENT SCAFFOLDING is excluded too, by the same argument, via `skipPaths` — the host entry files
+	 * and the MCP registration file are configuration for the agent, not substance of the project. The
+	 * caller supplies the list ( `VaultUtilities.installedPaths` derives it from the §10 seed declarations )
+	 * rather than this module naming those files, which keeps Survey dependency-free over fs+path and keeps
+	 * one authority for "what did the install write". Found 2026-07-29: a 26-file corpus surveyed as 30, and
+	 * those four files were enough to flip the root component's kind from `unknown` to `docs` — a database
+	 * and ops folder reported as documentation, on the strength of three Markdown files the installer had
+	 * written seconds earlier. That roster is the walkthrough's entire evidence base.
 	 */
-	static run( projectRoot: string, opts?: { maxFiles?: number; docRoot?: string } ): SurveyReport {
+	static run( projectRoot: string, opts?: { maxFiles?: number; docRoot?: string; skipPaths?: string[] } ): SurveyReport {
 		const root     = path.resolve( projectRoot );
 		const maxFiles = opts?.maxFiles ?? MAX_FILES;
 		const docRoot  = opts?.docRoot ?? DEFAULT_DOC_ROOT;
+		// Normalised to '/' on the way in, because the walk's `rel()` already emits that form — comparing a
+		// caller's OS-native path against a '/'-joined one silently matches nothing, which would look exactly
+		// like the option working.
+		const skipPaths = new Set( ( opts?.skipPaths ?? [] ).map( p => p.replace( /\\/g, '/' ) ) );
 
 		const files:     RawFile[] = [];
 		const manifests: { dir: string; file: string; ecosystem: string }[] = [];
@@ -200,9 +213,14 @@ export class Survey {
 				}
 				if ( !entry.isFile() ) continue;
 
+				// Exact root-relative match, deliberately — a `CLAUDE.md` genuinely nested in a subtree is the
+				// project's own file and stays counted. Only what the install writes at the root drops out.
+				const relPath = rel( abs );
+				if ( skipPaths.has( relPath ) ) continue;
+
 				let size = 0;
 				try { size = fs.statSync( abs ).size; } catch { /* unreadable — count it, size 0 */ }
-				files.push( { rel: rel( abs ), size, inTestDir, base: entry.name } );
+				files.push( { rel: relPath, size, inTestDir, base: entry.name } );
 
 				const eco = MANIFESTS[ entry.name ] ?? ( entry.name.endsWith( '.csproj' ) ? 'dotnet' : undefined );
 				if ( eco ) manifests.push( { dir: rel( path.dirname( abs ) ), file: rel( abs ), ecosystem: eco } );

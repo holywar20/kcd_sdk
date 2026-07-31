@@ -33,11 +33,41 @@ import { type SlotMode } from '../primitives/types';
  * while the transcript itself stays provider-agnostic ( model is a commodity ).
  */
 
+/**
+ * How a turn ENDED — the REASON, deliberately distinct from `Turn.failed`, which is the GUARD.
+ *
+ * Two questions, not two names for one answer. `failed` decides whether a turn rides the wire and
+ * whether it may be re-included; this says why it ended that way. A cancelled turn is `failed: true`
+ * with `outcome: 'cancelled'` — both true, neither redundant, and collapsing them would force a
+ * cancellation to be reported as a failure or a second boolean to contradict the first.
+ *
+ * The open half of the pair on purpose. `failed` can never grow past two states, but the reasons a
+ * turn stops are open-ended and already visible on the roadmap: a user cancellation, a policy refusal
+ * from gate middleware, a budget ceiling. Each arrives as one more member here and is carried,
+ * persisted, and displayed by machinery that needs no further teaching.
+ *
+ * Called OUTCOME, not status, because this codebase already asks two other things by that name and a
+ * third would make every read ambiguous: `SessionStatus` is active/archived ( is this filed away ) and
+ * `TurnStatus` is idle/thinking ( is a turn running right now ). Three different clocks — filed,
+ * running, ended — and this is the last of them.
+ *
+ * NEVER enforced by storage — the column is TEXT and nothing constrains it — so every read is
+ * `!== 'ok'` rather than `=== 'failed'`. That points the failure direction at "this turn completed",
+ * which is what an unrecognized value honestly is; the reverse would mark real history as broken.
+ */
+export type TurnOutcome = 'ok' | 'failed';
+
 /** The stable envelope every entry carries — a stamp for the time-ordered itinerary. Ordering within
  *  a turn is array order; `at` is the display timestamp ( and the persisted-row field Phase 4 hydrates ). */
 interface EntryBase {
 	at: number;
 }
+
+/** How much of an attachment rides. `suggested` whole · `on` a pointer the model can follow · `off`
+ *  nothing. This is the USER's setting; Phase 5 adds a policy-derived layer ABOVE it, and the ratified
+ *  rule is that the explicit decision wins. Absent ⇒ `suggested`, the same failure direction as
+ *  Turn.include: send one thing more than intended, never silently nothing. */
+export type EntryMode = 'suggested' | 'on' | 'off';
 
 /** One typed thing that happened. Discriminated on `kind`. The wire kinds ride the request every
  *  turn; `thinking` rides only inside the LIVE turn's tool loop, and only when SIGNED.
@@ -46,16 +76,34 @@ interface EntryBase {
  *  the provider will accept the block back verbatim, so it is replayable; absent or empty ⇒
  *  display-only. It is optional because not every producer has one — openai-compat manufactures a
  *  thinking block with `signature: ''` ( a non-Anthropic model has nothing to verify against ), and
- *  a hydrated historical entry has none either. */
+ *  a hydrated historical entry has none either.
+ *
+ *  `error` is what STOPPED a turn, recorded in the itinerary beside the calls that led up to it — so a
+ *  review reads as one sequence ( here is the request, here is the tool it ran, here is what rejected
+ *  it ) instead of sending the reader to a separate log to correlate by timestamp. Its fields mirror the
+ *  app's `Failure` currency exactly, so one assigns to the other with no mapping; they are re-declared
+ *  here rather than imported because @kcd/core cannot depend on the app that consumes it.
+ *
+ *  It is emphatically NOT a wire kind. A model is never told "you failed" as context: the turn that
+ *  produced this is rolled back off the wire entirely, and the entry survives only as the account of what
+ *  was attempted. Keeping it out of WIRE_KINDS also means it prices at zero, which is correct — nothing
+ *  that never rides can cost the next turn anything. */
 export type TurnEntry = EntryBase & (
 	| { kind: 'user';          text: string }
 	| { kind: 'assistant';     text: string }
 	| { kind: 'tool-call';     id: string; name: string; input: unknown }
 	| { kind: 'tool-result';   toolUseId: string; content: string; isError?: boolean }
-	| { kind: 'injected-file'; path: string; name: string; text: string }
-	| { kind: 'image';         mediaType: string; data: string; name?: string; path?: string; width?: number; height?: number }
+	| { kind: 'injected-file'; path: string; name: string; text: string; mode?: EntryMode }
+	| { kind: 'image';         mediaType: string; data: string; name?: string; path?: string; width?: number; height?: number; mode?: EntryMode }
 	| { kind: 'thinking';      text: string; signature?: string }
+	| { kind: 'error';         code: string; message: string; status: number | null; body: string | null; detail?: Record<string, unknown> }
 );
+
+/** The two kinds a user ATTACHES — the ones carrying position + mode. Named because three places narrow
+ *  to exactly this pair and `Extract<...>` spelled out at each of them is the same thought written three
+ *  times. Agent-FOUND context is not here: an agent's read stays a tool-result, on the same rule that
+ *  refused an injected-memory kind. */
+export type Attachment = Extract<TurnEntry, { kind: 'injected-file' | 'image' }>;
 
 /** The discriminant values that count as the session's STANDING context cost — what `estimateTokens()`
  *  prices and what the inspector charges a row for. `thinking` is deliberately absent EVEN THOUGH it can
@@ -92,6 +140,17 @@ export interface Turn {
 	 * that goes stale the first time a compaction is deleted.
 	 */
 	compacted: boolean;
+	/**
+	 * Did this turn's dispatch FAIL — the model never answered, so the turn never landed.
+	 *
+	 * A state descriptor, exactly as `compacted` is: it guards the mode switch's clear and the manual
+	 * toggle, and the itinerary reads it to draw the turn as a failure. Nothing projects off it — `include`
+	 * is already false and stays false.
+	 *
+	 * Required rather than optional so every construction site states it. Absence would mean "not failed",
+	 * and that failure direction is a failed turn quietly riding the wire — the one outcome this prevents.
+	 */
+	failed: boolean;
 }
 
 /**
@@ -259,12 +318,51 @@ export interface TranscriptTurn {
 	rows: TranscriptRow[];
 	/** The turn's whole wire weight — the sum of its wire-bearing rows. */
 	tokens: number;
+	/** This turn's dispatch failed — it is an account of what was attempted, and it rides nothing. The
+	 *  display reads this to draw the block as a failure; without it a failed turn simply stops, which is
+	 *  indistinguishable from one still in flight. */
+	failed: boolean;
+}
+
+/**
+ * One attachment as a SURFACE needs it — the gutter tile, the Atlas row.
+ *
+ * A view rather than the entry, and for the same reason TranscriptRow is one: an `injected-file` carries
+ * its whole snapshot text and an `image` its bytes, while a tile draws a name and a weight. Returning
+ * entries would put every attached file's contents across IPC every time a chip re-rendered.
+ */
+export interface AttachmentView {
+	path:   string;
+	name:   string;
+	kind:   'injected-file' | 'image';
+	mode:   EntryMode;
+	tokens: number;
+	/** Not yet carried by a turn. While TRUE the mode control works and the file can be detached; once
+	 *  false both are refused, because `turn_entries` is insert-only and a change would not survive a
+	 *  reload. A surface reads this to DISABLE rather than to offer-and-fail. */
+	pending: boolean;
 }
 
 /** How an injected file frames into the wire as a user message — a brief marker so the model reads it
  *  as pinned reference material, not as the user's own words. */
-function frameFile( name: string, text: string ): string {
+export function frameFile( name: string, text: string ): string {
 	return `[injected file — ${ name }]\n${ text }`;
+}
+
+/**
+ * How an attachment set to `on` frames — the model is told the file EXISTS and how to reach it, which is
+ * the whole difference between a pointer and a deletion. A file that silently vanishes reads as one that
+ * never existed, so the model will not go looking for it.
+ *
+ * The PATH rides, not just the name: a pointer the reader cannot follow is a dead link, and an agent
+ * handed one either hallucinates the contents or stalls. The renderer's `_pointerLine` named the file and
+ * not where it was.
+ *
+ * Exported for the reason frameCompaction is: main projects it, the renderer prices it, and two copies of
+ * this string quietly cost two different numbers.
+ */
+export function framePointer( name: string, path?: string ): string {
+	return `[available file — ${ name }${ path ? ` at ${ path }` : '' } — not in context; read it if you need its contents]`;
 }
 
 /**
@@ -331,6 +429,23 @@ export class Transcript {
 	}
 
 	/**
+	 * Every attachment this transcript carries, in order — the gutter's list and the compactor's input.
+	 *
+	 * `off` entries are INCLUDED, unlike the wire projection: a user who turned a file off still needs to
+	 * see it in order to turn it back on, and a list that hid it would look like the file was detached.
+	 * What rides is `wireMessages()`'s question, not this one.
+	 */
+	attachments(): Attachment[] {
+		const out: Attachment[] = [];
+		for ( const turn of this.turns ) {
+			for ( const entry of turn.entries ) {
+				if ( entry.kind === 'injected-file' || entry.kind === 'image' ) out.push( entry );
+			}
+		}
+		return out;
+	}
+
+	/**
 	 * This transcript narrowed to the turns a policy admits — a PURE query returning a NEW Transcript
 	 * over the kept turns. Nothing is mutated and nothing is dropped from the original: the policy
 	 * decides what rides the next request, it does not edit history ( the standing ruling ). Callers
@@ -385,6 +500,7 @@ export class Transcript {
 			entries:   [ { at: newest.createdAt, kind: 'user', text: frameCompaction( newest.summary ) } ],
 			include:   true,
 			compacted: false,
+			failed:    false,
 		};
 		return new Transcript( [ summary, ...this.turns ] );
 	}
@@ -395,7 +511,7 @@ export class Transcript {
 	 *  Born INCLUDED and uncompacted, which is what makes the turn being dispatched right now ride without
 	 *  anyone having to say so: whether the current turn is in the window was never a policy question. */
 	openTurn( id: string, startedAt: number ): Turn {
-		const turn: Turn = { id, startedAt, entries: [], include: true, compacted: false };
+		const turn: Turn = { id, startedAt, entries: [], include: true, compacted: false, failed: false };
 		this.turns.push( turn );
 		return turn;
 	}
@@ -443,17 +559,41 @@ export class Transcript {
 		return at + 1;
 	}
 
+	// ── Failure ( the other one-way flag pair ) ──
+
+	/**
+	 * Mark one turn FAILED — `failed: true` and `include: false`, set together, in the one place that sets
+	 * either. The rollback for a turn whose dispatch died: it stays in the account ( the itinerary shows it )
+	 * and it never rides again. Returns the turn so the caller can persist what it held — the entries a
+	 * failed turn accumulated ARE the diagnosis. null when the id names no turn.
+	 *
+	 * Marking rather than REMOVING is what makes the live path and the reload path the same state: a removal
+	 * would show a failure that vanished until the next restart, and would be the only destructive operation
+	 * on an append-only structure — for no gain, since `include: false` already keeps the orphaned tool-call
+	 * off the wire, which is the whole reason the rollback exists.
+	 *
+	 * ONE-WAY, like compaction: nothing re-includes a failed turn. The model never saw it land, and
+	 * replaying a tool-call whose result never arrived is an invalid request by construction.
+	 */
+	failTurn( turnId: string ): Turn | null {
+		const turn = this.turns.find( ( t ) => t.id === turnId );
+		if ( !turn ) return null;
+		turn.failed  = true;
+		turn.include = false;
+		return turn;
+	}
+
 	// ── The window flags ( every write to `include` goes through one of these two ) ──
 
 	/**
-	 * Flip ONE turn's window flag — the manual toggle's write. Returns false when the id names no turn,
-	 * and when it names a COMPACTED one: a compacted turn is history and nothing re-includes it. That
-	 * refusal lives HERE, beside the flag pair, rather than in whichever surface happens to offer the
-	 * control — an invariant a caller has to remember is one a second caller will forget.
+	 * Flip ONE turn's window flag — the manual toggle's write. Returns false when the id names no turn, and
+	 * when it names a COMPACTED or FAILED one: both are history and nothing re-includes either. That refusal
+	 * lives HERE, beside the flag pair, rather than in whichever surface happens to offer the control — an
+	 * invariant a caller has to remember is one a second caller will forget.
 	 */
 	setInclude( turnId: string, include: boolean ): boolean {
 		const turn = this.turns.find( ( t ) => t.id === turnId );
-		if ( !turn || turn.compacted ) return false;
+		if ( !turn || turn.compacted || turn.failed ) return false;
 		turn.include = include;
 		return true;
 	}
@@ -466,12 +606,13 @@ export class Transcript {
 	 * FREEZES exactly those ids ( entering `manual`, seeded from the window the user can currently see, so
 	 * the switch itself changes nothing until they toggle something ).
 	 *
-	 * COMPACTED turns are never touched, in either direction. That exemption is what lets forty turns of
-	 * hand-tuning be escaped in one click without also undoing a compaction the user paid a model turn for.
+	 * COMPACTED and FAILED turns are never touched, in either direction. That exemption is what lets forty
+	 * turns of hand-tuning be escaped in one click without also undoing a compaction the user paid a model
+	 * turn for, or re-arming a turn whose tool-call never got its result.
 	 */
 	resetWindow( keep: Set<string> | null ): void {
 		for ( const turn of this.turns ) {
-			if ( turn.compacted ) continue;
+			if ( turn.compacted || turn.failed ) continue;
 			turn.include = keep ? keep.has( turn.id ) : true;
 		}
 	}
@@ -518,14 +659,27 @@ export class Transcript {
 					case 'user':
 						messages.push( { role: 'user', content: entry.text } );
 						break;
-					case 'injected-file':
-						this._appendBlock( messages, 'user', { type: 'text', text: frameFile( entry.name, entry.text ) } );
+					case 'injected-file': {
+						const mode = Transcript._modeOf( entry );
+						if ( mode === 'off' ) break;
+						this._appendBlock( messages, 'user', { type: 'text', text: mode === 'on'
+							? framePointer( entry.name, entry.path )
+							: frameFile( entry.name, entry.text ) } );
 						break;
-					case 'image':
+					}
+					case 'image': {
 						// A non-text user injection — its bytes ride as an image block ( user role, like a file ).
 						// The connector maps { mediaType, data } to the provider's nested source shape.
-						this._appendBlock( messages, 'user', { type: 'image', mediaType: entry.mediaType, data: entry.data } );
+						const mode = Transcript._modeOf( entry );
+						if ( mode === 'off' ) break;
+						// An image set to `on` becomes TEXT. There is no cheap form of an image block — the bytes
+						// ARE the payload — so the reference form is a line naming it, and the block kind
+						// legitimately changes at the projection.
+						this._appendBlock( messages, 'user', mode === 'on'
+							? { type: 'text', text: framePointer( entry.name ?? '(image)', entry.path ) }
+							: { type: 'image', mediaType: entry.mediaType, data: entry.data } );
 						break;
+					}
 					case 'assistant':
 						this._appendBlock( messages, 'assistant', { type: 'text', text: entry.text } );
 						break;
@@ -540,6 +694,13 @@ export class Transcript {
 						this._appendBlock( messages, 'user', { type: 'tool_result', tool_use_id: entry.toolUseId, content: cleared ? '[tool result cleared to save context]' : entry.content, ...( entry.isError ? { is_error: true } : {} ) } );
 						break;
 					}
+					case 'error':
+						// NEVER projected. A model is not told that a turn failed — the turn carrying this is
+						// rolled back off the wire in its entirety, and the entry survives purely as the account
+						// of what was attempted. Handled EXPLICITLY rather than filtered upstream so that this
+						// decision is stated at the projection, where a future reader would otherwise wonder
+						// whether the omission was deliberate.
+						break;
 					default:
 						Assert.never( entry );   // add a kind ⇒ compile error here until it's projected
 				}
@@ -578,7 +739,8 @@ export class Transcript {
 				id:        turn.id,
 				startedAt: turn.startedAt,
 				rows,
-				tokens:    rows.reduce( ( sum, r ) => sum + r.tokens, 0 )
+				tokens:    rows.reduce( ( sum, r ) => sum + r.tokens, 0 ),
+				failed:    turn.failed
 			};
 		} );
 	}
@@ -622,11 +784,29 @@ export class Transcript {
 
 	// ── Per-entry helpers ( static — pure over one entry ) ─────────────────────
 
+	/** The mode an entry actually rides at. Today it is simply the user's setting; Phase 5 layers policy
+	 *  decay here — derived at projection from ( entry, policy, turn-distance ), never baked onto the entry
+	 *  — with the explicit user decision still winning. Every projection asks THIS rather than reading
+	 *  `.mode`, so that layer lands in one place instead of being hunted for. A kind that cannot be reduced
+	 *  answers `suggested`, so callers never branch on kind before asking. */
+	static _modeOf( entry: TurnEntry ): EntryMode {
+		if ( entry.kind !== 'injected-file' && entry.kind !== 'image' ) return 'suggested';
+		return entry.mode ?? 'suggested';
+	}
+
+
 	/** The token weight of ONE wire-bearing entry — the one place a kind's cost formula lives. Text kinds
 	 *  are chars÷4 ( KCDPrimitive._estimateTokens over the body ); an image is priced by pixel area
 	 *  ( estimateImageTokens ), NOT its text. Callers gate on WIRE_KINDS first, so a display-only kind
 	 *  ( thinking ) never reaches here. */
 	static _entryTokens( entry: TurnEntry ): number {
+		const mode = Transcript._modeOf( entry );
+		if ( mode === 'off' ) return 0;
+		// `on` costs the POINTER, not the thing pointed at — for a file and for an image alike, since the
+		// reference form of both is the same line of text.
+		if ( mode === 'on' && ( entry.kind === 'injected-file' || entry.kind === 'image' ) ) {
+			return KCDPrimitive._estimateTokens( framePointer( entry.name ?? '(image)', entry.path ) );
+		}
 		if ( entry.kind === 'image' ) return estimateImageTokens( entry.width, entry.height );
 		return KCDPrimitive._estimateTokens( Transcript._entryText( entry ) );
 	}
@@ -641,8 +821,26 @@ export class Transcript {
 			case 'tool-result':   return entry.content;
 			case 'injected-file': return frameFile( entry.name, entry.text );
 			case 'image':         return ( entry.name ?? '(image)' ) + ( entry.width && entry.height ? ` ${ entry.width }×${ entry.height }` : '' );
+			// The COPY-PASTE body, and the reason this entry exists at all: everything known about the
+			// failure, in the order a person reads it, as one selectable block. The provider's own body is
+			// last and VERBATIM — it is the part that names the offending block of a rejected request, and
+			// clipping it here would leave the reader with a summary of the thing they came to read.
+			case 'error':         return Transcript._errorText( entry );
 			default:              return Assert.never( entry );
 		}
+	}
+
+	/** An error entry's full text. Sections are dropped when absent rather than printed empty: a socket
+	 *  fault has no status and no body, and `status: —` is noise pretending to be information. */
+	static _errorText( entry: Extract<TurnEntry, { kind: 'error' }> ): string {
+		const parts: string[] = [];
+		parts.push( entry.status ? `${ entry.status } ${ entry.code }` : entry.code );
+		if ( entry.message ) parts.push( entry.message );
+		for ( const [ key, value ] of Object.entries( entry.detail ?? {} ) ) {
+			parts.push( `${ key }: ${ typeof value === 'string' ? value : JSON.stringify( value ) }` );
+		}
+		if ( entry.body ) parts.push( entry.body );
+		return parts.join( '\n\n' );
 	}
 
 	/**
@@ -668,6 +866,11 @@ export class Transcript {
 				: { icon: 'package', color: '--plugin' };
 			case 'injected-file': return { icon: 'file',      color: '--reference' };
 			case 'image':         return { icon: 'camera',    color: '--external' };
+			// `stop`, deliberately NOT the `warning` a failed tool-result wears. Both are --error, and that is
+			// right — they are the same family — but they are not the same event: a tool that errored is
+			// survivable and the turn carried on past it, while this is the row where the turn ENDED. Sharing
+			// one glyph made a hiccup and a death look identical in a scan down the itinerary.
+			case 'error':         return { icon: 'stop',      color: '--error' };
 			default:              return Assert.never( entry );
 		}
 	}
@@ -682,6 +885,9 @@ export class Transcript {
 			case 'tool-result':   return entry.isError ? 'tool result (error)' : 'tool result';
 			case 'injected-file': return `file ${ entry.name }`;
 			case 'image':         return 'image';
+			// Leads with the status because "is this mine, theirs, or the network's" is the question a
+			// failed turn is scanned to answer.
+			case 'error':         return entry.status ? `error ${ entry.status } ${ entry.code }` : `error ${ entry.code }`;
 			default:              return Assert.never( entry );
 		}
 	}

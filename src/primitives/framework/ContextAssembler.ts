@@ -44,7 +44,7 @@
  * lens's identity rarely changes turn to turn ) and surfaces on the wire as one top-level
  * by-KIND care band — one top-level `# Purpose` / `# Philosophy` block PER care kind, each merging every
  * active lens's contribution as labeled `## {lens}` sub-sections ( `Agent.buildCareBands` builds them,
- * since it knows lens names + primacy; primary leads and is marked, `_lens_base` follows as `Base lens` ).
+ * since it knows lens names + primacy; primary leads and is marked, `_lens-base` follows as `Base lens` ).
  * No "## Lenses" wrapper. `memory` is the system-fired PRELOAD baseline ( `section: 'memory'`,
  * injected by the orchestrator, not authored ) — it now sits BETWEEN the Lenses band and Knowledge
  * ( Bryan, 2026-07-13: "add a space for memory... after the lenses but before knowledge" ), reserved

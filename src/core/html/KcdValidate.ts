@@ -31,6 +31,11 @@ interface FieldSpec {
 	oneOf?:           string[];
 	pattern?:         RegExp;
 	emptyOkForType?:  string;
+	/** For a `list` field: the type EVERY chip must validate as. Absent = chips are free text
+	 *  ( `tags`, `domain` ). Present = each chip is checked exactly as a scalar field of that type
+	 *  would be, so a list does not become a hole in the validator. `lens` uses it: each entry names a
+	 *  real lens, and an unhyphenated one ( `lens_crafter` ) is the same defect in a chip as in a slug. */
+	itemType?:        string;
 }
 
 export const KcdValidate = new class KcdValidate {
@@ -57,7 +62,12 @@ export const KcdValidate = new class KcdValidate {
 		'dredge-depth':   { type: 'number' },
 		scope:            { type: 'enum', pattern: this.SCOPE_RE },
 		'habit-class':    { type: 'slug' },
-		lens:             { type: 'slug' },
+		// lens is a LIST, in invocation order — the lenses a session was wearing when it authored this.
+		// Singular was a lie the corpus kept telling: real work is cross-lens, which is why 18 plans had
+		// resorted to a fake lens named "cross" that named nothing and resolved to nothing. A list says
+		// the true thing ( which lenses, and which led ) and the `cross` placeholder retires with it.
+		// itemType keeps each entry under the same slug rules the scalar form enforced.
+		lens:             { type: 'list', itemType: 'slug' },
 		// todo / completed are ADDRESSES, not paths ( protocol §1.1 ). A lens declares WHERE its log
 		// lives; it does not assert that one has been written. Most lenses name a log file that does
 		// not exist yet, and that is a legal state rather than a defect.
@@ -122,7 +132,7 @@ export const KcdValidate = new class KcdValidate {
 			seen[ key ] = true;
 
 			// list fields are structural ( chips ); everything else is a scalar value
-			if ( spec.type === 'list' ) { this.checkList( field, key, err ); if ( key === 'name' ) name = HtmlTree.textOf( field ).trim(); continue; }
+			if ( spec.type === 'list' ) { this.checkList( field, key, spec, err ); if ( key === 'name' ) name = HtmlTree.textOf( field ).trim(); continue; }
 
 			const { value } = KcdAddress.fieldValue( field, declared ?? spec.type );
 			if ( key === 'name' ) name = value;
@@ -308,9 +318,23 @@ export const KcdValidate = new class KcdValidate {
 		}
 	}
 
-	checkList( field: HtmlEl, key: string, err: Emit ): void {
+	checkList( field: HtmlEl, key: string, spec: FieldSpec, err: Emit ): void {
 		const tags = HtmlTree.collect( field, el => KcdAddress.isTag( el ) );
-		for ( const t of tags ) if ( HtmlTree.textOf( t ).trim() === '' ) err( 'empty-tag', `field:${ key }`, 'empty chip in a list field' );
+		for ( const t of tags ) {
+			const value = HtmlTree.textOf( t ).trim();
+			if ( value === '' ) { err( 'empty-tag', `field:${ key }`, 'empty chip in a list field' ); continue; }
+			if ( !spec.itemType ) continue;   // free-text chips ( tags, domain )
+
+			// A typed list gets the SAME checks the scalar form would get — the two rules below are the
+			// ones lifted from the scalar path verbatim, so making a field a list can never quietly
+			// relax it. The chip's own text is the value ( a chip is never a link ).
+			if ( !KcdAddress.validates( spec.itemType, value ) )
+				err( 'bad-value', `field:${ key }`, `"${ value }" is not a valid ${ spec.itemType }` );
+			if ( spec.itemType === 'slug' ) {
+				const fix = this.slugUnderscore( value );
+				if ( fix ) err( 'underscore-slug', `field:${ key }`, `"${ value }" has internal underscores — slugs are hyphenated ( use "${ fix }" )` );
+			}
+		}
 	}
 
 	nameOk( v: string ): boolean { return v.length <= 64 && KcdAddress.SLUG_RE.test( v ) && !/claude|anthropic/i.test( v ); }

@@ -20,7 +20,9 @@ export type FieldValidator = ( v: string ) => boolean;
 export const KcdAddress = new class KcdAddress {
 
 	// ── The closed sets ( protocol §2, §4 ) ──────────────────────────────────────
-	TYPES        = [ 'lens', 'plan', 'reference', 'note', 'how-to', 'framework', 'template', 'nav-index', 'habit', 'contract', 'generator', 'analyzer', 'audit' ];
+	/** `note` and `how-to` were retired 2026-07-30 — they duplicated what the folder already says
+	 *  ( see ArtifactType ). Twelve documents declared one; all became `reference`. */
+	TYPES        = [ 'lens', 'plan', 'reference', 'framework', 'template', 'nav-index', 'habit', 'contract', 'generator', 'analyzer', 'audit' ];
 	STATUSES     = [ 'draft', 'active', 'observation', 'composed', 'disabled', 'deployed', 'complete', 'retired', 'paused' ];
 	AUDIENCES    = [ 'human', 'agent', 'both' ];
 	MERGES       = [ 'additive', 'declarative', 'union' ];
@@ -46,7 +48,12 @@ export const KcdAddress = new class KcdAddress {
 		'data-kcd-param', 'data-kcd-params', 'data-kcd-mode', 'data-kcd-habit-class',
 		'data-kcd-table', 'data-kcd-head', 'data-kcd-chips', 'data-kcd-tag',
 		'data-kcd-audience', 'data-kcd-chrome', 'data-kcd-live', 'data-kcd-script',
-		'data-kcd-address'
+		'data-kcd-address',
+		// The §10 host-seed idiom ( `root-context.html` ): a `<script type="text/kcd-md">` payload
+		// plus WHICH host it is for and WHICH file it lands in. Absent here since the idiom was
+		// written, which made the seed source — the one document the installer reads BEFORE a vault
+		// exists — fail validation and stay invisible to scan / health / get.
+		'data-kcd-seed', 'data-kcd-target'
 	];
 
 	// ── Patterns ──────────────────────────────────────────────────────────────────

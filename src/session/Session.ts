@@ -12,7 +12,7 @@
  * bridge whole via serialize / fromSerialized, the same trinity as Agent.
  */
 
-import { Transcript, type Turn, type WireMessage, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type SessionPolicies, type SessionCompaction } from './TurnEntry';
+import { Transcript, type Turn, type WireMessage, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type SessionPolicies, type SessionCompaction, type Attachment } from './TurnEntry';
 
 /**
  * A session's LIFECYCLE state — is this conversation live or filed away? Persisted, user-driven,
@@ -150,6 +150,13 @@ export class Session {
 	 *  arrival via bindCompactions(). Its home of record is the `session_compactions` table. Empty until
 	 *  bound, so the projection below is a no-op on a session that has never compacted. */
 	compactions: SessionCompaction[] = [];
+
+	/** Attachments made but NOT yet carried by a turn. The same species as `transcript`: non-persisted
+	 *  object state, never in SerializedSession. They drain onto the turn the orchestrator opens, ahead of
+	 *  the user's prompt — which is what makes them persist for free ( the turn's `entries` column is
+	 *  written when it ends ) and keeps a Turn atomic: a prompt plus everything that answered it. Before
+	 *  the first send there is no turn to hold them, which is the whole reason this list exists. */
+	pendingAttachments: Attachment[] = [];
 
 	private constructor(
 		id: string,
@@ -345,6 +352,20 @@ export class Session {
 		return this.transcript
 			.windowed( this.policies.retention )
 			.compacted( this.compactions );
+	}
+
+	/**
+	 * Every attachment this session carries — those already on a turn plus anything attached since the
+	 * last send. ONE reader, so the gutter and the compactor cannot disagree about a file the user
+	 * attached thirty seconds ago and has not sent yet.
+	 *
+	 * Reads the WHOLE transcript rather than `_projected()`: this answers "what is attached", not "what
+	 * rides", and a file whose turn fell out of the window is still attached — it is simply not in
+	 * context. Conflating the two is what would make a file vanish from the gutter the moment the window
+	 * narrowed, with no way to get it back.
+	 */
+	attachments(): Attachment[] {
+		return [ ...this.transcript.attachments(), ...this.pendingAttachments ];
 	}
 
 	/** The DYNAMIC half of the wire — the projected transcript as neutral messages a connector maps to its

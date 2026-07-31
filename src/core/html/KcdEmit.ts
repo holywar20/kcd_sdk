@@ -21,42 +21,30 @@ import { KcdAddress } from './KcdAddress';
 import { KcdValidate } from './KcdValidate';
 import type { SerializedArtifact } from '../../primitives/types';
 
-/** The vault-wide stylesheet's home, relative to the vault root — the same filename
- *  `InstallManifest` deploys and `VaultUtilities.fixStylesheetLinks` sweeps toward. It moved out of
- *  `kcd/` on 2026-07-26; documents still pointing at `kcd/kcd.css` predate that and are stale. */
-const CSS_HOME = 'kcd.css';
+/** The fallback stylesheet href — the bare filename, correct only for a document sitting AT the vault
+ *  root. A real write path passes the configured absolute href instead; this exists so a caller that
+ *  never lands a file ( `KCDPrimitive.toHtml()`, the emit tests ) still produces a well-formed head. */
+const CSS_FALLBACK = 'kcd.css';
 
 export const KcdEmit = new class KcdEmit {
 
 	/**
 	 * A full artifact → a full HTML document string ( doctype through `</html>` ).
 	 *
-	 * `vaultPath` is the artifact's VAULT-RELATIVE destination ( `plans/x.html` ), and it exists for
-	 * one reason: the stylesheet link is a plain relative href, so its correct value depends on how
-	 * deep the document sits. Omit it and the link is emitted bare — correct only at the vault root.
-	 * Every caller that WRITES TO DISK must pass it; a preview or a test that never lands a file can
-	 * leave it off. ( Deliberately not inferred from `artifact.path`: that field is absent on the
-	 * agent-supplied save shape and carries a different form depending on who built it, so guessing
-	 * from it would emit a confidently wrong depth. )
+	 * `cssHref` is the stylesheet link, handed in whole. It used to be COMPUTED here from the
+	 * document's own depth ( one `../` per level up to the vault root ), and that shape was wrong twice
+	 * over: the depth math had to be MIRRORED in a corpus-wide sweep to stay honest, and a document
+	 * that moved carried a link that silently stopped resolving. The href is now one configured
+	 * ABSOLUTE value every document shares — resolved by whoever knows the install ( `Config`, in
+	 * daedalus ), passed down, never derived. kcd_sdk sits below that config and does not read it.
+	 *
+	 * Omitted, it falls back to the bare filename — correct only at the vault root, and meant for a
+	 * caller that never lands a file. A WRITE path that omits it is a bug.
 	 */
-	emit( artifact: SerializedArtifact, vaultPath?: string ): string {
+	emit( artifact: SerializedArtifact, cssHref: string = CSS_FALLBACK ): string {
 		const dl = this.frontmatterBlock( artifact.frontmatter );
 		const article = this.spliceFrontmatter( artifact.body, dl );
-		return this.document( artifact.type, this.titleOf( artifact ), article, this.cssHref( vaultPath ) );
-	}
-
-	/**
-	 * The stylesheet href for a document living at `vaultPath` — one `../` per directory level, then
-	 * `kcd.css` at the vault root. The mirror of `VaultUtilities.fixStylesheetLinks`'s depth math, so
-	 * a freshly emitted document already agrees with what the corpus-wide sweep would rewrite it to.
-	 *
-	 * An absent or root-level path yields the bare filename. Backslashes are normalized first, since
-	 * a Windows-shaped path would otherwise count as a single segment and silently emit depth 0.
-	 */
-	cssHref( vaultPath?: string ): string {
-		const rel = ( vaultPath ?? '' ).replace( /\\/g, '/' ).replace( /^\/+/, '' );
-		if( !rel ) return CSS_HOME;
-		return '../'.repeat( rel.split( '/' ).length - 1 ) + CSS_HOME;
+		return this.document( artifact.type, this.titleOf( artifact ), article, cssHref );
 	}
 
 	/** frontmatter → `<dl data-kcd-frontmatter>…</dl>`, the inverse of `KcdParse.frontmatter()`.
@@ -119,9 +107,9 @@ export const KcdEmit = new class KcdEmit {
 	 *  the sanitized body is styled by the renderer's own ported rules, which is why a wrong href
 	 *  here stays invisible until someone opens the file in a browser ), and the body.
 	 *
-	 *  `cssHref` defaults to the bare filename ( vault-root depth ). Callers reach this through
-	 *  `emit`, which computes it from the destination path — see `cssHref`. */
-	document( type: string, title: string, articleInner: string, cssHref: string = CSS_HOME ): string {
+	 *  `cssHref` defaults to the bare filename ( vault-root only ). Callers reach this through `emit`,
+	 *  which takes the configured absolute href from its own caller — see `emit`. */
+	document( type: string, title: string, articleInner: string, cssHref: string = CSS_FALLBACK ): string {
 		return '<!DOCTYPE html>\n'
 			+ '<html lang="en">\n'
 			+ '<head>\n'

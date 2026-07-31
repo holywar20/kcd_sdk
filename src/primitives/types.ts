@@ -67,9 +67,14 @@ export interface TypeCheckIssue {
 export type ArtifactType =
 	| 'lens'
 	| 'plan'
+	// `reference` covers the whole knowledge store. `note` and `how-to` used to sit here beside it and
+	// were retired 2026-07-30: the FOLDER is the category ( references/how-to/, references/notes/, and a
+	// dozen more that never had a matching type ), so a type naming one said a second time what the path
+	// already said. Two of fourteen categories having a type of their own is not a taxonomy, it is a
+	// leftover — and it read as authoritative, so an agent authoring a how-to declared `how-to`, hit a
+	// write guard that only accepted `reference`, and hand-edited around the tool. That is the cost of an
+	// idiom that looks like a rule.
 	| 'reference'
-	| 'note'
-	| 'how-to'
 	| 'generator'
 	| 'analyzer'
 	| 'utility'

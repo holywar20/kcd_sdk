@@ -298,7 +298,7 @@ const planSlotLensHtml = ( planHref: string ) => `<!DOCTYPE html>
 
 describe( 'Agent.compile — the context-compiler surface: merged body first, then the manifest at the bottom', () => {
 	const loadBase = (): Agent => {
-		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/_lens_base.html' ), {
+		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/_lens-base.html' ), {
 			projectRoot: PROJECT_ROOT, read: ( abs ) => fs.readFileSync( abs, 'utf-8' ), depth: 2
 		} );
 		return Agent.create( { lenses: [ lens ] } );
@@ -315,7 +315,7 @@ describe( 'Agent.compile — the context-compiler surface: merged body first, th
 		for ( const header of [ '## Files', '## References', '## Habits' ] )
 			expect( out.split( header ).length - 1 ).toBe( 1 );   // exactly one occurrence
 		// The Files row is the lens's own vault-relative path ( the file ID ), not an absolute OS path.
-		expect( out ).toContain( '(_Claude/lenses/_lens_base.html)' );
+		expect( out ).toContain( '(_Claude/lenses/_lens-base.html)' );
 		expect( out ).not.toContain( 'C:/Code' );
 	} );
 
@@ -331,7 +331,7 @@ describe( 'Agent.compile — the context-compiler surface: merged body first, th
 
 describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Phase 1)', () => {
 	const loadBase = (): Agent => {
-		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/_lens_base.html' ), {
+		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/_lens-base.html' ), {
 			projectRoot: PROJECT_ROOT, read: ( abs ) => fs.readFileSync( abs, 'utf-8' ), depth: 2
 		} );
 		return Agent.create( { lenses: [ lens ] } );
@@ -376,6 +376,36 @@ describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Ph
 		expect( manifestIdx ).toBeGreaterThan( proseIdx );     // memory precedes the Manifest
 	} );
 
+	// ── The Memory band's tag-vocabulary constant ( replaced the `known_tags` tool, 2026-07-31 ) ──
+
+	it( 'the tag vocabulary heads the Memory band, with lens:* tags filtered out', () => {
+		const agent = loadBase();
+		agent.bindEnv( { memory: '- claim — because reason', memoryTags: [ 'lens:main', 'style', 'tooling' ] } );
+		const band = agent.memoryBand();
+		expect( band ).toContain( 'Tags: style, tooling' );
+		expect( band ).not.toContain( 'lens:main' );                                  // system-authoritative, never agent-supplied
+		expect( band.indexOf( 'Tags:' ) ).toBeLessThan( band.indexOf( '- claim' ) );  // constant leads the prose
+	} );
+
+	it( 'no bound tags ( no memory store wired ) means no vocabulary line at all', () => {
+		const agent = loadBase();
+		agent.bindEnv( { memory: '- claim — because reason', memoryTags: [] } );
+		expect( agent.memoryVocabulary() ).toBe( '' );
+		expect( agent.memoryBand() ).toBe( '- claim — because reason' );
+	} );
+
+	it( 'a lens-only vocabulary contributes nothing — every tag would be filtered', () => {
+		const agent = loadBase();
+		agent.bindEnv( { memory: '', memoryTags: [ 'lens:main', 'lens:driver' ] } );
+		expect( agent.memoryBand() ).toBe( '' );   // both halves empty → no band rides
+	} );
+
+	it( 'the vocabulary rides even when the memory query came back dry', () => {
+		const agent = loadBase();
+		agent.bindEnv( { memory: '', memoryTags: [ 'style' ] } );
+		expect( agent.memoryBand() ).toContain( 'Tags: style' );   // an agent with no memories still needs its vocabulary
+	} );
+
 	it( 'care groups by KIND — top-level "# Purpose" / "# Philosophy" bands, lenses as "## {lens}" sub-sections', () => {
 		const agent = loadBase();
 		const out = agent.compiledBlocks().map( b => b.text ).join( '\n\n' );
@@ -399,7 +429,7 @@ describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Ph
 
 describe( 'Know/Care/Do labels are stripped from compiled context — real deployed base lens', () => {
 	it( 'the base lens compiles with no K/C/D region headings, but its sections and slot rows survive', () => {
-		const p = path.join( PROJECT_ROOT, '_Claude/lenses/_lens_base.html' );
+		const p = path.join( PROJECT_ROOT, '_Claude/lenses/_lens-base.html' );
 		const lens = KCDPrimitive.fromHtml( fs.readFileSync( p, 'utf-8' ), p );
 		const joined = lens.getContextBlocks().map( b => b.text ).join( '\n\n' );
 

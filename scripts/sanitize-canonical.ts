@@ -15,7 +15,7 @@
  * `_Claude/kcd/`. No git net here, so nothing touches the real tree until you say so.
  *
  * Hand-handled OUT of this tool ( flagged, never auto-touched ): the 3 deployed-pointing nav-indexes
- * ( references/ · lenses/ · root — rebuilt to index canonical ), `_lens_base`'s Starmind tools section
+ * ( references/ · lenses/ · root — rebuilt to index canonical ), `_lens-base`'s Starmind tools section
  * ( DP-2 ), and prose ( inline ) strips. Templates are stamped/css-fixed but NEVER link-stripped ( their
  * links are illustrative placeholders ).
  *
@@ -39,10 +39,10 @@ const slotKind = ( section: string | undefined, where: string ): string => ( sec
 
 const PROMOTE: Record<string, string> = {
 	'_Claude/plans/starmind_insight/examples/sample.sig':     '_Claude/kcd/references/insight/examples/sample.sig',
-	'_Claude/work/lens_crafter/html-proposal/lens.html':      '_Claude/kcd/templates/exemplars/lens.html',
-	'_Claude/work/lens_crafter/html-proposal/plan.html':      '_Claude/kcd/templates/exemplars/plan.html',
-	'_Claude/work/lens_crafter/html-proposal/contract.html':  '_Claude/kcd/templates/exemplars/contract.html',
-	'_Claude/work/lens_crafter/html-proposal/reference.html': '_Claude/kcd/templates/exemplars/reference.html'
+	'_Claude/work/lens-crafter/html-proposal/lens.html':      '_Claude/kcd/templates/exemplars/lens.html',
+	'_Claude/work/lens-crafter/html-proposal/plan.html':      '_Claude/kcd/templates/exemplars/plan.html',
+	'_Claude/work/lens-crafter/html-proposal/contract.html':  '_Claude/kcd/templates/exemplars/contract.html',
+	'_Claude/work/lens-crafter/html-proposal/reference.html': '_Claude/kcd/templates/exemplars/reference.html'
 };
 
 /** Rebuilt by hand ( index deployed content → must become canonical-only ) — this tool skips them. */

@@ -14,7 +14,7 @@ const FIXTURE = `<!DOCTYPE html>
 <dt>type</dt><dd data-kcd-field="type" data-kcd-type="enum">reference</dd>
 <dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>
 <dt>tags</dt><dd data-kcd-field="tags" data-kcd-type="list"><ul data-kcd-chips><li data-kcd-tag>alpha</li><li data-kcd-tag>beta</li></ul></dd>
-<dt>todo</dt><dd data-kcd-field="todo" data-kcd-type="path" href="_Claude/logs/x/todo.md">_Claude/logs/x/todo.md</dd>
+<dt>todo</dt><dd data-kcd-field="todo" data-kcd-type="address">_Claude/logs/x/todo.html</dd>
 </dl>
 <h1>Fixture</h1>
 <p>Some prose that must survive the round trip untouched.</p>
@@ -45,11 +45,15 @@ describe( 'KcdEmit — round trip against KcdParse', () => {
 		expect( reparsed.body ).toContain( 'Some prose that must survive the round trip untouched.' );
 	} );
 
-	it( 'a path-type field round-trips as a real value, not an empty link', () => {
+	// An address field carries its value as TEXT and must NOT be emitted as a link — an address asserts
+	// no occupancy, so taking its value from an href would make it the very thing it replaces
+	// ( KcdAddress.fieldValue ). The round trip is the guard: emit text, read text, same value back.
+	it( 'an address field round-trips as a real value, and never as a link', () => {
 		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
 		const html = KcdEmit.emit( artifact );
 		const reparsed = KcdParse.parse( html, 'fixture.html' );
-		expect( reparsed.frontmatter[ 'todo' ] ).toBe( '_Claude/logs/x/todo.md' );
+		expect( reparsed.frontmatter[ 'todo' ] ).toBe( '_Claude/logs/x/todo.html' );
+		expect( html ).not.toContain( 'data-kcd-field="todo" data-kcd-type="address" href=' );
 	} );
 
 	it( 'never mints a key the source frontmatter did not carry', () => {

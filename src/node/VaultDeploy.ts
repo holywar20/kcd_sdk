@@ -171,7 +171,7 @@ export class VaultDeploy {
 	 *  when absent, and deliberately minimal: it is a starting point the project grows, not a
 	 *  generated artifact that would fight being edited. */
 	private static _navIndex( vault: string, write: boolean ): DeployItem {
-		const rel     = 'nav-index.html'
+		const rel     = VaultLayout.NAV_INDEX_FILE
 		const dest    = path.join( vault, rel )
 		const present = fs.existsSync( dest )
 		const item: DeployItem = { kind: 'file', path: rel, present, note: 'the vault entry map' }

@@ -3,6 +3,7 @@ import { SlotResolver } from '../primitives/framework/SlotResolver';
 import type { SlotResolution } from '../primitives/framework/SlotResolver';
 import { ContextAssembler, MANIFEST_SECTIONS } from '../primitives/framework/ContextAssembler';
 import { KcdContext } from '../core/html/KcdContext';
+import { InstallManifest } from '../core/InstallManifest';
 import { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
 import type { ArtifactType, ContextSegment, PolicyEntry, SerializedArtifact, SerializedLens, SlotMode, SourceLayer, TaggedBlock } from '../primitives/types';
 
@@ -62,8 +63,11 @@ export interface SerializedAgent {
 	/** Presentation — a Glyph name + a color token string (e.g. `var(--generator)`). Null = fall back. */
 	icon: string | null;
 	color: string | null;
-	/** A ModelDescriptor registry key (see Model.ts). Concrete — defaulted, never null. */
-	model: string;
+	/** A ModelDescriptor registry key (see Model.ts), or null for an agent that never dispatches.
+	 *  Null is the VAULT case: a `Vault.buildAgent` agent exists only to compile context for delivery as
+	 *  CLI text or a tool result, so there is no model to name — and defaulting one would be a lie a later
+	 *  reader acts on. An authored agent is always concrete; the default still applies when none is given. */
+	model: string | null;
 	/** The visible top-of-context lever. Null = none; '' is a deliberately empty one. */
 	systemPrompt: string | null;
 	/** The composed lenses, serialized whole. `[]` = a draft (cannot run yet). `[0]` is primary. */
@@ -144,7 +148,8 @@ export interface AgentOptions {
 	name?: string;
 	icon?: string | null;
 	color?: string | null;
-	model?: string;
+	/** Omit for the default; pass null explicitly for an agent that never dispatches ( see the field ). */
+	model?: string | null;
 	systemPrompt?: string | null;
 	lenses?: LensObject[];
 	baseTools?: string[];
@@ -200,7 +205,7 @@ export class Agent {
 	name: string;
 	icon: string | null;
 	color: string | null;
-	model: string;
+	model: string | null;
 	systemPrompt: string | null;
 
 	/** The composed lenses (materialized graphs). `[]` = draft; `[0]` = primary. */
@@ -256,10 +261,11 @@ export class Agent {
 	baseReferenceNodes: KCDPrimitive[] = [];
 
 	// ── Bound environment: the wire's EXTERNAL layers, injected post-hydration ( `bindEnv` ) ──
-	// The three inputs the compiled context needs that aren't the agent's own object graph: the
-	// model-bound root context, the live MCP tool defs ( for the manifest + suggested surface ), and the
-	// baseline PRELOAD memory. Set from OUTSIDE ( the renderer's Agent store, the main orchestrator ) the
-	// same way `baseHabitNodes` is — never persisted, never crosses the wire, flush-and-filled on change.
+	// The inputs the compiled context needs that aren't the agent's own object graph: the model-bound
+	// root context, the live MCP tool defs ( for the manifest + suggested surface ), the baseline PRELOAD
+	// memory + its tag vocabulary, and the session's attachments. Set from OUTSIDE ( the renderer's Agent
+	// store, the main orchestrator ) the same way `baseHabitNodes` is — never persisted, never crosses the
+	// wire, flush-and-filled on change.
 	// With these bound, the agent answers `compiledContext()`/`wireSystem()`/`estimateTokens()` ALONE.
 
 	/** The model-bound root-context text ( CLAUDE.md / Winston.html et al. ) — leads the compiled context.
@@ -271,13 +277,23 @@ export class Agent {
 	/** The baseline PRELOAD memory prose ( the system-fired top-N selection ). Rides only when the agent's
 	 *  own `system.memoryEnabled` gate is on. '' until bound / when the query came back dry. */
 	memory: string = '';
+	/** The memory store's WHOLE tag vocabulary — one list every agent shares ( no params, never varies by
+	 *  agent, changes only when we seed a new tag ). Bound like `memory`; `[]` when no memory store is
+	 *  wired at all, which is what lets `memoryVocabulary()` fall silent instead of rendering an empty
+	 *  header. Read by that one method — see it for why this rides the band instead of a tool. */
+	memoryTags: string[] = [];
+	/** The bound session's PREFILL attachments, already composed ( `Session.attachmentManifest()` ). A
+	 *  STRING like rootContext and memory, not the entry array: the array lives on the session, which owns
+	 *  it and composes it, and an agent reaching into `session/` would invert the layering — a session is a
+	 *  run of an agent, not the reverse. '' when nothing is attached. */
+	attachments: string = '';
 
 	private constructor(
 		id: string,
 		name: string,
 		icon: string | null,
 		color: string | null,
-		model: string,
+		model: string | null,
 		systemPrompt: string | null,
 		lenses: LensObject[],
 		baseTools: string[],
@@ -321,15 +337,23 @@ export class Agent {
 
 	// ── Static entry points ──────────────────────────────────────────────────
 
-	/** Compose an agent. A lensless draft is legal — running is what demands a lens. */
+	/** Compose an agent. A lensless draft is legal — running is what demands a lens. The unnamed-agent
+	 *  fallback takes the first AUTHORED lens's name, never `lenses[ 0 ]`: the base floor now rides on every
+	 *  agent including a draft ( see `domainLenses` ), and a draft named `_lens-base` would be the floor
+	 *  leaking out as identity. A draft with no name given is just `'agent'`, as it always was. */
 	static create( opts: AgentOptions = {} ): Agent {
 		const lenses = opts.lenses ?? [];
+		const domain = lenses.filter( ( l ) => !InstallManifest.isBaseLens( l.getPath() ) );
 		return new Agent(
 			opts.id ?? crypto.randomUUID(),
-			opts.name ?? lenses[ 0 ]?.getName() ?? 'agent',
+			opts.name ?? domain[ 0 ]?.getName() ?? 'agent',
 			opts.icon ?? null,
 			opts.color ?? null,
-			opts.model ?? DEFAULT_MODEL_KEY,
+			// `=== undefined`, never `??` — the two differ exactly where it matters. ABSENT means "give me the
+			// default" ( an authored agent built without a model ); explicit NULL means "this agent never
+			// dispatches" ( the vault case ). `??` collapses both to the default, which would hand a vault
+			// agent the Test Brain and quietly reintroduce the dishonest field this widening removed.
+			opts.model === undefined ? DEFAULT_MODEL_KEY : opts.model,
 			opts.systemPrompt ?? null,
 			lenses,
 			opts.baseTools ?? [],
@@ -358,7 +382,7 @@ export class Agent {
 			json.name,
 			json.icon,
 			json.color,
-			json.model ?? DEFAULT_MODEL_KEY,
+			json.model === undefined ? DEFAULT_MODEL_KEY : json.model,   // absent → default; null → stays null ( see create )
 			json.systemPrompt ?? null,
 			lenses,
 			json.baseTools ?? [],
@@ -445,10 +469,12 @@ export class Agent {
 	 * defs / model root context / baseline memory change ( then `triggerRef` ); the orchestrator calls it per
 	 * round on the canonical agent. Never persisted — this is live environment, not agent identity.
 	 */
-	bindEnv( env: { rootContext?: string; toolDefs?: ToolDef[]; memory?: string } ): void {
+	bindEnv( env: { rootContext?: string; toolDefs?: ToolDef[]; memory?: string; memoryTags?: string[]; attachments?: string } ): void {
 		if ( env.rootContext !== undefined ) this.rootContext = env.rootContext;
 		if ( env.toolDefs    !== undefined ) this.toolDefs    = env.toolDefs;
 		if ( env.memory      !== undefined ) this.memory      = env.memory;
+		if ( env.memoryTags  !== undefined ) this.memoryTags  = env.memoryTags;
+		if ( env.attachments !== undefined ) this.attachments = env.attachments;
 	}
 
 	/** What this agent actually carries = bolted-on ∪ inherited-from-lenses. The permissions
@@ -527,11 +553,59 @@ export class Agent {
 
 	// ── Lens surface ──────────────────────────────────────────────────────────
 
-	/** The primary lens, or null for a draft. */
-	get primaryLens(): LensObject | null { return this.lenses[ 0 ] ?? null; }
+	/**
+	 * The AUTHORED lenses — the composed stack minus the inherited base floor, in stack order.
+	 *
+	 * THE distinction this surface exists to draw ( 2026-07-30 ): `lenses` is what COMPILES, `domainLenses`
+	 * is what the agent WEARS. `_lens-base` is inherited, not composed — nobody chose it, every agent has
+	 * it, and it carries no identity — so every question about the agent's own composition ( is it a draft?
+	 * what is its primary? what gets persisted to `agent_lens`? ) has to be asked of this list, never of
+	 * `lenses`. Conflating the two is what kept the base floor OUT of a lensless draft's context: Starmind's
+	 * `Agents.withBase` refused to append base to an empty stack precisely because `isDraft()` read
+	 * `lenses.length`, so appending it would have deployed the draft. With draft-ness asked of the authored
+	 * list instead, base can ride on every agent — including a draft — the way inheritance always meant.
+	 */
+	get domainLenses(): LensObject[] { return this.lenses.filter( l => !InstallManifest.isBaseLens( l.getPath() ) ); }
 
-	/** A draft cannot run: no lens has been composed onto it yet. */
-	isDraft(): boolean { return this.lenses.length === 0; }
+	/**
+	 * THE base-floor policy — the one place either face decides how the inherited floor joins a lens stack.
+	 *
+	 * The rule, all of it:
+	 *
+	 * - **Appended LAST, never first.** `SlotResolver.compilePlan`'s same-rank tie breaks toward the
+	 *   FIRST-encountered candidate ( every lens collapses to source layer `'lens'`, with no distinct
+	 *   base/primary rank ), so a named lens must PRECEDE base for its own habit to win the class. An
+	 *   authored override beating the floor is the entire point of an override.
+	 * - **Once.** A stack already carrying a floor is returned untouched, so this is safe at every choke
+	 *   point that rebuilds a stack — including ones that start from an already-floored list.
+	 * - **Tolerant.** A null base ( missing or unreadable file ) yields the stack unchanged: a half-installed
+	 *   or hand-built vault still compiles, just without a floor.
+	 *
+	 * `base` is passed IN rather than loaded here because loading needs disk and this class is deliberately
+	 * Node-free — and because the two faces genuinely resolve it differently ( a `Vault` against its own
+	 * root pair, Starmind against the active project's vault path ). What must not differ is the rule, and
+	 * that is what lives here.
+	 *
+	 * CALLER CONTRACT — pass a FRESH instance, never a cached or shared one. A `LensObject` carries mutable
+	 * dredge state ( `setIncluded` flips per-agent ), so one shared base would leak one agent's toggles into
+	 * every other agent wearing the floor.
+	 *
+	 * This exists because the rule was previously spelled once per face, kept in step by a comment asking
+	 * them to agree — and they silently stopped agreeing: Starmind's copy grew an exception that skipped the
+	 * floor for a lensless draft, which the vault-side copy had no way to notice.
+	 */
+	static withFloor( lenses: LensObject[], base: LensObject | null ): LensObject[] {
+		if ( !base ) return lenses;
+		if ( lenses.some( l => InstallManifest.isBaseLens( l.getPath() ) ) ) return lenses;
+		return [ ...lenses, base ];
+	}
+
+	/** The primary lens — the first AUTHORED lens ( base is never primary ), or null for a draft. */
+	get primaryLens(): LensObject | null { return this.domainLenses[ 0 ] ?? null; }
+
+	/** A draft cannot run: no lens has been COMPOSED onto it yet. Base doesn't count — it is inherited,
+	 *  not chosen, so a base-only agent is still a draft ( it stands on the floor; it has no identity ). */
+	isDraft(): boolean { return this.domainLenses.length === 0; }
 
 	/** The primary lens's path — the agent's path identity — or null for a draft. */
 	getPath(): string | null { return this.primaryLens?.getPath() ?? null; }
@@ -653,7 +727,9 @@ export class Agent {
 	 * The recursive context query as one source-blind string: `getContextBlocks()` run through
 	 * `SlotResolver` ( habit-class contention resolved — a losing session-log-never never rides alongside
 	 * the session-log-aggressive it lost to ) and `ContextAssembler` ( merged by `data-kcd-merge-key`,
-	 * sorted Care-first / injected-last ). A draft ( no lens ) contributes nothing. ( The `systemPrompt`
+	 * sorted Care-first / injected-last ). A DRAFT still contributes its inherited base floor — base rides
+	 * on every agent, composed or not ( see `domainLenses` ); the empty-array guard below is the genuinely
+	 * lensless case ( an SDK-built agent, or a vault with no base file ), not draft-ness. ( The `systemPrompt`
 	 * lever rides the wire but is not yet prepended here — that lands with deploy-time assembly; base
 	 * references + tools join once their own resolver seams turn them into objects, the way base habits
 	 * now do. )
@@ -680,8 +756,9 @@ export class Agent {
 	 * The body is every loaded artifact's full text, habit-class-resolved ( `SlotResolver` ) then merged
 	 * + sorted ( `ContextAssembler` ), with NO per-artifact header: a loaded file's identity lives once
 	 * in the manifest, its content merges into the body at its point. The legacy `stub` ( Available-on-
-	 * request ) block is dropped — the References table already carries those rows. A draft ( no lens )
-	 * compiles to nothing.
+	 * request ) block is dropped — the References table already carries those rows. A draft compiles to its
+	 * inherited base floor alone ( base is on every agent — `domainLenses` ); only a genuinely lensless
+	 * agent compiles to nothing.
 	 */
 	compile(): string {
 		return this.compiledBlocks().map( b => b.text ).join( '\n\n' );
@@ -707,8 +784,9 @@ export class Agent {
 	 * `Session.wireSystemFor` ). A flat trailing array couldn't express "some extras lead, some trail";
 	 * this is the real positioning the Phase 1 doc comment deferred to Phase 2.
 	 *
-	 * `memory` ( memory-system plan, 2026-07-13 ) — the system-fired PRELOAD baseline ( `Agent.memoryBlock`,
-	 * built by the orchestrator from `database.baseline_memories` ). Unlike `before`/`after` it does NOT
+	 * `memory` ( memory-system plan, 2026-07-13 ) — the Memory band ( `Agent.memoryBlock` over
+	 * `memoryBand()`: the tag-vocabulary constant, then the system-fired PRELOAD baseline the orchestrator
+	 * bound from `database.baseline_memories` ). Unlike `before`/`after` it does NOT
 	 * bracket the join: it joins the BODY block list and sorts into the `memory` tier ( now BETWEEN the
 	 * Lenses band and Knowledge — `ContextAssembler.tierOf` ), because its position is a property of the
 	 * merged sort, not a fixed lead/trail slot. Its `## Memory` band heading is spliced by
@@ -761,7 +839,10 @@ export class Agent {
 	compiledContext(): TaggedBlock[] {
 		const manifest  = this.toolManifest();
 		const suggested = this.suggestedToolDefs();
-		const memory    = ( this.system[ 'memoryEnabled' ] !== false ) ? this.memory : '';
+		// The band, not the bare prose — the tag vocabulary heads it ( `memoryVocabulary` ). Both halves sit
+		// behind the SAME `memoryEnabled` gate: an agent with memory switched off carries no memories and no
+		// vocabulary either, since the vocabulary exists only to make `learn`/`recall` calls land.
+		const memory    = ( this.system[ 'memoryEnabled' ] !== false ) ? this.memoryBand() : '';
 		return this.compiledBlocks( {
 			before: Agent.joinSegments( [
 				// The agent's OWN authored instruction leads everything — it is the most specific statement of
@@ -775,7 +856,12 @@ export class Agent {
 			memory: memory ? [ Agent.memoryBlock( memory ) ] : [],
 			after: Agent.joinSegments( [
 				manifest  ? [ Agent.extraBlock( 'tool-manifest', manifest ) ] : [],
-				suggested ? [ Agent.extraBlock( 'suggested-tools', suggested ) ] : []
+				suggested ? [ Agent.extraBlock( 'suggested-tools', suggested ) ] : [],
+				// Attachments TRAIL the whole system half, deliberately. They are its most volatile part — a
+				// user attaches and detaches mid-conversation while root context and lens identity sit still —
+				// and prefix caching invalidates from the earliest edit forward, so the churning thing belongs
+				// last. Placed beside root context it would re-prefill the lens + tool weight on every attach.
+				this.attachments ? [ Agent.extraBlock( 'attachments', this.attachments ) ] : []
 			] )
 		} );
 	}
@@ -870,7 +956,12 @@ export class Agent {
 	 *  identity, routing, memory, headings — is Lenses ). One read of a field the block already carries,
 	 *  no second compilation. */
 	static bucketOf( b: TaggedBlock ): 'system' | 'lenses' | 'tools' {
-		if ( b.section === 'system-prompt' || b.section === 'root-context' ) return 'system';
+		// `attachments` is PARKED on system, knowingly. It is not lens identity and not tools, and a fourth
+		// bucket is probably right — the whole point of the gauge is seeing what context costs what, and
+		// folding files into "Root context" hides the exact number a user attaches a file to watch. That is
+		// a compiledBudget() signature change plus the inspector band, so it lands with the renderer slice
+		// rather than being half-done here.
+		if ( b.section === 'system-prompt' || b.section === 'root-context' || b.section === 'attachments' ) return 'system';
 		if ( b.section === 'tool-manifest' || b.section === 'suggested-tools' ) return 'tools';
 		return 'lenses';
 	}
@@ -878,7 +969,7 @@ export class Agent {
 	/**
 	 * The by-KIND care bands ( compilation pass, 2026-07-19 ) — Purpose and Philosophy each become ONE
 	 * block that MERGES every active lens's contribution as a labeled sub-section, instead of one band per
-	 * lens. The primary lens leads and is marked `( Primary )` ( disputes resolve in its favor ); `_lens_base`
+	 * lens. The primary lens leads and is marked `( Primary )` ( disputes resolve in its favor ); `_lens-base`
 	 * follows, labeled `Base lens`. This is the true "group by KIND, decouple from source" output — the
 	 * reader sees each identity kind ONCE, its sources folded underneath — where the earlier per-lens
 	 * `# {Name} - Lens` band was a half-step ( it repeated base's care into every lens, the duplicate chips ).
@@ -893,8 +984,8 @@ export class Agent {
 	 */
 	buildCareBands( careBlocks: TaggedBlock[] ): TaggedBlock[] {
 		const norm   = ( s: string ): string => s.replace( /\\/g, '/' );
-		const isBase = ( l: LensObject ): boolean => norm( l.getPath() ?? '' ).endsWith( '_lens_base.html' );
-		const reals  = this.lenses.filter( l => !isBase( l ) );
+		const isBase = ( l: LensObject ): boolean => InstallManifest.isBaseLens( l.getPath() );
+		const reals  = this.domainLenses;
 		const bases  = this.lenses.filter( isBase );
 		// Sub-section order: primary first, then any other real lens, then base last ( labeled "Base lens" ).
 		// A base-only agent ( the SDK `loadBase` construct ) shows base AS the lens, no primary annotation.
@@ -1014,6 +1105,37 @@ export class Agent {
 	}
 
 	/**
+	 * The Memory band's standing header — the tag vocabulary, as a CONSTANT rather than a tool.
+	 *
+	 * This replaces the retired `known_tags` tool ( Bryan, 2026-07-31 ). The list is ~20 short strings
+	 * that cannot change mid-turn, so a tool round-trip to fetch it was always pure overhead — and worse,
+	 * agents were LOOPING on it, spending turns rediscovering something cheap enough to simply carry. A
+	 * standing line in the cached system half costs a few tokens once; the tool cost a full schema in
+	 * every context ( it rode at mode `suggested` ) plus a round-trip whenever an agent reached for it.
+	 *
+	 * `lens:*` tags are filtered OUT deliberately: they are system-authoritative — `insertMemory`
+	 * find-or-creates `lens:{slug}` on every save — so an agent never passes one, and listing them would
+	 * be the bulk of the line for no gain. What remains is the open vocabulary an agent actually selects
+	 * from. Empty `memoryTags` ( no memory store wired ) yields '' and the header simply doesn't ride.
+	 */
+	memoryVocabulary(): string {
+		const open = this.memoryTags.filter( t => !t.startsWith( 'lens:' ) );
+		if ( !open.length ) return '';
+		return `Tags: ${ open.join( ', ' ) }\n`
+			+ 'These are the only tags that exist — an unlisted tag is dropped on save, and you cannot mint '
+			+ 'new ones. Your lens tag is applied automatically; never pass one.';
+	}
+
+	/** The whole Memory band text — the vocabulary constant, then the baseline prose. Either half may be
+	 *  empty ( no store wired, a dry query ), and both empty means no band rides at all — `compiledContext`
+	 *  gates on this being truthy, so the reserved-but-empty tier still emits nothing on the wire. THE one
+	 *  composer: the live wire, the renderer preview, and the turn's context breakdown all read it, so the
+	 *  band can't differ between what is sent, what is previewed, and what is counted. */
+	memoryBand(): string {
+		return [ this.memoryVocabulary(), this.memory ].filter( Boolean ).join( '\n\n' );
+	}
+
+	/**
 	 * The habit-class slot resolution across this agent's WHOLE composed set — the visualization twin of
 	 * `contribute()`, for the Slot UI to show every class's candidates and which one won. Reads the exact
 	 * same `getContextBlocks()` and resolves it through the same `SlotResolver`, so this view can never
@@ -1087,6 +1209,13 @@ export class Agent {
 	/** The separator between system-prompt layers — the one place the live turn and the Constellation
 	 *  commit-bake agree on how the layers join, so they can never drift apart. */
 	static readonly SYSTEM_SEP = '\n\n---\n\n';
+
+	/** The id every `Vault.buildAgent` agent carries — a lens substrate with no authored identity, built to
+	 *  compile and then discarded. Reserved and deliberately SHARED across every vault build: it makes "this
+	 *  is not an authored agent" legible on the object itself, rather than a fact known only to whoever wrote
+	 *  the call site. Never persisted — the database only ever holds authored agents, which is why
+	 *  `AgentRow.model` stays concrete while `Agent.model` is nullable. */
+	static readonly VAULT_AGENT_ID = 'vault-agent';
 
 	/**
 	 * Join system layers in order, dropping empties, with the canonical separator. The ONE formula shared

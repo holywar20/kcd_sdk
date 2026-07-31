@@ -3,7 +3,7 @@ import * as fs   from 'fs'
 
 const repoRoot  = path.resolve( __dirname, '../..' )
 const claudeDir = path.join( repoRoot, '_Claude' )
-const migDir    = path.join( claudeDir, 'work', 'lens_crafter', 'migration' )
+const migDir    = path.join( claudeDir, 'work', 'lens-crafter', 'migration' )
 
 const merged = JSON.parse( fs.readFileSync( path.join( claudeDir, 'audits', 'migration-status-merged.json' ), 'utf-8' ) )
 
@@ -57,7 +57,7 @@ function renderBatch( agent: string, batchRows: Row[] ): string {
 	out += `files (\`migration-batch-*.md\`) in this folder.\n\n`
 	out += '---\n\n'
 	out += '## Before you start\n\n'
-	out += '1. Read [subagent-migration-instructions.md](_Claude/work/lens_crafter/migration/subagent-migration-instructions.md)\n'
+	out += '1. Read [subagent-migration-instructions.md](_Claude/work/lens-crafter/migration/subagent-migration-instructions.md)\n'
 	out += '   in full — the rules, the model requirement, the self-check, the two validators. Everything in\n'
 	out += '   this batch file assumes you already did.\n'
 	out += '2. Read [kcd-document-protocol.md](_Claude/references/domain/kcd-document-protocol.md) — the\n'
@@ -77,7 +77,7 @@ function renderBatch( agent: string, batchRows: Row[] ): string {
 	}
 	out += '\n---\n\n'
 	out += `## When you finish\n\n`
-	out += `Log any drift you hit in [migration-drift-notes.md](_Claude/work/lens_crafter/migration/migration-drift-notes.md).\n`
+	out += `Log any drift you hit in [migration-drift-notes.md](_Claude/work/lens-crafter/migration/migration-drift-notes.md).\n`
 	out += `If you find yourself making the same judgment call on more than one file, flag it as a candidate\n`
 	out += `for a new Rule in \`subagent-migration-instructions.md\` §2 rather than deciding it silently — say\n`
 	out += `so in the room rather than picking a convention on your own, since Marie/Ebon/Winston/Valarie may\n`

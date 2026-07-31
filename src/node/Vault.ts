@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { LensObject, Glob, KcdExcise, VaultLayout } from '../core';
+import { LensObject, Glob, KcdExcise, VaultLayout, Agent, InstallManifest } from '../core';
 import type { ArtifactRef, ArtifactType } from '../core';
 import { scan } from '../scanner';
 import type { ScannedFile } from '../scanner';
@@ -55,9 +55,6 @@ export interface RefIssue {
  * Node-side by design: it touches disk. The renderer receives serialized
  * artifacts over the bridge and never needs a Vault.
  */
-/** Navigation stubs, not artifacts — excluded from `countArtifacts`, same as the library chart. */
-const NAV_INDEX_FILE = 'nav-index.html';
-
 export class Vault {
 
 	/** Absolute vault root — projectRoot/docRoot, resolved once. */
@@ -101,6 +98,22 @@ export class Vault {
 	/** Classify a path ( vault-relative or absolute ) into its ArtifactType. */
 	classify( anyPath: string ): ArtifactType {
 		return LensObject.classifyByPath( this.toAbs( anyPath ), this.projectRoot, this.docRoot );
+	}
+
+	/** Every document type that may legally be written at this path — `classify`'s write-time
+	 *  counterpart. Empty = untyped space, anything goes. */
+	acceptedTypes( anyPath: string ): readonly ArtifactType[] {
+		return VaultLayout.acceptedTypes( this.relToProject( anyPath ), this.docRoot );
+	}
+
+	/** May a document declaring `declared` be written at this path? The write guard's one question. */
+	accepts( anyPath: string, declared: ArtifactType ): boolean {
+		return VaultLayout.accepts( this.relToProject( anyPath ), declared, this.docRoot );
+	}
+
+	/** Project-root-relative, forward-slashed — the currency both VaultLayout entry points take. */
+	private relToProject( anyPath: string ): string {
+		return path.relative( this.projectRoot, this.toAbs( anyPath ) ).replace( /\\/g, '/' );
 	}
 
 	/** Resolve a raw link href to an absolute path, against this vault's project root. */
@@ -171,7 +184,7 @@ export class Vault {
 			for ( const entry of entries ) {
 				if ( entry.isDirectory() ) { walk( path.join( dir, entry.name ) ); continue; }
 				const name = entry.name.toLowerCase();
-				if ( !name.endsWith( '.html' ) || name === NAV_INDEX_FILE ) continue;
+				if ( !name.endsWith( '.html' ) || name === VaultLayout.NAV_INDEX_FILE ) continue;
 				total += 1;
 			}
 		};
@@ -204,6 +217,76 @@ export class Vault {
 			depth:       opts?.depth,
 			eager:       opts?.eager,
 		} );
+	}
+
+	/** A lens NAME to its vault-relative path, via the `lenses/{name}/{name}.html` anatomy. A value that
+	 *  already looks like a path ( carries a separator or an `.htm(l)` suffix ) is passed through as-is, so
+	 *  callers can name a lens either way — including the flat, non-directory lenses like the base floor. */
+	lensPath( nameOrPath: string ): string {
+		if ( nameOrPath.includes( '/' ) || /\.html?$/i.test( nameOrPath ) ) return nameOrPath;
+		return `lenses/${ nameOrPath }/${ nameOrPath }.html`;
+	}
+
+	// ── Agent construction ────────────────────────────────────────────────────
+
+	/**
+	 * Build a DUMB agent over the named lenses — the vault face's compile-ready container, and the reason
+	 * a vault can compile context at all without Starmind's database behind it.
+	 *
+	 * It is dumb in the precise sense: a substrate for lenses and a bucket of behavior, with no persisted
+	 * identity, no model, and no bound environment. From that point on it is an ordinary `Agent` and the
+	 * whole assembly engine — slot resolution, care bands, band headings, the manifest — applies to it
+	 * exactly as it does to an authored one. That is the point: one compiler, and the only difference
+	 * between the two faces is what each can source.
+	 *
+	 * Deliberately NOT given: `toolDefs` and `memory`. A vault cannot know a host's live tool schemas or
+	 * reach a memory store, and inventing either would be the dishonest-field problem in a new place. A
+	 * lens's authored tool MODES still ride, because those are identity and travel with the lens.
+	 *
+	 * `model` is null on purpose ( see `Agent.model` ): this agent compiles context for delivery as CLI
+	 * text or a tool result and never dispatches, so there is no model to name. The name is left to
+	 * `Agent.create`, which takes it from the first AUTHORED lens — never the floor.
+	 *
+	 * This lives on `Vault` and not on `Agent` because an agent cannot construct itself: `Agent` is
+	 * deliberately Node-free ( the renderer imports it ), while resolving a lens NAME to a dredged
+	 * `LensObject` needs disk, path math, and the ( projectRoot, docRoot ) pair this facade already owns.
+	 *
+	 * Starmind does NOT route through here. Its agents come from database rows carrying identity and
+	 * per-artifact override maps that a list of lens names cannot express; the two faces share the engine
+	 * and the floor policy, not the constructor.
+	 *
+	 * Throws on an empty list or a name that resolves to nothing — an unresolvable lens is a caller error,
+	 * not a degraded compile. A MISSING BASE LENS is different and is tolerated: a half-installed or
+	 * hand-built vault still compiles, just without a floor.
+	 */
+	buildAgent( lensNames: string[] ): Agent {
+		if ( !lensNames.length ) throw new Error( 'buildAgent requires at least one lens' );
+
+		const lenses = lensNames.map( name => {
+			const rel = this.lensPath( name );
+			// Existence checked in the VAULT-ROOT path space `loadLens` uses ( via `toAbs` ) — NOT `exists`,
+			// which resolves hrefs against the project root ( the `_Claude/`-prefixed link space ) and would
+			// miss a lens sitting at its own vault-relative path.
+			if ( !fs.existsSync( this.toAbs( rel ) ) )
+				throw new Error( `no lens found for "${ name }" ( looked for ${ rel } )` );
+			return this.loadLens( rel );
+		} );
+
+		// The inheritance floor — ordering, idempotence, and missing-file tolerance all live in
+		// `Agent.withFloor`, the ONE place either face spells the rule ( see it for why ).
+		return Agent.create( {
+			id:     Agent.VAULT_AGENT_ID,
+			model:  null,
+			lenses: Agent.withFloor( lenses, this.loadBaseLens() ),
+		} );
+	}
+
+	/** The base lens, freshly dredged, or null when this vault has none ( half-installed / hand-built —
+	 *  tolerated, not fatal ). FRESH every call, never cached: a `LensObject` carries mutable dredge state,
+	 *  so a shared floor would leak one agent's toggles into every other agent wearing it. */
+	loadBaseLens(): LensObject | null {
+		if ( !fs.existsSync( this.toAbs( InstallManifest.BASE_LENS ) ) ) return null;
+		return this.loadLens( InstallManifest.BASE_LENS );
 	}
 
 	// ── Authoring / heal ──────────────────────────────────────────────────────
@@ -317,18 +400,28 @@ export class Vault {
 		return plan;
 	}
 
-	/** Artifacts that reference `targetAbs` by IDENTITY — a `base` or `lens` frontmatter slug naming it.
-	 *  These block a delete ( unlike href links, which heal ). Returns their vault-relative paths. */
+	/** Artifacts that reference `targetAbs` by IDENTITY — a `base` or `lens` frontmatter field naming it.
+	 *  These block a delete ( unlike href links, which heal ). Returns their vault-relative paths.
+	 *
+	 *  `lens` is a LIST ( the lenses a session wore, in invocation order ), so naming the target ANYWHERE
+	 *  in that list counts — a plan authored under three lenses depends on all three. `base` stays a
+	 *  scalar slug. Both shapes are read through `names()` so a hand-edited document that still carries
+	 *  the retired scalar form is matched rather than silently skipped. */
 	identityDependents( targetAbs: string ): string[] {
 		const files  = this.scan();
 		const target = files.find( f => f.path === targetAbs );
 		const name   = target && typeof target.frontmatter[ 'name' ] === 'string' ? target.frontmatter[ 'name' ] as string : '';
 		if ( !name ) return [];
 
+		/** A frontmatter field's values as a flat list, whether it holds a scalar or a list. */
+		const names = ( value: unknown ): string[] =>
+			Array.isArray( value ) ? value.map( String ) : typeof value === 'string' ? [ value ] : [];
+
 		const out: string[] = [];
 		for ( const f of files ) {
 			if ( f.path === targetAbs ) continue;
-			if ( f.frontmatter[ 'base' ] === name || f.frontmatter[ 'lens' ] === name ) out.push( f.relativePath );
+			const identities = [ ...names( f.frontmatter[ 'base' ] ), ...names( f.frontmatter[ 'lens' ] ) ];
+			if ( identities.includes( name ) ) out.push( f.relativePath );
 		}
 		return out;
 	}

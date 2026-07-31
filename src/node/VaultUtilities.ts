@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { KCDPrimitive, SlotResolver } from '../primitives';
+import { KCDPrimitive } from '../primitives';
 import type { SlotMode, LinkEntry, AddressEntry } from '../primitives';
 import type { Vault } from './Vault';
 import type { ArtifactRef } from '../core';
@@ -165,6 +165,37 @@ export interface ResetReport {
 	identical:     boolean;
 	/** True only when `confirm` was set AND a write actually happened. */
 	applied:       boolean;
+	/**
+	 * How far apart the two copies are, as line counts each side holds that the other does not —
+	 * `null` when there is nothing to compare ( no canonical, no deployed target, or already
+	 * identical ).
+	 *
+	 * This exists because "differs" is the NORMAL state here, not a defect. Canonical is the
+	 * SHIPPING copy: it was deliberately genericized ( project-specific links stripped, 34
+	 * fresh-install warnings → 0 ), so a mature vault's bundled documents differ from it by
+	 * construction — 21 of 51 in this project's own vault as of 2026-07-29. A bare "differs" cannot
+	 * tell one stale link from a document that lost a paragraph; the counts can, and that is the
+	 * difference between a safe restore and a silent content loss.
+	 *
+	 * A multiset difference on whole lines, not a diff algorithm: no hunks, no alignment, no new
+	 * module. Enough to size the decision, and honest about being nothing more.
+	 *
+	 * WHICH IS WHY THE TOTALS RIDE ALONG. A whole-line measure cannot tell content from FORMATTING:
+	 * this vault holds minified documents ( `author-script.html`, 21 long lines ) whose bundle twin is
+	 * line-wrapped ( 140 lines ), same bytes and same sections, and the naive counts call that
+	 * `3 / 134` — indistinguishable from a copy genuinely missing 134 lines, and the more dangerous
+	 * reading of the two. The totals are the discriminator: comparable line counts mean the drift is
+	 * about content, wildly different ones mean it is mostly reflow. Reported rather than judged here
+	 * — this is a measure, and the caller decides what to say about it.
+	 */
+	drift:         {
+		onlyInDeployed:  number;
+		onlyInCanonical: number;
+		/** Total lines on each side — see the note above; this is how a caller separates a real content
+		 *  difference from two differently-formatted copies of the same document. */
+		deployedLines:   number;
+		canonicalLines:  number;
+	} | null;
 }
 
 /**
@@ -288,35 +319,50 @@ export class VaultUtilities {
 	/**
 	 * Compile one or more lenses to a context string — Daedalus's LENS-scoped compiler.
 	 *
-	 * Deliberately NOT the agent compiler: it reuses only the stable low-level primitives a lens
-	 * already self-compiles through ( `LensObject.getContextBlocks` → `SlotResolver.compile`, exactly
-	 * what `LensObject.serializeForContext` does ), and touches none of the agent's environment-folding
-	 * ( root context, live MCP tool defs, DB memory ) — those are RUNTIME layers a standalone vault has
-	 * no source for, and they belong to Starmind. For a single lens the output equals that lens's own
-	 * `serializeForContext()`; multiple lenses fold into one context, cross-lens habit contention resolved
-	 * together. The "basic compilation framework" — advanced composition ( full agents ) requires Starmind.
+	 * Builds a DUMB agent over the named lenses ( `Vault.buildAgent` ) and compiles that — so the vault face
+	 * and Starmind now resolve lenses, apply the inheritance floor, and rank habit-class contention through
+	 * exactly the same code. What a vault still cannot supply is the agent's ENVIRONMENT ( root context, live
+	 * MCP tool defs, DB memory ): those are runtime layers with no vault-side source, so a vault agent simply
+	 * never binds them. That is the whole difference between the faces — not a different compiler.
+	 *
+	 * There is no longer a second compiler. The text is the agent's own `compile()`, so this face emits the
+	 * by-KIND care bands, the band headings, and the bottom-of-context manifest exactly as Starmind does —
+	 * and drops the legacy `stub` blocks, whose rows the manifest's routing tables already carry. What used
+	 * to sit here was a flat `LensObject.getContextBlocks` → `SlotResolver.compile` pipeline that shipped
+	 * none of that; the divergence was invisible because each face's output looked internally consistent.
+	 *
+	 * THE BASE LENS ALWAYS RIDES, and there is no flag to suppress it ( ruling: Bryan, 2026-07-29 ).
+	 * Base is an INHERITANCE mechanism, not an ingredient — a compile that drops it is not a leaner
+	 * compile, it is a wrong one. `InstallManifest` already declared the contract this honours ( base is
+	 * `required: true` floor whose purpose line reads "auto-loaded into every session; a vault without it
+	 * has no floor to stand on" ); until 2026-07-29 this compiler simply never implemented it, so the
+	 * Daedalus face silently shipped every session a context missing fourteen habits — `write-approval`
+	 * among them. The omission was camouflaged: a lens that re-declares part of the floor makes the missing
+	 * rest look present. The rule now lives once, in `Agent.withFloor`, which both faces call — the previous
+	 * arrangement spelled it per face and relied on a comment to keep them honest, and they diverged anyway.
 	 *
 	 * Each name is a bare lens name ( mapped to the `lenses/{name}/{name}.html` convention ) OR a raw
 	 * vault-relative path. `[0]` is primary. Throws on an empty list or a name that resolves to nothing.
+	 * The returned `lenses` reports what actually COMPILED, base included — reporting only what was asked
+	 * for is how the floor stayed invisible in the first place. Because it is read off the built agent, a
+	 * lens named by raw path reports its artifact NAME, not the path that was passed in.
 	 */
 	static compile( vault: Vault, lensNames: string[] ): CompileResult {
-		if ( lensNames.length === 0 )
-			throw new Error( 'compile requires at least one lens' );
+		// Name resolution and the inheritance floor both belong to `Vault.buildAgent` now — it throws on an
+		// empty list or an unresolvable name, and applies the floor through the shared `Agent.withFloor`. The
+		// reported `lenses` is read back off what the agent ACTUALLY carries rather than echoing what was
+		// asked for: reporting only the request is how the missing floor stayed invisible in the first place.
+		const agent    = vault.buildAgent( lensNames );
+		const compiled = agent.lenses.map( l => l.getName() );
 
-		const lenses = lensNames.map( name => {
-			const rel = this.lensPath( name );
-			// Existence checked in the VAULT-ROOT path space `loadLens` uses ( via `toAbs` ) — NOT
-			// `vault.exists`, which resolves hrefs against the project root ( the `_Claude/`-prefixed link
-			// space ) and would miss a lens sitting at its own vault-relative path.
-			if ( !fs.existsSync( vault.toAbs( rel ) ) )
-				throw new Error( `no lens found for "${ name }" ( looked for ${ rel } )` );
-			return vault.loadLens( rel );
-		} );
+		// ONE projection to text, and it is the agent's own — the last step of the compiler collapse. The
+		// flat `SlotResolver.compile` pipeline that used to live here is gone, along with the divergence it
+		// carried: the vault face now emits the same care bands, band headings, and bottom-of-context
+		// manifest Starmind does, and drops the legacy `stub` blocks the agent has always treated as
+		// duplicates of its own routing tables.
+		const text = agent.compile();
 
-		const blocks = lenses.flatMap( l => l.getContextBlocks() );
-		const text   = SlotResolver.compile( blocks );
-
-		return { lenses: lensNames, text, tokens: KCDPrimitive._estimateTokens( text ) };
+		return { lenses: compiled, text, tokens: KCDPrimitive._estimateTokens( text ) };
 	}
 
 	/**
@@ -328,7 +374,7 @@ export class VaultUtilities {
 	 * what you inspect; a multi-lens compile is `compile()` ).
 	 */
 	static lensView( vault: Vault, name: string ): LensView {
-		const rel = this.lensPath( name );
+		const rel = vault.lensPath( name );
 		if ( !fs.existsSync( vault.toAbs( rel ) ) )
 			throw new Error( `no lens found for "${ name }" ( looked for ${ rel } )` );
 
@@ -397,12 +443,6 @@ export class VaultUtilities {
 		return '';
 	}
 
-	/** A bare name → the lens-file convention; a value already carrying a slash or an `.html` tail is a
-	 *  raw vault-relative path, used as-is. */
-	private static lensPath( nameOrPath: string ): string {
-		if ( nameOrPath.includes( '/' ) || /\.html?$/i.test( nameOrPath ) ) return nameOrPath;
-		return `lenses/${ nameOrPath }/${ nameOrPath }.html`;
-	}
 
 	/**
 	 * The single read-query over a vault — glob, type, and text, AND-combined over one scan.
@@ -474,6 +514,27 @@ export class VaultUtilities {
 	}
 
 	/**
+	 * The project-root-relative FILES an install writes outside the vault — the host entry points, taken
+	 * from the §10 seed declarations rather than named here, plus the MCP registration file. One place
+	 * answers "what did we put in this repository", so a consumer never re-derives the list and cannot
+	 * drift from it.
+	 *
+	 * Files only, and deliberately: the other two things an install creates ( the vault itself and
+	 * `.claude/skills/` ) are DIRECTORIES, which every consumer so far excludes structurally — `Survey`
+	 * skips the doc root by name and every dot-directory by rule. Adding them here would imply a
+	 * completeness this does not have.
+	 *
+	 * Tolerant of a vault with no seed carrier yet: nothing has been seeded, so there is nothing to name.
+	 * An absent `root-context.html` is a half-built vault, not a failure ( absence is not failure ).
+	 */
+	static installedPaths( vault: Vault ): string[] {
+		const out = [ '.mcp.json' ];
+		try { out.push( ...this.parseSeeds( vault ).map( s => s.target ) ); }
+		catch { /* no seed carrier — nothing was seeded, so nothing is excluded */ }
+		return out;
+	}
+
+	/**
 	 * The same parse, against raw HTML rather than a deployed vault.
 	 *
 	 * The two currencies are genuinely different, not a convenience wrapper: at INSTALL time there is
@@ -529,12 +590,22 @@ export class VaultUtilities {
 			return { host: seed.host, target: seed.target, mode: seed.mode, targetExisted: existed, hadManagedBlock: false, changed, applied: !!opts?.confirm && changed };
 		}
 
-		const current  = existed ? fs.readFileSync( targetAbs, 'utf-8' ) : '';
+		// A BOM belongs at byte 0 or nowhere. Node's utf-8 decode does NOT strip one, so prepending our
+		// block above the existing content used to STRAND it mid-file, immediately after
+		// `<!-- kcd:end -->`. Split it off, then re-emit it at the front: the project's encoding choice is
+		// preserved exactly, it just stops migrating. PowerShell 5.1 and older Notepad both write BOMs by
+		// default, so this is the ordinary Windows case rather than an exotic one — found 2026-07-29.
+		//
+		// `changed` compares against `raw`, not `current`, or a file differing ONLY by a moved BOM would
+		// report no change and never get rewritten.
+		const raw      = existed ? fs.readFileSync( targetAbs, 'utf-8' ) : '';
+		const bom      = raw.startsWith( '\uFEFF' ) ? '\uFEFF' : '';
+		const current  = raw.slice( bom.length );
 		const blockRe  = /<!--\s*kcd:begin\s*-->[\s\S]*?<!--\s*kcd:end\s*-->/;
 		const hadBlock = blockRe.test( current );
 		const block    = `<!-- kcd:begin -->\n${ seed.payload }\n<!-- kcd:end -->`;
-		const next     = hadBlock ? current.replace( blockRe, block ) : block + ( current ? '\n\n' + current : '\n' );
-		const changed  = next !== current;
+		const next     = bom + ( hadBlock ? current.replace( blockRe, block ) : block + ( current ? '\n\n' + current : '\n' ) );
+		const changed  = next !== raw;
 
 		if ( changed && opts?.confirm ) {
 			fs.mkdirSync( path.dirname( targetAbs ), { recursive: true } );
@@ -710,6 +781,14 @@ export class VaultUtilities {
 	 * target with no covering row ( content the manifest never declared ) simply has no canonical
 	 * counterpart; that is a normal, reportable outcome, not an error.
 	 *
+	 * CANONICAL IS THE SHIPPING COPY, NOT A PRISTINE ANCESTOR. The bundle was deliberately
+	 * genericized so a fresh install validates clean, which means a grown project's copy of the same
+	 * document is routinely LONGER and richer than canonical — `differs` is the expected steady state
+	 * for most bundled documents, not a signal that something broke. Restoring one therefore
+	 * REPLACES local prose rather than repairing corruption. `drift` exists so a caller can size that
+	 * before deciding; a caller that reports "differs" without it is handing the user a decision they
+	 * cannot make.
+	 *
 	 * CONFIRM-FIRST, per-artifact: called with no `opts` ( or `confirm: false` ), this only
 	 * reports — `applied` is always `false` and nothing on disk changes. Pass `confirm: true` to
 	 * actually overwrite, and only once the caller has seen the report. A target already
@@ -722,7 +801,7 @@ export class VaultUtilities {
 
 		const entry = InstallManifest.entryFor( rel );
 		if ( !entry )
-			return { path: rel, canonicalPath: '', hasCanonical: false, targetExisted: fs.existsSync( targetAbs ), identical: false, applied: false };
+			return { path: rel, canonicalPath: '', hasCanonical: false, targetExisted: fs.existsSync( targetAbs ), identical: false, applied: false, drift: null };
 
 		// `entry.vaultHome` may be a directory row ( e.g. `habits` ) covering `rel` as a descendant —
 		// the tail below it carries over onto the bundle side unchanged.
@@ -733,15 +812,59 @@ export class VaultUtilities {
 		const targetExisted = fs.existsSync( targetAbs );
 
 		if ( !hasCanonical )
-			return { path: rel, canonicalPath, hasCanonical, targetExisted, identical: false, applied: false };
+			return { path: rel, canonicalPath, hasCanonical, targetExisted, identical: false, applied: false, drift: null };
 
 		const canonicalContent = fs.readFileSync( canonicalPath, 'utf-8' );
-		const identical = targetExisted && fs.readFileSync( targetAbs, 'utf-8' ) === canonicalContent;
+		const deployedContent  = targetExisted ? fs.readFileSync( targetAbs, 'utf-8' ) : null;
+		const identical        = deployedContent === canonicalContent;
+
+		// Only measured when there are two real, differing files to measure. Nothing to compare and
+		// nothing to decide are the same case, and both report `null` rather than a misleading zero.
+		const drift = deployedContent === null || identical
+			? null
+			: VaultUtilities.lineDrift( deployedContent, canonicalContent );
 
 		const apply = !!opts?.confirm && !identical;
 		if ( apply ) vault.write( rel, canonicalContent );
 
-		return { path: rel, canonicalPath, hasCanonical, targetExisted, identical, applied: apply };
+		return { path: rel, canonicalPath, hasCanonical, targetExisted, identical, applied: apply, drift };
+	}
+
+	/**
+	 * Lines one side holds that the other does not, counted as a multiset — a line appearing twice on
+	 * the left and once on the right contributes one. Deliberately NOT a diff: no alignment, no
+	 * hunks, no move detection, so a block that shifted position still reads as unchanged content.
+	 *
+	 * Line-ending and trailing-whitespace insensitive, because a CRLF/LF mismatch is not a content
+	 * difference and this project has documents of both conventions ( `root.html` is CRLF,
+	 * `CLAUDE.md` is LF ) — counting that as a full rewrite would make every number useless.
+	 *
+	 * It CANNOT see through reflow, though: a minified document and a wrapped one share no whole
+	 * lines at all, so the counts read as a total rewrite. That is why the totals are returned
+	 * alongside — the caller needs them to tell the two situations apart.
+	 */
+	private static lineDrift( left: string, right: string ): NonNullable<ResetReport[ 'drift' ]> {
+		const bag = ( s: string ): Map<string, number> => {
+			const m = new Map<string, number>();
+			for ( const line of s.split( /\r?\n/ ) ) {
+				const k = line.trimEnd();
+				m.set( k, ( m.get( k ) ?? 0 ) + 1 );
+			}
+			return m;
+		};
+
+		const l = bag( left ), r = bag( right );
+		let onlyInDeployed = 0, onlyInCanonical = 0;
+
+		for ( const [ k, n ] of l ) onlyInDeployed  += Math.max( 0, n - ( r.get( k ) ?? 0 ) );
+		for ( const [ k, n ] of r ) onlyInCanonical += Math.max( 0, n - ( l.get( k ) ?? 0 ) );
+
+		// Counted off the same split, so a total can never disagree with the drift derived from it.
+		let deployedLines = 0, canonicalLines = 0;
+		for ( const n of l.values() ) deployedLines  += n;
+		for ( const n of r.values() ) canonicalLines += n;
+
+		return { onlyInDeployed, onlyInCanonical, deployedLines, canonicalLines };
 	}
 
 	/**
@@ -827,35 +950,46 @@ export class VaultUtilities {
 	}
 
 	/**
-	 * Fix every document's stylesheet `<link>` to point at `kcd.css`'s CURRENT location, recomputed
-	 * fresh from each file's own depth. Deliberately unconditional — every document in the vault
-	 * shares the one stylesheet, so this recomputes every link rather than trying to detect which
-	 * ones point at a stale path; a link already correct is simply reported `applied: false`
-	 * ( nothing to do ), not skipped.
+	 * Normalize every document's stylesheet `<link>` onto `cssHref` — the ONE configured absolute
+	 * `file:///` URL every document in the vault shares. Deliberately unconditional: a link already
+	 * correct is reported `applied: false` ( nothing to do ), not skipped.
+	 *
+	 * This used to recompute a RELATIVE href from each file's own depth, mirroring the same math the
+	 * emitter ran — and existed largely to keep those two copies of the math agreeing. The href is now
+	 * one value handed in by whoever knows the install ( daedalus `Config`, tiers 1–4 ), so there is no
+	 * per-file computation left to get wrong and no second copy to drift.
+	 *
+	 * NOT automatic and not required. Documents written through `kcd_save` are born with the configured
+	 * href; the older relative links still resolve on their own. This is the opt-in one-shot for making
+	 * an existing corpus uniform, invoked only by `daedalus fix-css confirm`.
+	 *
+	 * KNOWN GAP ( unchanged, deliberate ): matches one exact `<link rel="stylesheet" href="…">` form and
+	 * passes over a document with no link, or a link whose attribute order differs, WITHOUT reporting
+	 * it. The totals are "of the links we recognized", not "of every document".
 	 */
-	static fixStylesheetLinks( vault: Vault, cssHome: string, opts?: { confirm?: boolean } ): StylesheetFixReport[] {
+	static fixStylesheetLinks( vault: Vault, cssHref: string, opts?: { confirm?: boolean } ): StylesheetFixReport[] {
 		const reports: StylesheetFixReport[] = [];
 		const linkRe = /<link\s+rel="stylesheet"\s+href="([^"]+)"\s*\/?>/;
 
 		for ( const f of vault.scan() ) {
 			const rel = f.relativePath.replace( /\\/g, '/' );
-			if ( rel === cssHome ) continue; // the stylesheet itself is not HTML
 
 			const raw = vault.read( rel );
 			const m   = linkRe.exec( raw );
 			if ( !m ) continue;
 
-			const depth   = rel.split( '/' ).length - 1;
-			const newHref = ( depth === 0 ? '' : '../'.repeat( depth ) ) + cssHome;
 			const oldHref = m[ 1 ];
-			if ( oldHref === newHref ) { reports.push( { path: rel, oldHref, newHref, applied: false } ); continue; }
+			if ( oldHref === cssHref ) {
+				reports.push( { path: rel, oldHref, newHref: cssHref, applied: false } );
+				continue;
+			}
 
 			if ( opts?.confirm ) {
 				const before = raw.slice( 0, m.index );
 				const after  = raw.slice( m.index + m[ 0 ].length );
-				vault.write( rel, before + m[ 0 ].replace( oldHref, newHref ) + after );
+				vault.write( rel, before + m[ 0 ].replace( oldHref, cssHref ) + after );
 			}
-			reports.push( { path: rel, oldHref, newHref, applied: !!opts?.confirm } );
+			reports.push( { path: rel, oldHref, newHref: cssHref, applied: !!opts?.confirm } );
 		}
 		return reports;
 	}
