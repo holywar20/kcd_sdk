@@ -17,12 +17,13 @@ export interface LensLoadOptions {
 	projectRoot: string;
 	depth?: number;
 	/**
-	 * Eager dredge: follow ALL internal Know links, not only the `always` ones.
-	 * This is the DISPLAY axis, orthogonal to `depth` (the recursion axis). The
-	 * extra (non-`always`) nodes enter the graph marked `setIncluded(false)`, so
-	 * they are inspectable but do NOT contribute to the assembled context —
-	 * `always` stays the auto-load gate, this only widens what the graph SHOWS.
-	 * Default false preserves context-assembly behavior (only `always` is loaded).
+	 * Dredge the children at all, or not. Named for a display axis, but wired as the gate on the WHOLE
+	 * dredge: `false` skips every child, including the `suggested` ones whose bodies ride the compiled
+	 * context. A non-eager lens is its own prose plus routing rows — no habit bodies, no habit-class
+	 * contention to resolve, no child artifact types to read.
+	 *
+	 * Anything that COMPILES must pass `true`, or the two faces compile different objects from one lens.
+	 * The false default is for callers wanting a lens's own prose without touching disk for its children.
 	 */
 	eager?: boolean;
 	/** The injected disk reader. Main supplies fsReader; render never calls load(), so never sets it. */
@@ -159,6 +160,8 @@ export class LensObject extends KCDPrimitive {
 			// actually rides the wire. Plans are the sole exception that outlives mode entirely ( see the
 			// carve-out a few lines down ).
 			if ( entry.mode === 'off' ) continue;
+			// The whole-graph gate, not a refinement of the mode rule above: non-eager stops here, so none
+			// of what that comment describes happens. See `eager` on the options type.
 			if ( !this.eager ) continue;
 
 			const childAbs = LensObject.resolveHref( entry.href, this.projectRoot! );
@@ -166,7 +169,7 @@ export class LensObject extends KCDPrimitive {
 			// Plans are LINK-ONLY in assembled context ( Bryan, 2026-07-12 ): a plan is an informational,
 			// volatile working doc — not standing identity or reference prose — so its body must never ride
 			// the wire automatically. No matter what mode a slot marks it ( short of `off`, already skipped
-			// above, and `on`, which never fetches anyway ), a plan is NEVER dredged into `nodes`. Its
+			// above ), a plan is NEVER dredged into `nodes`. Its
 			// reference SURVIVES as a routing row instead: a plan slot on the lens itself renders through
 			// `stubBlock`; a plan reached via some reference's own slot rides as a row inside that reference's
 			// routing table. This is the one deliberate type carve-out that outlives the general slot-mode

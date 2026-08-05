@@ -55,7 +55,14 @@ export interface ToolDefinition {
 	 *  the rich half of the two-tier model. `description` is the one-liner on the wire; `doc` is the
 	 *  full read a surface fetches on demand. Emitted in `tools/list` when present. */
 	doc?:        string;
-	handler:     ( args: Record<string, unknown> ) => Promise<ToolResult>;
+	/** `meta` is the call's out-of-band envelope — JSON-RPC's `_meta`, which rides BESIDE `arguments`
+	 *  and is written by the CLIENT, never by the model ( see CallMeta ). Optional, so a handler with
+	 *  no interest in it stays a one-parameter function.
+	 *
+	 *  A handler FORWARDS it and never reads it: only a guard interprets an envelope. That asymmetry is
+	 *  the containment — a tool holds nothing it could strip, rewrite or synthesize, so passing it
+	 *  along is the only thing it can do with it. */
+	handler:     ( args: Record<string, unknown>, meta?: Record<string, unknown> ) => Promise<ToolResult>;
 }
 
 export interface ServerInfo {
@@ -208,7 +215,10 @@ export class McpServer {
 		}
 
 		const args = ( params?.[ 'arguments' ] ?? {} ) as Record<string, unknown>;
-		return this.invoke( name, args );
+		// `_meta` sits BESIDE `arguments` on params — outside the tool's inputSchema, and therefore
+		// outside anything the model can author. Carried opaquely from here to the guards; see CallMeta.
+		const meta = ( params?.[ '_meta' ] ?? {} ) as Record<string, unknown>;
+		return this.invoke( name, args, meta );
 	}
 
 	/**
@@ -217,12 +227,17 @@ export class McpServer {
 	 * isError result, never propagating. An unknown tool is an isError result too — unlike a wire
 	 * tools/call ( which raises a protocol error ), there is no protocol layer here, so a caller can
 	 * treat every outcome uniformly as a ToolResult.
+	 *
+	 * `meta` MUST be threaded explicitly: a composing tool has to pass its own envelope through, or the
+	 * inner call runs with LESS authority than the outer one. That direction is deliberate. A batch that
+	 * forgets loses an exception; it can never INHERIT a stale one, because there is no ambient per-call
+	 * state here to inherit from — which is exactly what an ambient stash would have made possible.
 	 */
-	async invoke( name: string, args: Record<string, unknown> ): Promise<ToolResult> {
+	async invoke( name: string, args: Record<string, unknown>, meta: Record<string, unknown> = {} ): Promise<ToolResult> {
 		const tool = this.tools.get( name );
 		if ( !tool ) return { content: [ { type: 'text', text: `Unknown tool: ${ name }` } ], isError: true };
 		try {
-			return await tool.handler( args );
+			return await tool.handler( args, meta );
 		} catch ( e ) {
 			return { content: [ { type: 'text', text: errorText( e ) } ], isError: true };
 		}

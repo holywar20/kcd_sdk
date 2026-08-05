@@ -77,9 +77,35 @@ export class Vault {
 	 * so callers passing absolute paths keep working regardless of process cwd.
 	 */
 	toAbs( vaultRelative: string ): string {
-		return path.isAbsolute( vaultRelative )
-			? path.normalize( vaultRelative )
-			: path.resolve( this.root, vaultRelative );
+		if ( path.isAbsolute( vaultRelative ) ) return path.normalize( vaultRelative );
+		return path.resolve( this.root, this._stripDocRoot( vaultRelative ) );
+	}
+
+	/**
+	 * Tolerate a path that already carries the doc-root segment where a vault-relative one is expected —
+	 * `_Claude/plans/x.html` and `plans/x.html` name the same artifact.
+	 *
+	 * Not leniency for its own sake. The vault speaks TWO path currencies by design: an href inside a
+	 * document is vault-ROOT-relative, because a browser opening that file from the project root has to be
+	 * able to follow it, while a tool parameter is vault-relative, because it resolves against the root
+	 * itself. An agent that copies a link out of a document into a tool call is doing the obvious thing.
+	 *
+	 * Before this it got a DOUBLED path ( `…/_Claude/_Claude/lenses/…` ) and a raw ENOENT — and the path
+	 * jail waved it through on the way, because a doubled path is still inside the vault. The one guard
+	 * positioned to catch it could not see it.
+	 *
+	 * Normalizing HERE fixes every tool at once: get, save, move, delete, links and health all reach disk
+	 * through this method. The alternative was the same strip repeated at six call sites, or teaching every
+	 * agent a distinction the system can simply stop making.
+	 *
+	 * What this gives up: a genuine `_Claude/_Claude/…` becomes unreachable. That directory does not exist
+	 * and should not — a doc root nested inside itself is a mistake, not a layout — so the trade is a real
+	 * ambiguity resolved in favour of the case that actually happens.
+	 */
+	private _stripDocRoot( rel: string ): string {
+		const fwd  = rel.replace( /\\/g, '/' ).replace( /^\.?\//, '' );
+		const lead = this.docRoot.replace( /\\/g, '/' ).replace( /\/+$/, '' ) + '/';
+		return fwd.startsWith( lead ) ? fwd.slice( lead.length ) : fwd;
 	}
 
 	/** Absolute ( or vault-relative ) path → vault-relative path, for return payloads. */
@@ -269,7 +295,9 @@ export class Vault {
 			// miss a lens sitting at its own vault-relative path.
 			if ( !fs.existsSync( this.toAbs( rel ) ) )
 				throw new Error( `no lens found for "${ name }" ( looked for ${ rel } )` );
-			return this.loadLens( rel );
+			// EAGER, matching every Starmind load path: sharing the engine is not enough, the faces have to
+			// share the LOADER or they compile different objects from one lens ( see `eager` ).
+			return this.loadLens( rel, { eager: true } );
 		} );
 
 		// The inheritance floor — ordering, idempotence, and missing-file tolerance all live in
@@ -286,7 +314,7 @@ export class Vault {
 	 *  so a shared floor would leak one agent's toggles into every other agent wearing it. */
 	loadBaseLens(): LensObject | null {
 		if ( !fs.existsSync( this.toAbs( InstallManifest.BASE_LENS ) ) ) return null;
-		return this.loadLens( InstallManifest.BASE_LENS );
+		return this.loadLens( InstallManifest.BASE_LENS, { eager: true } );
 	}
 
 	// ── Authoring / heal ──────────────────────────────────────────────────────

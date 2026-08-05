@@ -9,7 +9,8 @@
     "build:watch": "tsc --watch",
     "test": "vitest run",
     "test:watch": "vitest",
-    "scan": "tsx scripts/scan.ts"
+    "scan": "tsx scripts/scan.ts",
+    "shape-report": "tsx scripts/shape-report.ts"
   },
   "dependencies": {
     "js-yaml": "^4.1.0"

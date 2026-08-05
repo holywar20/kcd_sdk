@@ -79,8 +79,16 @@ import type { TaggedBlock } from '../types';
  * headings ( `MANIFEST_TITLE`, via `title()` ) all derive from this list, so the three can never disagree
  * again — they DID before ( references+habits sank to the manifest tier while domains+contracts stayed in
  * core ). `domains` rides for now, its idiom fate deferred ( Bryan: "feels like another form of a
- * reference" ). A `tools` / `parameters` surface slots in as ONE more entry when it lands. */
-export const MANIFEST_SECTIONS = [ 'references', 'domains', 'habits', 'contracts' ] as const;
+ * reference" ).
+ *
+ * `grants` is the first entry sourced from a SESSION rather than from an artifact — what the user handed
+ * this run, CANONIZED here once its turns are compacted. Until then the grant's own reference line is
+ * already riding in the transcript, so a row here would state the same fact twice; promotion waits for
+ * compaction because that is the one moment the prefix is being rewritten anyway, which is the same
+ * reason removal waits for it. One deferral protocol, two mutations.
+ *
+ * A `tools` / `parameters` surface slots in as ONE more entry when it lands. */
+export const MANIFEST_SECTIONS = [ 'references', 'domains', 'habits', 'contracts', 'grants' ] as const;
 
 /** Section names that are manifest tables, not content ( see `MANIFEST_SECTIONS` ) — they
  *  merge-fuse across sources and sink to the bottom `manifest` tier. */
@@ -179,17 +187,31 @@ export const ContextAssembler = new class ContextAssembler {
 	 *  link ) keys on its own `what`+`why` instead, since it has no other identity to dedupe by. See
 	 *  the class doc for why this reads structured data rather than pattern-matching rendered text. */
 	mergeManifest( members: TaggedBlock[], title: string ): string {
+		return [ title, ...this.manifestRows( members ).map( r => r.text ) ].join( '\n' );
+	}
+
+	/**
+	 * The deduped manifest rows, still ADDRESSABLE — each surviving row paired with the `where` it is keyed
+	 * on. `mergeManifest` is a join over this, so the dedup rule lives once.
+	 *
+	 * Exposed because a routing row is the ONLY thing an `on` artifact contributes to the compiled context,
+	 * which makes this the sole place its real cost can be read. Priced from the merged table it cannot be
+	 * ( the table is one block of text ), and re-derived independently it would be an estimate sitting beside
+	 * real numbers — the exact drift this whole collapse exists to remove. `Agent.composition` reads it to
+	 * give every file a true weight.
+	 */
+	manifestRows( members: TaggedBlock[] ): { where: string; text: string }[] {
 		const seen = new Set<string>();
-		const lines: string[] = [];
+		const out: { where: string; text: string }[] = [];
 		for ( const m of members ) {
 			for ( const row of m.rows ?? [] ) {
 				const key = row.where || `${ row.what } ${ row.why }`;
 				if ( seen.has( key ) ) continue;
 				seen.add( key );
-				lines.push( KcdContext.renderRow( row ) );
+				out.push( { where: row.where ?? '', text: KcdContext.renderRow( row ) } );
 			}
 		}
-		return [ title, ...lines ].join( '\n' );
+		return out;
 	}
 
 	/** The canonical merged manifest table for one section ( `references` | `habits` ) across many source

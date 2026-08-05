@@ -25,6 +25,32 @@ export interface HabitSlotCandidate {
 	won:         boolean;
 }
 
+/**
+ * One FILE in an agent's compiled context, with what it actually costs — the composition currency.
+ *
+ * A row per artifact, not per block: the question this answers is "what is this object built from, and what
+ * does each piece cost me", which is what a composition surface ( the CLI chart, the agent screen ) shows.
+ * `tokens` is read from the real compiled output at the artifact's effective mode — a full body at
+ * `suggested`, its surviving routing row at `on`, zero at `off` — never a re-derived estimate.
+ */
+export interface CompositionRow {
+	/** The artifact's own path — the row's identity. */
+	path:   string;
+	name:   string;
+	kind:   ArtifactType;
+	/** The lens that contributes this file, or `agent` for one the agent itself bolted on. An artifact
+	 *  declared by several lenses is attributed once, to the first that carries it — matching the dedup the
+	 *  compile itself applies. */
+	source: string;
+	/** The mutual-exclusion SLOT this file competes in, from its own `habit-class` frontmatter, or null for
+	 *  a file that contends nothing. Habits are what use it today; the field is the artifact's, not the
+	 *  habit type's, so anything that later declares a class surfaces here without a change. Two files
+	 *  sharing a slot means only one of them reaches the compiled context. */
+	slot:   string | null;
+	mode:   SlotMode;
+	tokens: number;
+}
+
 /** One habit-class's composition view: every candidate that declared the class, and which one wins. A
  *  classless habit gets its own single-candidate entry with `habitClass: null`. */
 export interface HabitSlotView {
@@ -287,6 +313,16 @@ export class Agent {
 	 *  it and composes it, and an agent reaching into `session/` would invert the layering — a session is a
 	 *  run of an agent, not the reverse. '' when nothing is attached. */
 	attachments: string = '';
+	/** The bound session's CANONIZED grants, already composed ( `Session.grantManifest()` ) — the what/where/
+	 *  why rows for everything the user handed this run whose turns have since been compacted.
+	 *
+	 *  A STRING for the same reason `attachments` is: the session owns the grants and composes them, and an
+	 *  agent reaching into `session/` would invert the layering.
+	 *
+	 *  Only the HOISTED set arrives here. A grant whose turn still rides already carries its reference line
+	 *  in the transcript, and a manifest row beside it would state one fact twice; promotion waits for the
+	 *  compaction that removed the line. '' when nothing has been canonized yet, which is most sessions. */
+	grants: string = '';
 
 	private constructor(
 		id: string,
@@ -469,12 +505,13 @@ export class Agent {
 	 * defs / model root context / baseline memory change ( then `triggerRef` ); the orchestrator calls it per
 	 * round on the canonical agent. Never persisted — this is live environment, not agent identity.
 	 */
-	bindEnv( env: { rootContext?: string; toolDefs?: ToolDef[]; memory?: string; memoryTags?: string[]; attachments?: string } ): void {
+	bindEnv( env: { rootContext?: string; toolDefs?: ToolDef[]; memory?: string; memoryTags?: string[]; attachments?: string; grants?: string } ): void {
 		if ( env.rootContext !== undefined ) this.rootContext = env.rootContext;
 		if ( env.toolDefs    !== undefined ) this.toolDefs    = env.toolDefs;
 		if ( env.memory      !== undefined ) this.memory      = env.memory;
 		if ( env.memoryTags  !== undefined ) this.memoryTags  = env.memoryTags;
 		if ( env.attachments !== undefined ) this.attachments = env.attachments;
+		if ( env.grants      !== undefined ) this.grants      = env.grants;
 	}
 
 	/** What this agent actually carries = bolted-on ∪ inherited-from-lenses. The permissions
@@ -598,6 +635,117 @@ export class Agent {
 		if ( !base ) return lenses;
 		if ( lenses.some( l => InstallManifest.isBaseLens( l.getPath() ) ) ) return lenses;
 		return [ ...lenses, base ];
+	}
+
+	/**
+	 * THE composition surface — every file in this agent's compiled context, priced at what it really costs.
+	 *
+	 * The read a composition view wants, as opposed to `compiledBlocks()`, which is the read the WIRE wants.
+	 * Same underlying compile, projected by artifact instead of by block, so a chart built on this and the
+	 * text that ships can never disagree. Rows come out in load order: each lens, then the files it brings.
+	 *
+	 * Where each weight comes from:
+	 *
+	 * - **A lens** — its own non-care body plus its share of the merged care bands. The bands merge every
+	 *   lens's prose into one block, so a share is apportioned proportionally against the band's REAL weight
+	 *   rather than by summing the parts ( the merge strips each section's heading and adds its own labels,
+	 *   so the parts do not equal the whole ). Without this the inheritance floor prices at zero, because
+	 *   base is care prose and routing tables and nothing else.
+	 * - **`suggested`** — the artifact's own blocks in the compiled body. Real text, real weight.
+	 * - **`on`** — its surviving row in the deduped manifest ( `ContextAssembler.manifestRows` ). An `on`
+	 *   artifact contributes a pointer, not a body, and that row is the only text it puts on the wire.
+	 * - **`off`, or a slot nothing fills** — zero, and still listed. What an object declines is part of how
+	 *   it is composed, so the inventory keeps it.
+	 *
+	 * Walks POLICY rather than the dredged node list, because the dredge drops `off` targets and plans
+	 * entirely — the inventory has to survive that. An artifact several lenses declare is attributed once,
+	 * to the first, matching the compile's own dedup.
+	 */
+	composition(): CompositionRow[] {
+		const norm      = ( s: string ): string => s.replace( /\\/g, '/' );
+		const weigh     = ( t: string ): number => t ? KCDPrimitive._estimateTokens( t ) : 0;
+		const survivors = SlotResolver.compilePlan( this.getContextBlocks() ).survivors;
+		const isIndex   = ( b: TaggedBlock ): boolean => b.section !== null && Agent.INDEX_SECTIONS.has( b.section );
+
+		const body       = survivors.filter( b => !isIndex( b ) && b.section !== 'stub' );
+		const careBlocks = body.filter( b => b.region === 'care' );
+
+		// Core weight per artifact path — everything that rides as its own body text.
+		const core = new Map<string, number>();
+		for ( const b of body.filter( b => b.region !== 'care' ) )
+			if ( b.path ) core.set( norm( b.path ), ( core.get( norm( b.path ) ) ?? 0 ) + weigh( b.text ) );
+
+		// Care: the merged bands' real weight, apportioned by each lens's pre-merge contribution.
+		const bandTotal = this.buildCareBands( careBlocks ).reduce( ( s, b ) => s + weigh( b.text ), 0 );
+		const careRaw   = new Map<string, number>();
+		for ( const b of careBlocks ) careRaw.set( norm( b.path ), ( careRaw.get( norm( b.path ) ) ?? 0 ) + weigh( b.text ) );
+		const rawTotal  = [ ...careRaw.values() ].reduce( ( s, w ) => s + w, 0 );
+		const careFor   = ( p: string ): number => rawTotal ? Math.round( bandTotal * ( careRaw.get( p ) ?? 0 ) / rawTotal ) : 0;
+
+		// Routing-row weight per manifest `where` — an `on` artifact's entire contribution.
+		const rowWeight = new Map<string, number>();
+		for ( const r of ContextAssembler.manifestRows( survivors.filter( isIndex ) ) )
+			rowWeight.set( norm( r.where ), weigh( r.text ) );
+
+		const root = this.primaryLens;
+		const rel  = ( abs: string ): string => norm( ( root ?? this.lenses[ 0 ] )?.vaultRelative( abs ) ?? abs );
+
+		// A file's slot is its own `habit-class` frontmatter ( protocol §6 ) — the mutual-exclusion class
+		// `SlotResolver` groups contenders by. Null for anything that contends nothing.
+		const slotOf = ( n: KCDPrimitive | null ): string | null =>
+			( n?.getFrontmatter()[ 'habit-class' ] as string | undefined ) ?? null;
+
+		const out: CompositionRow[] = [];
+		const seen = new Set<string>();
+
+		for ( const lens of this.lenses ) {
+			const lp = norm( lens.getPath() ?? '' );
+			seen.add( lp );
+			out.push( {
+				path: lp, name: lens.getName(), kind: 'lens', source: lens.getName(), slot: null,
+				mode: 'suggested', tokens: ( core.get( lp ) ?? 0 ) + careFor( lp ),
+			} );
+
+			for ( const entry of lens.getPolicy() ) {
+				const href = entry.href?.trim() ?? '';
+				if ( href === '' || /^\{.*\}$/.test( href ) ) {
+					out.push( { path: '', name: entry.what || '( unnamed )', kind: 'unknown', source: lens.getName(), slot: null, mode: 'off', tokens: 0 } );
+					continue;
+				}
+				// Match the declared href to a dredged node to recover its real identity and absolute path;
+				// an `off` target was never dredged, so it reports from the policy row alone, at zero.
+				const node = lens.getNodes().find( n => norm( n.getPath() ).endsWith( norm( href ) ) ) ?? null;
+				const p    = node ? norm( node.getPath() ) : norm( href );
+				if ( seen.has( p ) ) continue;
+				seen.add( p );
+
+				const mode = ( this.habitModes[ p ] ?? this.referenceModes[ p ] ?? entry.mode ) as SlotMode;
+				out.push( {
+					path:   p,
+					name:   entry.what || node?.getName() || p.split( '/' ).pop() || href,
+					kind:   node?.getType() ?? 'unknown',
+					source: lens.getName(),
+					slot:   slotOf( node ),
+					mode,
+					tokens: mode === 'off' ? 0 : ( core.get( p ) ?? rowWeight.get( node ? rel( node.getPath() ) : norm( href ) ) ?? 0 ),
+				} );
+			}
+		}
+
+		// The agent's OWN bolted-on artifacts ( Starmind's base habits / references ) — no lens declares them,
+		// so they are attributed to the agent itself rather than borrowed onto one.
+		for ( const node of [ ...this.baseHabitNodes, ...this.baseReferenceNodes ] ) {
+			const p = norm( node.getPath() );
+			if ( seen.has( p ) ) continue;
+			seen.add( p );
+			const mode = ( this.habitModes[ p ] ?? this.referenceModes[ p ] ?? 'suggested' ) as SlotMode;
+			out.push( {
+				path: p, name: node.getName(), kind: node.getType(), source: 'agent', slot: slotOf( node ),
+				mode, tokens: mode === 'off' ? 0 : ( core.get( p ) ?? rowWeight.get( rel( node.getPath() ) ) ?? 0 ),
+			} );
+		}
+
+		return out;
 	}
 
 	/** The primary lens — the first AUTHORED lens ( base is never primary ), or null for a draft. */
@@ -793,12 +941,17 @@ export class Agent {
 	 * `withBandHeadings` like any other body tier; while no memory rides ( the reserved-but-empty case ),
 	 * `withBandHeadings` emits nothing for the tier, so the wire carries no bare `## Memory`.
 	 */
-	compiledBlocks( extras: { before?: TaggedBlock[]; after?: TaggedBlock[]; memory?: TaggedBlock[] } = {} ): TaggedBlock[] {
+	compiledBlocks( extras: { before?: TaggedBlock[]; after?: TaggedBlock[]; memory?: TaggedBlock[]; sections?: TaggedBlock[] } = {} ): TaggedBlock[] {
 		const before = extras.before ?? [];
 		const after  = extras.after ?? [];
 		const memory = extras.memory ?? [];
-		if ( !this.lenses.length ) return Agent.joinSegments( [ before, memory, after ] );
-		const blocks  = [ ...SlotResolver.compilePlan( this.getContextBlocks() ).survivors, ...memory ];
+		// `sections` joins the BLOCK LIST rather than bracketing the join, for the reason `memory` does: its
+		// position is a property of the merged sort, not a fixed lead/trail slot. A manifest-tagged block
+		// sinks to the manifest tier and fuses with the lens graph's own rows for that section — which is
+		// how a SESSION-sourced table ( grants ) lands in the same place an artifact-sourced one does.
+		const sections = extras.sections ?? [];
+		if ( !this.lenses.length ) return Agent.joinSegments( [ before, memory, sections, after ] );
+		const blocks  = [ ...SlotResolver.compilePlan( this.getContextBlocks() ).survivors, ...memory, ...sections ];
 		const inIndex = ( b: TaggedBlock ): boolean => b.section !== null && Agent.INDEX_SECTIONS.has( b.section );
 		// The body is everything that ISN'T an index table and isn't the legacy Available-on-request stub.
 		const body = blocks.filter( b => !inIndex( b ) && b.section !== 'stub' );
@@ -843,7 +996,13 @@ export class Agent {
 		// behind the SAME `memoryEnabled` gate: an agent with memory switched off carries no memories and no
 		// vocabulary either, since the vocabulary exists only to make `learn`/`recall` calls land.
 		const memory    = ( this.system[ 'memoryEnabled' ] !== false ) ? this.memoryBand() : '';
+		// Canonized grants ride as a real MANIFEST section, not as a trailing extra — they are a what/where/why
+		// lookup table exactly like References and Habits, and tagging them as one is what puts them under the
+		// `# Manifest` band with its read-on-demand directive rather than inside required reading. Being a
+		// section also means the compressive merge dedupes them for free.
+		const grants = this.grants ? [ Agent.sectionBlock( 'grants', this.grants ) ] : [];
 		return this.compiledBlocks( {
+			sections: grants,
 			before: Agent.joinSegments( [
 				// The agent's OWN authored instruction leads everything — it is the most specific statement of
 				// who this agent is, and it led the wire long before the compile existed ( the orchestrator's
@@ -1102,6 +1261,14 @@ export class Agent {
 	 *  renderer preview ( Session ) build from, so injection parity holds by construction. */
 	static memoryBlock( text: string ): TaggedBlock {
 		return { region: 'know', section: 'memory', mergeKey: null, text, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
+	}
+
+	/** A block tagged as one of the MANIFEST sections — the door for a manifest table sourced from OUTSIDE
+	 *  the lens graph. Identical to `extraBlock` but for what the tag means downstream: a section in
+	 *  `INDEX_SECTIONS` sinks to the manifest tier, merges compressively with any other source's rows for
+	 *  that section, and wears the canonical heading rather than an ad-hoc one. */
+	static sectionBlock( section: string, text: string ): TaggedBlock {
+		return { region: 'know', section, mergeKey: null, text, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
 	}
 
 	/**

@@ -45,20 +45,37 @@ export interface CompileResult {
 	tokens: number;
 }
 
-/** The display state of one slot in a lens view: its dredge mode, or `empty` when nothing fills it. */
-export type SlotState = SlotMode | 'empty';
+/** The display state of one row in a lens view: its dredge mode, `empty` when nothing fills the slot, or
+ *  `fixed` for a row that is not a slot at all — inherited or compiler-synthesized content that rides no
+ *  matter what the lens authors ( the floor, the merged care band, the manifest, the structure ).
+ *
+ *  DISPLAY-ONLY, and deliberately NOT `SlotMode`. `SlotMode` is the core off/on/suggested currency the whole
+ *  composition UI is built on; this type is consumed only by `lensView` and the CLI chart it feeds, so a new
+ *  value here cannot reach the slotting surfaces. */
+export type SlotState = SlotMode | 'empty' | 'fixed';
 
-/** One row of a lens's compiled-context breakdown — a component ( the lens's own identity, or one dredged
- *  slot ), its kind, its state ( off/on/suggested/empty ), and the tokens it contributes. */
+/** One row of a lens's compiled-context breakdown — a component, where it CAME FROM, its kind, its state,
+ *  and the tokens it actually contributes to the compiled context. */
 export interface LensSlot {
 	what:   string;
 	kind:   string;
+	/** Which lens this row's content came from — the inspected lens's own name for its identity and slots,
+	 *  the floor's name for inherited content, `—` for content that merges several sources or belongs to
+	 *  none. The column that makes inherited context legible rather than silently folded into the total. */
+	source: string;
+	/** The mutual-exclusion slot this row competes in ( `habit-class` ), or '' when it contends nothing.
+	 *  Two rows sharing a slot means only one of them reached the compiled context. */
+	slot:   string;
 	state:  SlotState;
 	tokens: number;
 }
 
-/** A lens's compiled-context detail — every component with its state and token weight, plus the total. The
- *  structured form behind the `show` chart; `slots[0]` is the lens's own identity, the rest its dredge slots. */
+/** A lens's compiled-context detail — every component with its source, state and real token weight, plus the
+ *  total. The structured form behind the `show` chart.
+ *
+ *  Priced from a BUILT AGENT, so this reports what a session wearing this lens ACTUALLY receives — the floor
+ *  included — rather than what the lens alone contributes. `tokens` is the same number `compile` reports for
+ *  the same lens, and the rows sum to it exactly. */
 export interface LensView {
 	lens:   string;
 	path:   string;
@@ -319,128 +336,77 @@ export class VaultUtilities {
 	/**
 	 * Compile one or more lenses to a context string — Daedalus's LENS-scoped compiler.
 	 *
-	 * Builds a DUMB agent over the named lenses ( `Vault.buildAgent` ) and compiles that — so the vault face
-	 * and Starmind now resolve lenses, apply the inheritance floor, and rank habit-class contention through
-	 * exactly the same code. What a vault still cannot supply is the agent's ENVIRONMENT ( root context, live
-	 * MCP tool defs, DB memory ): those are runtime layers with no vault-side source, so a vault agent simply
-	 * never binds them. That is the whole difference between the faces — not a different compiler.
+	 * Builds a dumb agent ( `Vault.buildAgent` ) and compiles that, so both faces run one engine. The only
+	 * difference between them is the agent's ENVIRONMENT — root context, live MCP tool defs, DB memory —
+	 * which has no vault-side source, so a vault agent never binds it.
 	 *
-	 * There is no longer a second compiler. The text is the agent's own `compile()`, so this face emits the
-	 * by-KIND care bands, the band headings, and the bottom-of-context manifest exactly as Starmind does —
-	 * and drops the legacy `stub` blocks, whose rows the manifest's routing tables already carry. What used
-	 * to sit here was a flat `LensObject.getContextBlocks` → `SlotResolver.compile` pipeline that shipped
-	 * none of that; the divergence was invisible because each face's output looked internally consistent.
+	 * THE BASE LENS ALWAYS RIDES, with no flag to suppress it: base is an inheritance mechanism, not an
+	 * ingredient, so a compile that drops it is wrong rather than lean. A lens re-declaring part of the
+	 * floor camouflages the missing rest, which is why the rule lives once, in `Agent.withFloor`.
 	 *
-	 * THE BASE LENS ALWAYS RIDES, and there is no flag to suppress it ( ruling: Bryan, 2026-07-29 ).
-	 * Base is an INHERITANCE mechanism, not an ingredient — a compile that drops it is not a leaner
-	 * compile, it is a wrong one. `InstallManifest` already declared the contract this honours ( base is
-	 * `required: true` floor whose purpose line reads "auto-loaded into every session; a vault without it
-	 * has no floor to stand on" ); until 2026-07-29 this compiler simply never implemented it, so the
-	 * Daedalus face silently shipped every session a context missing fourteen habits — `write-approval`
-	 * among them. The omission was camouflaged: a lens that re-declares part of the floor makes the missing
-	 * rest look present. The rule now lives once, in `Agent.withFloor`, which both faces call — the previous
-	 * arrangement spelled it per face and relied on a comment to keep them honest, and they diverged anyway.
-	 *
-	 * Each name is a bare lens name ( mapped to the `lenses/{name}/{name}.html` convention ) OR a raw
-	 * vault-relative path. `[0]` is primary. Throws on an empty list or a name that resolves to nothing.
-	 * The returned `lenses` reports what actually COMPILED, base included — reporting only what was asked
-	 * for is how the floor stayed invisible in the first place. Because it is read off the built agent, a
-	 * lens named by raw path reports its artifact NAME, not the path that was passed in.
+	 * Each name is a bare lens name ( `lenses/{name}/{name}.html` ) or a raw vault-relative path; `[0]` is
+	 * primary. Throws on an empty list or an unresolvable name. The returned `lenses` reports what actually
+	 * COMPILED, base included — reporting only what was asked for is what keeps a missing floor invisible.
+	 * Read off the built agent, so a lens named by raw path reports its artifact NAME.
 	 */
 	static compile( vault: Vault, lensNames: string[] ): CompileResult {
-		// Name resolution and the inheritance floor both belong to `Vault.buildAgent` now — it throws on an
-		// empty list or an unresolvable name, and applies the floor through the shared `Agent.withFloor`. The
-		// reported `lenses` is read back off what the agent ACTUALLY carries rather than echoing what was
-		// asked for: reporting only the request is how the missing floor stayed invisible in the first place.
 		const agent    = vault.buildAgent( lensNames );
 		const compiled = agent.lenses.map( l => l.getName() );
-
-		// ONE projection to text, and it is the agent's own — the last step of the compiler collapse. The
-		// flat `SlotResolver.compile` pipeline that used to live here is gone, along with the divergence it
-		// carried: the vault face now emits the same care bands, band headings, and bottom-of-context
-		// manifest Starmind does, and drops the legacy `stub` blocks the agent has always treated as
-		// duplicates of its own routing tables.
-		const text = agent.compile();
+		const text     = agent.compile();
 
 		return { lenses: compiled, text, tokens: KCDPrimitive._estimateTokens( text ) };
 	}
 
 	/**
-	 * A lens's compiled-context DETAIL — the structured breakdown behind the `show` chart. Reads the same
-	 * lens-scoped composition `compile()` produces, but keeps it decomposed: `slots[0]` is the lens's OWN
-	 * identity ( its Care/Know body + the routing tables it authors ), and each following row is one dredge
-	 * SLOT off the lens's policy — its state ( off / on / suggested, or `empty` when the slot is a
-	 * placeholder nothing fills ) and the tokens that component contributes. Single lens only ( a lens is
-	 * what you inspect; a multi-lens compile is `compile()` ).
+	 * The composition behind the `show` chart: what a session WEARING this lens receives, file by file,
+	 * inheritance floor included. Priced from the compiled blocks.
+	 *
+	 * A view of the COMPOSITION, not of the text — what the object is built from, what each file costs, and
+	 * which lens brought it, so editing an object and inspecting how it assembles works from the command
+	 * line. A thin projection of `Agent.composition()` rather than its own analysis: a chart that recomputed
+	 * the composition would be free to disagree with the thing it describes.
+	 *
+	 * EVERY FILE CARRIES A COST — at `on`, its surviving row in the deduped manifest; at `off`, zero, and
+	 * still listed, because what an object declines is part of how it is composed. No aggregate `manifest`
+	 * row: pooling those weights makes an `on` file read as free.
+	 *
+	 * The one non-file row is `structure` — band headings, dividers, block joins, estimator rounding. It is
+	 * the REMAINDER against the compiled total, which is what makes the decomposition exact: the estimator
+	 * is `round( chars / 4 )`, so per-block weights cannot sum to a single-pile estimate on their own.
 	 */
 	static lensView( vault: Vault, name: string ): LensView {
 		const rel = vault.lensPath( name );
 		if ( !fs.existsSync( vault.toAbs( rel ) ) )
 			throw new Error( `no lens found for "${ name }" ( looked for ${ rel } )` );
 
-		const lens = vault.loadLens( rel );
-		const base = ( p: string ): string => p.replace( /\\/g, '/' ).split( '/' ).pop() ?? '';
+		const agent = vault.buildAgent( [ name ] );
+		const lens  = agent.domainLenses[ 0 ];
+		const total = KCDPrimitive._estimateTokens( agent.compile() );
 
-		const lensPath = lens.getPath() ?? rel;
-		const slots: LensSlot[] = [
-			// The lens's own identity — its Care/Know body, always fully in.
-			{ what: 'identity', kind: 'lens', state: 'suggested', tokens: lens.bodyTokens() },
-		];
+		// A projection, not a second computation — attribution lives on the object that knows the answer.
+		const slots: LensSlot[] = agent.composition().map( r => ( {
+			what:   r.name,
+			kind:   r.kind === 'unknown' ? '' : r.kind,
+			source: r.source,
+			slot:   r.slot ?? '',
+			state:  r.path === '' ? 'empty' : r.mode,
+			tokens: r.tokens,
+		} ) );
 
-		// Each dredge slot is a policy row. Rather than lean on the dredge ( which loads `on` children as
-		// display-only, skips `off` and plans, and a non-eager lens loads none at all ), resolve + load each
-		// target DIRECTLY through the same resolver the dredge uses. That lets every slot report its artifact's
-		// real type and the token cost it pays AT ITS MODE ( `modeTokens` — `on` = routing row, `suggested` =
-		// full body, `off` = 0 ) uniformly across references, habits, plans, and contracts. A placeholder href
-		// ( `{…}` ) is an empty slot nothing fills.
-		for ( const entry of lens.getPolicy() ) {
-			const href = entry.href?.trim() ?? '';
-			if ( href === '' || /^\{.*\}$/.test( href ) ) {
-				slots.push( { what: entry.what || '( unnamed )', kind: '', state: 'empty', tokens: 0 } );
-				continue;
-			}
-			const target = this.tryLoad( vault, href );
-			slots.push( {
-				what:   entry.what || ( target ? target.getName() : base( href ) ),
-				kind:   target ? target.getType() : this.kindFromHref( href ),
-				state:  entry.mode,
-				// The cost the compile ACTUALLY pays at this slot's mode — `on` reduces to its routing row
-				// ( ~tens of tokens ), `suggested` rides the full body ( ~hundreds ), `off` contributes nothing.
-				// The same `modeTokens` split the Starmind composition UI reads, so the two never disagree.
-				tokens: target ? target.modeTokens( entry.mode, entry.why ) : 0,
-			} );
-		}
+		// Grouped BY KIND so a reader sees all the habits together, all the references together — the question
+		// a composition chart gets asked is "what habits am I carrying", not "in what order were they loaded".
+		// Lenses lead ( they are what everything else hangs off ), then kinds alphabetically, with a nameless
+		// kind last. The sort is STABLE, so load order survives inside each group.
+		const kindRank = ( k: string ): number => k === 'lens' ? 0 : k === '' ? 2 : 1;
+		slots.sort( ( a, b ) => kindRank( a.kind ) - kindRank( b.kind ) || a.kind.localeCompare( b.kind ) );
 
-		return {
-			lens:   lens.getName() || name,
-			path:   lensPath,
-			slots,
-			tokens: slots.reduce( ( sum, s ) => sum + s.tokens, 0 ),
-		};
-	}
+		// Band headings, the `---` dividers, the joins between blocks, and estimator rounding — everything the
+		// compile adds that is not a file. Computed as the remainder so the decomposition is exact against the
+		// total rather than approximately right.
+		const accounted = slots.reduce( ( sum, s ) => sum + s.tokens, 0 );
+		slots.push( { what: 'structure', kind: '', source: '—', slot: '', state: 'fixed', tokens: total - accounted } );
 
-	/** Resolve a policy href to disk ( the resolver the dredge uses ) and load the full artifact — for the
-	 *  `show` breakdown, which prices every slot regardless of mode. Null on an unresolvable or unreadable
-	 *  target ( a dangling link ), so the caller falls back to an href-inferred kind and zero weight. */
-	private static tryLoad( vault: Vault, href: string ): KCDPrimitive | null {
-		try {
-			const abs = vault.resolveHref( href );
-			if ( !fs.existsSync( abs ) ) return null;
-			return KCDPrimitive.fromHtml( fs.readFileSync( abs, 'utf-8' ), abs );
-		} catch {
-			return null;
-		}
-	}
-
-	/** Best-effort artifact kind from an href's path segment — the fallback when a slot's target can't be
-	 *  loaded ( a dangling link ), so its real `getType()` is unavailable. */
-	private static kindFromHref( href: string ): string {
-		const h = href.replace( /\\/g, '/' );
-		if ( /(^|\/)references?\//.test( h ) ) return 'reference';
-		if ( /(^|\/)habits?\//.test( h ) )     return 'habit';
-		if ( /(^|\/)plans?\//.test( h ) )      return 'plan';
-		if ( /(^|\/)contracts?\//.test( h ) )  return 'contract';
-		return '';
+		return { lens: lens?.getName() || name, path: lens?.getPath() ?? vault.toAbs( rel ), slots, tokens: total };
 	}
 
 

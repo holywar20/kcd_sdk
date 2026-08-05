@@ -31,6 +31,7 @@ const HOMES: Record<string, string> = {
 	generator:   '_Claude/generators/some-gen/some-gen.html',
 	analyzer:    '_Claude/analyzers/some-an/some-an.html',
 	audit:       '_Claude/audits/some-audit.html',
+	'prompt-partial': '_Claude/prompts/some-prompt.html',
 }
 
 describe( 'VaultLayout.accepts — the declarable/acceptable seam', () => {

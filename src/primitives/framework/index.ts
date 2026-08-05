@@ -10,3 +10,4 @@ export { PlanObject } from './PlanObject';
 export { IndexObject } from './IndexObject';
 export { ReferenceObject } from './ReferenceObject';
 export { TemplateObject } from './TemplateObject';
+export { PromptPartialObject } from './PromptPartialObject';

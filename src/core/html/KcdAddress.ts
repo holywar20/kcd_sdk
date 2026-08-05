@@ -22,7 +22,7 @@ export const KcdAddress = new class KcdAddress {
 	// ── The closed sets ( protocol §2, §4 ) ──────────────────────────────────────
 	/** `note` and `how-to` were retired 2026-07-30 — they duplicated what the folder already says
 	 *  ( see ArtifactType ). Twelve documents declared one; all became `reference`. */
-	TYPES        = [ 'lens', 'plan', 'reference', 'framework', 'template', 'nav-index', 'habit', 'contract', 'generator', 'analyzer', 'audit' ];
+	TYPES        = [ 'lens', 'plan', 'reference', 'framework', 'template', 'prompt-partial', 'nav-index', 'habit', 'contract', 'generator', 'analyzer', 'audit' ];
 	STATUSES     = [ 'draft', 'active', 'observation', 'composed', 'disabled', 'deployed', 'complete', 'retired', 'paused' ];
 	AUDIENCES    = [ 'human', 'agent', 'both' ];
 	MERGES       = [ 'additive', 'declarative', 'union' ];

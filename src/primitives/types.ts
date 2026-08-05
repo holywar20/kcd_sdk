@@ -81,6 +81,13 @@ export type ArtifactType =
 	| 'habit'
 	| 'contract'
 	| 'template'
+	// Reusable prompt wording a human fills in — see PromptPartialObject. A TYPE and not a `references/`
+	// category, because it is a different KIND of document rather than a different subject: a partial is
+	// consumed programmatically and concatenated into a request, where a reference is read. That is the
+	// line the retired `note`/`how-to` failed and this clears — those restated their folder, this does not.
+	// Named `prompt-partial` rather than `prompt`/`template` deliberately: `template` already means the
+	// authoring stencils under `kcd/`, and overloading it is the idiom-explosion this comment exists under.
+	| 'prompt-partial'
 	| 'framework'
 	| 'nav-index'
 	// `index` is the pre-vocab-alignment name for `nav-index`, kept until the type union is

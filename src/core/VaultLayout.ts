@@ -94,6 +94,13 @@ const LAYOUT: readonly LayoutEntry[] = [
 		dir: 'plans', type: 'plan', layer: 'data', indexed: true,
 		purpose: 'Promoted plans that authorize action, plus the plans_complete/ and plans_deferred/ buckets beneath.'
 	},
+	{
+		// `data`, not `agent`: a partial is never composed INTO an agent. It is appended after context
+		// compilation as part of the user message, which is exactly why it sits with what a project produces
+		// rather than with what an agent is built from.
+		dir: 'prompts', type: 'prompt-partial', layer: 'data', indexed: true,
+		purpose: 'Reusable prompt wording a human fills in — the text a task sends, kept where it can be read and edited.'
+	},
 
 	// ── Data / output layer, untyped ──
 	// Real, expected directories that hold no governed artifacts. Listed rather than omitted so a

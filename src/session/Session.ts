@@ -12,7 +12,8 @@
  * bridge whole via serialize / fromSerialized, the same trinity as Agent.
  */
 
-import { Transcript, type Turn, type WireMessage, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type SessionPolicies, type SessionCompaction, type Attachment } from './TurnEntry';
+import { Transcript, type Turn, type WireMessage, type WireOptions, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type SessionPolicies, type SessionCompaction, type Grant, isGrant, grantSubject, grantKind, frameToolResultStub, KEEP_TOOL_RESULT_TURNS } from './TurnEntry';
+import { type GrantRef } from './InjectedItem';
 
 /**
  * A session's LIFECYCLE state — is this conversation live or filed away? Persisted, user-driven,
@@ -151,12 +152,27 @@ export class Session {
 	 *  bound, so the projection below is a no-op on a session that has never compacted. */
 	compactions: SessionCompaction[] = [];
 
+	/** Where this session's tool results are SPILLED — the absolute path of its result log, as
+	 *  `frameToolResultStub` names it and `read_file` resolves it. The same species as `transcript` and
+	 *  `compactions`: non-persisted object state, never in SerializedSession, bound on arrival.
+	 *
+	 *  BOUND rather than derived because the log lives under the app's userData, which is an Electron fact
+	 *  with no business in a Node-free package. '' until bound, and that emptiness is the OFF switch for the
+	 *  whole reduction: a session with nowhere to point cannot honestly stub anything.
+	 *
+	 *  It is bound UNCONDITIONALLY, on every session, and what makes that safe is an invariant rather than a
+	 *  check: a stub is only ever produced for a tool-result ENTRY, and the only writer of tool-result entries
+	 *  is the loop that spills them. So a session with no results has an empty stub set and never names the
+	 *  file, while a session with results has necessarily written it. The tier that runs its own tools
+	 *  ( Claude Code ) records no results here at all, which is why it needs no exception. */
+	resultLogPath: string = '';
+
 	/** Attachments made but NOT yet carried by a turn. The same species as `transcript`: non-persisted
 	 *  object state, never in SerializedSession. They drain onto the turn the orchestrator opens, ahead of
 	 *  the user's prompt — which is what makes them persist for free ( the turn's `entries` column is
 	 *  written when it ends ) and keeps a Turn atomic: a prompt plus everything that answered it. Before
 	 *  the first send there is no turn to hold them, which is the whole reason this list exists. */
-	pendingAttachments: Attachment[] = [];
+	pendingAttachments: Grant[] = [];
 
 	private constructor(
 		id: string,
@@ -316,6 +332,12 @@ export class Session {
 		this.compactions = compactions;
 	}
 
+	/** Bind the result log's path — the only main-only fact the reduction needs. Bound once at registration
+	 *  rather than per-read, so the readers that consult it cannot be handed different paths. */
+	bindResultLog( path: string ): void {
+		this.resultLogPath = path;
+	}
+
 	/** Set ONE named policy, leaving its siblings alone. Pure configuration: no policy touches the
 	 *  transcript, so nothing is ever lost by changing one. The caller persists the whole bag ( DB
 	 *  update_session_policy ).
@@ -342,7 +364,8 @@ export class Session {
 	 *
 	 *  Private and SHARED, because wireMessages() and estimateTokens() are the two readers that must never
 	 *  disagree about what rides — the moment they compose the policies separately, the gauge starts lying
-	 *  about the send. A third policy composes here and both readers get it for free.
+	 *  about the send. A third policy composes here and both readers get it for free. `_resultStubs()` is a
+	 *  third reader now, and it asks the same question of the same projection for the same reason.
 	 *
 	 *  Neither step edits the transcript: both build a new one, and the itinerary still shows every turn
 	 *  that ever happened. Note the asymmetry in what re-widening buys, though — a retention change hands
@@ -359,39 +382,229 @@ export class Session {
 	 * last send. ONE reader, so the gutter and the compactor cannot disagree about a file the user
 	 * attached thirty seconds ago and has not sent yet.
 	 *
-	 * Reads the WHOLE transcript rather than `_projected()`: this answers "what is attached", not "what
-	 * rides", and a file whose turn fell out of the window is still attached — it is simply not in
-	 * context. Conflating the two is what would make a file vanish from the gutter the moment the window
-	 * narrowed, with no way to get it back.
+	 * Reads the whole transcript rather than `_projected()`, and the difference is deliberate: a file the
+	 * RETENTION window narrowed past is still attached, because that policy can be widened back and a chip
+	 * flickering in and out with the window is unusable. A COMPACTED turn's files are gone from the list —
+	 * `Transcript.attachments()` draws that line, and draws it once.
 	 */
-	attachments(): Attachment[] {
+	attachments(): Grant[] {
 		return [ ...this.transcript.attachments(), ...this.pendingAttachments ];
+	}
+
+	/**
+	 * What this session is AUTHORIZED to reach — the answer a gate asks for, deduped by subject.
+	 *
+	 * Reads the whole transcript rather than the deck, and the difference is the whole point: the deck
+	 * hides a compacted turn's entries because they stopped being CONTEXT, while a permission granted an
+	 * hour ago is still a permission. A grant ends when the user revokes it and at no other moment.
+	 *
+	 * Returns `GrantRef`, which says what is permitted and never how the permission arose. Today every one
+	 * comes from an injection; a second producer adds to this list without anything downstream noticing,
+	 * which is the property that makes it usable as an authorization surface rather than a view of the
+	 * gutter.
+	 */
+	grants(): GrantRef[] {
+		const out = new Map<string, GrantRef>();
+		// LIVE grants — every uncompacted entry, revoked or not. A revocation is PENDING, exactly as the
+		// context half of it is: the user is managing what the agent is looking at, not slamming a security
+		// door, and nobody revokes a file to ban it from a session within the same turn. Honouring it
+		// instantly would buy a re-prefill for a distinction no one asked for.
+		for ( const turn of this.transcript.allTurns() ) {
+			if ( turn.compacted ) continue;
+			for ( const entry of turn.entries ) {
+				if ( !isGrant( entry ) ) continue;
+				out.set( grantSubject( entry ), { kind: grantKind( entry ), subject: grantSubject( entry ) } );
+			}
+		}
+		for ( const entry of this.pendingAttachments ) {
+			out.set( grantSubject( entry ), { kind: grantKind( entry ), subject: grantSubject( entry ) } );
+		}
+		// …plus everything already CANONIZED. A compacted grant left the transcript but not the session: that
+		// is what promotion means, and an authorization that evaporated the moment its turn was summarised
+		// would make compaction silently revoke things nobody revoked.
+		for ( const g of this.hoistedGrants() ) out.set( g.subject, g );
+		return [ ...out.values() ];
+	}
+
+	/**
+	 * The CANONIZED grants as manifest rows — what/where/why, one line each, in the shape every other
+	 * manifest table uses.
+	 *
+	 * `why` is the same for all of them and says so plainly: a user granted this. That is not filler — it is
+	 * the whole authorization model in the one place the agent reads it, and an agent that knows a
+	 * capability came from the person it is working for reasons about it differently than one that found it
+	 * lying in its configuration.
+	 *
+	 * '' when nothing has been canonized, so the section drops out of the manifest entirely rather than
+	 * riding as an empty heading.
+	 */
+	grantManifest(): string {
+		const rows = this.hoistedGrants().map( ( g ) => `- ${ g.kind } · ${ g.subject } · granted by the user for this session` );
+		return rows.length ? rows.join( '\n' ) : '';
+	}
+
+	/**
+	 * The grants that must be CANONIZED into the manifest — those whose turns have been compacted, and
+	 * whose transcript line therefore no longer rides.
+	 *
+	 * The hoist is a MOVE between tiers, never a copy: while a grant's turn still rides, its reference line
+	 * is already in context and a manifest row beside it would state the same fact twice. Promotion waits
+	 * for compaction for the reason every deferred mutation does — that is the one moment the prefix is
+	 * being rewritten anyway, so the cache miss is already paid for.
+	 *
+	 * COMPACTION IS ALSO WHERE A REVOCATION LANDS, and the two rules turn out to be one rule read from both
+	 * ends: a grant that survives compaction is canonized, and a grant marked removed simply is not. So the
+	 * pass that rewrites the prefix settles every pending decision at once, and nothing needs a second
+	 * mechanism to execute a revocation — not-promoting IS the execution.
+	 */
+	hoistedGrants(): GrantRef[] {
+		const live = new Set<string>();
+		const out  = new Map<string, GrantRef>();
+		for ( const turn of this.transcript.allTurns() ) {
+			for ( const entry of turn.entries ) {
+				if ( !isGrant( entry ) ) continue;
+				const subject = grantSubject( entry );
+				if ( !turn.compacted ) { live.add( subject ); continue; }
+				// Revoked AND compacted: the pending revocation EXECUTES here, by the grant simply not being
+				// promoted. Nothing else has to run — not-promoting is the execution, which is why one pass
+				// settles both deferred decisions.
+				if ( entry.removed ) { out.delete( subject ); continue; }
+				out.set( subject, { kind: grantKind( entry ), subject } );
+			}
+		}
+		// A re-injection on a LIVE turn un-hoists it: the reference is riding again, so the manifest row
+		// would be the duplicate this method exists to avoid.
+		for ( const subject of live ) out.delete( subject );
+		return [ ...out.values() ];
+	}
+
+	/**
+	 * The attachments that would RIDE — the WINDOW's, not the whole transcript's.
+	 *
+	 * The other half of the pair above, and the distinction is the same one `_projected()` draws: that one
+	 * answers "what is attached" for the gutter, this one answers "what rides". A file on a compacted turn
+	 * is still attached and must not ride again — the summary stands in for it, and re-sending it would pay
+	 * for that history twice.
+	 *
+	 * Exists because a NON-REPLAYING tier needs it. Every other caller gets attachments for free inside
+	 * `wireMessages()`, which projects the whole window; the harness tier is exempt from replaying that
+	 * window and so must ask for this one part of it by name. It reads `_projected()` rather than composing
+	 * the policies itself, for the reason that method exists at all: two readers that compose them
+	 * separately start disagreeing about what rides the moment either policy changes.
+	 *
+	 * REMOVED entries come back, exactly as `attachments()` returns them — a removed file keeps riding as a
+	 * pointer until its turn is compacted, and filtering here would be a second copy of a rule that lives at
+	 * the projection.
+	 */
+	projectedAttachments(): Grant[] {
+		return this._projected().attachments();
 	}
 
 	/** The DYNAMIC half of the wire — the projected transcript as neutral messages a connector maps to its
 	 *  provider format ( thinking excluded ). Joins agent.wireSystem() ( the stable half ) at send: the
 	 *  whole request is { system: agent.wireSystem(), messages: session.wireMessages() }. Every policy is
-	 *  applied HERE, at the projection — the transcript itself is never edited. */
-	wireMessages(): WireMessage[] {
-		return this._projected().wireMessages();
+	 *  applied HERE, at the projection — the transcript itself is never edited.
+	 *
+	 *  `opts` passes through to the transcript, with the result-log LINE MAP filled in on the way ( see
+	 *  `_resultLines` ). The caller supplies what only it can know — the model's `multimodal` declaration,
+	 *  the log's path — and the Session supplies what only it can. */
+	wireMessages( opts?: WireOptions ): WireMessage[] {
+		return this._projected().wireMessages( this._wireOpts( opts ) );
+	}
+
+	/**
+	 * `toolUseId` → its 1-based line in this session's result log.
+	 *
+	 * Read off the WHOLE transcript, and that is the crux of the whole mechanism rather than an
+	 * implementation detail. `wireMessages()` runs on `_projected()`, which has already dropped everything a
+	 * compaction covered — but the LOG still holds those results, because the writer spills what the
+	 * transcript holds and never what the window kept. Counting in the projection would number every line
+	 * short by however many results a compaction had replaced, and every stub would point at the wrong one.
+	 *
+	 * A COUNT, not a lookup. The writer walks the same turns in the same order, so the file and the pointer
+	 * agree by construction — nothing coordinates them and no id-to-line map is persisted anywhere. What
+	 * that buys is also what it costs: change the write order and every stub already sent is wrong.
+	 */
+	private _resultLines(): Map<string, number> {
+		const lines = new Map<string, number>();
+		let n = 0;
+		for ( const turn of this.transcript.allTurns() ) {
+			for ( const entry of turn.entries ) {
+				if ( entry.kind === 'tool-result' ) lines.set( entry.toolUseId, ++n );
+			}
+		}
+		return lines;
+	}
+
+	/**
+	 * The caller's options with this session's REDUCTION folded in — the keep-window, the log path, and the
+	 * line map. Private and shared by every reader, for the same reason `_projected()` is: they must not be
+	 * able to disagree.
+	 *
+	 * Composed HERE rather than passed in, and that is the change. It used to be built at the send, which left
+	 * the itinerary — which arrives through a pull channel and never touches a send — with no way to ask the
+	 * same question without restating the answer. One producer, every reader.
+	 *
+	 * No log path, no reduction. That is absence, not failure: a session nothing has spilled for has no file
+	 * to point at, and a stub naming one that does not exist is worse than the result it replaced.
+	 */
+	private _wireOpts( opts?: WireOptions ): WireOptions | undefined {
+		if ( !this.resultLogPath ) return opts;
+		return {
+			...opts,
+			toolResults: { keepTurns: KEEP_TOOL_RESULT_TURNS, logPath: this.resultLogPath, lines: this._resultLines() }
+		};
+	}
+
+	/**
+	 * Every tool result riding as a STUB on the next send, keyed by `tool_use_id` — the itinerary's copy of
+	 * what the wire is about to do.
+	 *
+	 * The two halves count over DIFFERENT turn sets and both are right: WHICH results stub is a question about
+	 * the projection ( the last N that ride ), while WHICH LINE each sits on is a question about all of
+	 * history ( the log holds what compaction dropped ). This is the only object holding both, which is why
+	 * the itinerary is handed an answer instead of the inputs to compute one.
+	 *
+	 * The stub TEXT, not a flag — so the marker a user reads and the text the model receives are the same
+	 * string, produced once. A boolean would have left the display to re-frame it, and the wording is the
+	 * whole point of the stub.
+	 */
+	private _resultStubs(): Map<string, string> {
+		const out       = new Map<string, string>();
+		const opts      = this._wireOpts();
+		const reduction = opts?.toolResults;
+		if ( !reduction ) return out;
+		for ( const id of this._projected().stubbedResults( opts ) ) {
+			out.set( id, frameToolResultStub( reduction.logPath, reduction.lines?.get( id ), id ) );
+		}
+		return out;
 	}
 
 	/** The inspector itinerary — one BLOCK per turn, each carrying the entries that happened inside it
 	 *  ( thinking included ). DELIBERATELY UNWINDOWED: the Turns folder is the account of what actually
 	 *  happened, and a narrow policy must not make history look like it vanished. ( Marking which turns
 	 *  are in-window is a display concern for the folder itself. ) The System folder reads
-	 *  agent.wireSystem(). */
+	 *  agent.wireSystem().
+	 *
+	 *  Rows carry the STUB the wire is about to send in their place — a reduction nobody can see is
+	 *  indistinguishable from a bug. A row on a COMPACTED turn carries none, which is correct rather than an
+	 *  omission: it does not ride at all, so calling it stubbed would claim it does. */
 	transcriptTurns(): TranscriptTurn[] {
-		return this.transcript.turnRows();
+		return this.transcript.turnRows( this._resultStubs() );
 	}
 
 	/** The session's own context cost — the wire weight of the PROJECTED transcript ( self-priced per
 	 *  entry ), so it prices what will actually ride rather than everything ever said: a compacted session
 	 *  is priced on its summary, which is the whole reason a user compacts one. Reads the same _projected()
 	 *  the wire does, so the number cannot drift from the send. The whole-context estimate folds this onto
-	 *  agent.estimateTokens(); a caller sums the two halves. */
-	estimateTokens(): number {
-		return this._projected().estimateTokens();
+	 *  agent.estimateTokens(); a caller sums the two halves.
+	 *
+	 *  Takes the same options the wire does, through the same `_wireOpts` — a gauge that prices an
+	 *  unreduced transcript while the wire sends a reduced one is the exact drift both readers exist to
+	 *  prevent. A caller that passes nothing prices the transcript whole, which is still honest: that is
+	 *  what an unreduced send costs. */
+	estimateTokens( opts?: WireOptions ): number {
+		return this._projected().estimateTokens( this._wireOpts( opts ) );
 	}
 
 	/**

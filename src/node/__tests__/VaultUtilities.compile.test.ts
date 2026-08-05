@@ -4,16 +4,11 @@ import { Vault } from '../Vault'
 import { VaultUtilities } from '../VaultUtilities'
 
 /**
- * `VaultUtilities.compile` — the vault face, after the compiler collapse.
+ * `VaultUtilities.compile` — the vault face runs the same engine as Starmind.
  *
- * These lock the thing that was actually broken. The vault face used to run its own flat pipeline
- * ( `LensObject.getContextBlocks` → `SlotResolver.compile` ) and ship a context with no manifest, no band
- * headings, no primacy marking, and a duplicated `Available on request` stub section per lens. It looked
- * internally consistent, which is exactly why nobody noticed it was a second compiler.
- *
- * The load-bearing assertion is the equivalence one: the tool's text IS the agent's own `compile()`. The
- * shape assertions exist so a regression to a parallel pipeline fails loudly rather than silently emitting
- * a plausible-looking context again.
+ * The load-bearing assertion is equivalence: the tool's text IS the agent's own `compile()`. The shape
+ * assertions exist so a second pipeline fails loudly rather than silently emitting a plausible context —
+ * a parallel compiler looks internally consistent, which is what makes it hard to notice.
  */
 
 const PROJECT_ROOT = path.resolve( __dirname, '../../../..' )   // kcd_sdk/src/node/__tests__ → repo root
@@ -28,7 +23,7 @@ describe( 'VaultUtilities.compile — one compiler, shared with Starmind', () =>
 		expect( VaultUtilities.compile( v, [ 'render' ] ).text ).toBe( v.buildAgent( [ 'render' ] ).compile() )
 	} )
 
-	it( 'carries the bottom-of-context manifest the flat pipeline never emitted', () => {
+	it( 'carries the bottom-of-context manifest', () => {
 		const { text } = VaultUtilities.compile( vault(), [ 'render' ] )
 
 		expect( text ).toContain( '## Files' )       // the manifest head — names every loaded lens + its path
