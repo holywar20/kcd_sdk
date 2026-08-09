@@ -14,6 +14,23 @@
  *                `installed`/`exposed` are always present (false until their
  *                event); the dates are simply absent until then.
  */
+/**
+ * How a server relates to a PROJECT — declared by the server itself, because only the server knows
+ * whether it has a workspace at all. Not a central table: the posture belongs on the thing that has it,
+ * so installing a server teaches the host how to place it and removing one takes the knowledge with it.
+ *
+ *   'none'      the server has no workspace. Most third-party servers ( a weather API, a search index )
+ *               are this, and are singletons the host never re-points. THE DEFAULT — a server that says
+ *               nothing is assumed to want nothing, which is the only safe read of silence.
+ *   'cwd'       the workspace is fixed at spawn, from the process working directory, and cannot move
+ *               afterwards. The host spawns it into the right project; changing project needs a respawn.
+ *   'per-call'  the server re-resolves its workspace on every tool call from a channel the host writes
+ *               ( its package-store slice ). The host points it at the right project immediately before
+ *               each call — and therefore SERIALIZES that server's calls, since one process holding one
+ *               root cannot answer two projects at once.
+ */
+export type ServerWorkspace = 'none' | 'cwd' | 'per-call';
+
 export interface ServerManifest {
 	// ── Identity (author-declared) ──────────────────────────────────────────────
 	id:           string;                 // slug; matches the server's folder name
@@ -25,6 +42,7 @@ export interface ServerManifest {
 	env?:         Record<string, string>;
 	doc?:         string;                 // the server's own doc-block — its account of what it is, the recursive parent of its tools' docs
 	config?:      ServerConfigSurface;    // the server's self-declared config surface — what the app's config screen renders for it (see below)
+	workspace?:   ServerWorkspace;        // how this server relates to a PROJECT — see below. Absent means 'none'.
 
 
 

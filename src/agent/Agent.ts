@@ -85,6 +85,10 @@ import type { ToolDef } from './ToolDef';
  */
 export interface SerializedAgent {
 	id: string;
+	/** The workspace this agent belongs to ( `projects.id` ). An agent's lens paths are vault-relative,
+	 *  so it only means anything inside its own project — which is why the project rides WITH the agent
+	 *  rather than being inferred from whichever one happens to be open. '' only before a row is read. */
+	projectId: string;
 	name: string;
 	/** Presentation — a Glyph name + a color token string (e.g. `var(--generator)`). Null = fall back. */
 	icon: string | null;
@@ -171,6 +175,9 @@ export interface SerializedAgent {
 
 export interface AgentOptions {
 	id?: string;
+	/** The owning workspace ( `projects.id` ). Omitted by a bare or test agent; the callers that know it
+	 *  ( the row loader, the two birth paths ) supply it. */
+	projectId?: string;
 	name?: string;
 	icon?: string | null;
 	color?: string | null;
@@ -228,6 +235,9 @@ function _union( base: string[], composed: string[] ): string[] {
 export class Agent {
 
 	readonly id: string;
+	/** The workspace this agent belongs to ( see SerializedAgent.projectId ). READONLY: because its lens
+	 *  paths are vault-relative, moving an agent between projects is a migration, not a field write. */
+	readonly projectId: string;
 	name: string;
 	icon: string | null;
 	color: string | null;
@@ -326,6 +336,7 @@ export class Agent {
 
 	private constructor(
 		id: string,
+		projectId: string,
 		name: string,
 		icon: string | null,
 		color: string | null,
@@ -348,6 +359,7 @@ export class Agent {
 		notes: string | null,
 	) {
 		this.id             = id;
+		this.projectId      = projectId;
 		this.name           = name;
 		this.icon           = icon;
 		this.color          = color;
@@ -382,6 +394,7 @@ export class Agent {
 		const domain = lenses.filter( ( l ) => !InstallManifest.isBaseLens( l.getPath() ) );
 		return new Agent(
 			opts.id ?? crypto.randomUUID(),
+			opts.projectId ?? '',
 			opts.name ?? domain[ 0 ]?.getName() ?? 'agent',
 			opts.icon ?? null,
 			opts.color ?? null,
@@ -415,6 +428,7 @@ export class Agent {
 		const lenses = ( json.lenses ?? [] ).map( ( l ) => LensObject.fromSerialized( l ) );
 		const agent = new Agent(
 			json.id,
+			json.projectId ?? '',   // absent on a payload written before agents carried their project
 			json.name,
 			json.icon,
 			json.color,
@@ -449,6 +463,7 @@ export class Agent {
 	serializeForWire(): SerializedAgent {
 		return {
 			id:             this.id,
+			projectId:      this.projectId,
 			name:           this.name,
 			icon:           this.icon,
 			color:          this.color,

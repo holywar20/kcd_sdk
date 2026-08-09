@@ -8,6 +8,7 @@ import { Glob } from '../core/Glob'
 import { NameMatch } from '../core/NameMatch'
 import { EsCsv } from '../core/EsCsv'
 import type { FileEntry, FileStat, FileRoots } from '../core/FileTypes'
+import type { GrantRef } from '../session/InjectedItem'
 
 const _execFile = promisify( execFile )
 
@@ -419,6 +420,82 @@ export class SdkFileAccess {
 			if( !existsSync( candidate ) ) return candidate
 		}
 		return desired
+	}
+
+	/**
+	 * The ONE admission check for an agent-facing read: contained by the whitelist, or excused by a
+	 * user-authored GRANT. Returns `'whitelist'`, the grant that excused it, or null for denied.
+	 *
+	 * Shared because it is enforced in two PROCESSES — the spawned `starmind_file` child and the
+	 * in-process `starmind_files` built-in — and a security rule that lives in two places is a security
+	 * rule with two behaviours. `jail` alone was never enough to share: the ORDER (whitelist first, a
+	 * grant only as an exception afterwards) is the part that has to match.
+	 *
+	 * A grant covers EXACTLY its subject. A file grant permits that file; a folder grant permits that
+	 * folder and what sits under it — because a folder grant compiles to a LISTING, and a listing the
+	 * agent cannot then read from is a grant in name only. Nothing adjacent to either. Both cases run
+	 * through the same `jail` the whitelist uses, so a grant inherits its `..` collapse, its `sep`
+	 * boundary ( a grant on "/a/b.ts" cannot be stretched to "/a/b.ts.bak" ) and its Windows
+	 * case-folding, rather than growing a second path-comparison idiom beside the first.
+	 *
+	 * A grant is an exception to the whitelist and NOTHING MORE. It does not reach the blacklist, which
+	 * each caller applies afterwards: the deny-list exists to keep credentials out of a model's context,
+	 * and a rule a stray click can switch off is not that.
+	 */
+	static admits( path: string, roots: string[], grants: readonly GrantRef[] = [] ): 'whitelist' | GrantRef | null {
+		if( SdkFileAccess.jail( path, roots ) !== null ) return 'whitelist'
+		return grants.find( ( g ) => SdkFileAccess.jail( path, [ g.subject ] ) !== null ) ?? null
+	}
+
+	/**
+	 * Everywhere an agent may go — the enabled roots plus the subject of every grant in force. The
+	 * question `admits` answers one path at a time, answered instead as a LIST.
+	 *
+	 * Shared for the same reason `admits` is, and it earns it more than it looks: this list is what a
+	 * REFUSAL points at. A refusal naming roots the guard would not actually honour teaches the agent to
+	 * retry against a fiction, and it would be a convincing fiction — the agent has no other view of its
+	 * own scope. One composer means the pointer and the boundary move together.
+	 *
+	 * A WITNESS, never the boundary. `admits` decides; this only describes. Should the two ever disagree,
+	 * `admits` is right and this is the bug. Read the other way round it becomes a permission model made
+	 * of prose.
+	 *
+	 * Deduped, because a granted path may already sit inside an enabled root: the user handed over
+	 * something the agent could already reach, which is not an error and not worth reporting twice.
+	 */
+	static scope( roots: string[], grants: readonly GrantRef[] = [] ): string[] {
+		const paths = new Set( roots )
+		for( const grant of grants ) paths.add( grant.subject )
+		return [ ...paths ]
+	}
+
+	/**
+	 * The sentence a refusal POINTS with — where the caller may actually read, and what to do about it.
+	 *
+	 * A refusal that says "outside the whitelist" and stops tells an agent it was wrong without telling it
+	 * what would be right, and an agent with no other view of its own scope answers that by guessing paths
+	 * until one sticks. Naming the roots costs one line and ends the guessing.
+	 *
+	 * It rides on a REFUSAL and never as standing context. The agent does not need to carry its file scope
+	 * through every turn; it needs it at the one moment it got the question wrong.
+	 *
+	 * Shared prose, not just a shared list: BOTH doors refuse — the spawned `starmind_file` child and the
+	 * in-process built-in behind `FileGate` — and an agent that learns what to do from one refusal should
+	 * not meet different advice from the other. Takes the already-composed scope ( see `scope` ) so the
+	 * two callers compose the list once and this only words it.
+	 *
+	 * States the WHY before the where, and both matter. The why is what tells a caller this was a
+	 * CONTAINMENT refusal rather than a missing file or a blacklisted one — three outcomes that want three
+	 * different next moves, and an agent that cannot tell them apart retries the wrong one. The where is
+	 * what stops the retry being a guess. Written to follow a caller's own `"…" was refused.` opener.
+	 */
+	static scopeLine( scope: string[] ): string {
+		if( !scope.length ) {
+			return 'You have no file access at all right now — no roots are configured and nothing has been handed to you. '
+				+ 'Ask the user to add a root in the file-access settings, or to drop the file into the context gutter.'
+		}
+		return `It sits outside every path you may read. You may read within: ${ scope.join( ', ' ) }. `
+			+ 'Work inside one of those, or ask the user to add that folder or drop the file into the context gutter.'
 	}
 
 	/** Pure path containment — resolve `path` and return it iff it sits inside one of `roots`, else

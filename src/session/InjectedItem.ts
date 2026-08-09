@@ -58,8 +58,9 @@ export interface InjectedFile extends InjectedBase {
 }
 
 /** A folder — `subject` is its absolute path. Compiles to a flat LISTING ( subdirectories included, one
- *  level ), never a recursive read, and re-resolves on every compile so a file added tomorrow is in
- *  scope tomorrow. */
+ *  level ), never a recursive read. Rides that listing WHOLE on the turn it is injected and as a pointer
+ *  on every turn after, like every other kind: the agent lists on demand, which is more current than a
+ *  standing listing compiled at the last send and costs nothing in between. */
 export interface InjectedFolder extends InjectedBase {
 	kind: 'folder';
 }
@@ -93,4 +94,16 @@ export type InjectedItem = InjectedFile | InjectedFolder | InjectedTool;
 export interface GrantRef {
 	kind: InjectedKind;
 	subject: string;
+}
+
+/**
+ * The granted TOOL subjects ( `server.tool` ) out of a grant list — what the tool registry widens its
+ * admission by, at both the advertise and the resolve moment.
+ *
+ * A filter rather than a second stored list: the grants ARE the record, and a derived view cannot fall
+ * out of step with them the way a parallel array would. Kinds other than `tool` are simply not this
+ * question — a file grant has nothing to say about which tools exist.
+ */
+export function grantedTools( grants: GrantRef[] ): string[] {
+	return grants.filter( ( g ) => g.kind === 'tool' ).map( ( g ) => g.subject );
 }

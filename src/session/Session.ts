@@ -53,6 +53,9 @@ export type FontFamilyKey = 'sans' | 'serif' | 'mono';
 /** The wire / DB-seed form of a Session. Flat and declarative — everything a session IS. */
 export interface SerializedSession {
 	id: string;
+	/** The workspace this session ran in ( `projects.id` ). Denormalized from its agent rather than
+	 *  derived through it, so a DRAFT session — which has no agent — still carries one. */
+	projectId: string;
 	/** The agent this session was spawned from — its identity source. EMPTY STRING ('') = a DRAFT
 	 *  session not yet bound to an agent (spawned agentless from the roster's "+ session"); it's inert
 	 *  until an agent is assigned. Never null on the wire — the sentinel is '', so the DB's NOT NULL
@@ -87,6 +90,8 @@ export interface SerializedSession {
 
 export interface SessionOptions {
 	id?: string;
+	/** The owning workspace ( `projects.id` ) — the spawning caller resolves it from the agent. */
+	projectId?: string;
 	/** Omit ( or pass '' ) to spawn a DRAFT session with no agent yet — assigned later via reassign(). */
 	agentId?: string;
 	title?: string | null;
@@ -115,6 +120,9 @@ const DEFAULT_POLICIES: SessionPolicies = {
 export class Session {
 
 	readonly id: string;
+	/** The workspace this session ran in ( see SerializedSession.projectId ). Readonly for the agent's
+	 *  reason: set once at birth, from the agent it was spawned under. */
+	readonly projectId: string;
 	/** Mutable now ( was readonly ) — a draft session is born agentless ('') and reassigned once the
 	 *  user picks an agent. '' is the unassigned sentinel; hasAgent() is the readable check. */
 	agentId: string;
@@ -176,6 +184,7 @@ export class Session {
 
 	private constructor(
 		id: string,
+		projectId: string,
 		agentId: string,
 		title: string | null,
 		folder: string | null,
@@ -188,6 +197,7 @@ export class Session {
 		policies: SessionPolicies,
 	) {
 		this.id         = id;
+		this.projectId  = projectId;
 		this.agentId    = agentId;
 		this.title      = title;
 		this.folder     = folder;
@@ -208,6 +218,7 @@ export class Session {
 		const now = Date.now();
 		return new Session(
 			opts.id ?? crypto.randomUUID(),
+			opts.projectId ?? '',
 			opts.agentId ?? '',
 			opts.title ?? null,
 			opts.folder ?? null,
@@ -225,6 +236,7 @@ export class Session {
 	static fromSerialized( json: SerializedSession ): Session {
 		return new Session(
 			json.id,
+			json.projectId ?? '',   // absent on a payload written before sessions carried their project
 			json.agentId ?? '',
 			json.title ?? null,
 			json.folder ?? null,
@@ -264,6 +276,7 @@ export class Session {
 	serializeForWire(): SerializedSession {
 		return {
 			id:         this.id,
+			projectId:  this.projectId,
 			agentId:    this.agentId,
 			title:      this.title,
 			folder:     this.folder,
@@ -376,6 +389,28 @@ export class Session {
 			.windowed( this.policies.retention )
 			.compacted( this.compactions );
 	}
+
+	// ── THREE READERS OVER ONE TRANSCRIPT ────────────────────────────────────────────────────────────
+	//
+	// `attachments()`, `grants()` and `hoistedGrants()` all walk the same grant entries and all read like
+	// "the injected things". They are not redundant, and collapsing any two of them breaks something
+	// quietly rather than loudly. Each answers a genuinely different question:
+	//
+	//   attachments()   — what is on the DECK?           live entries + pending. What the gutter draws.
+	//   grants()        — what is AUTHORIZED?            live + pending + hoisted. What a gate asks.
+	//   hoistedGrants() — what must reach the MANIFEST?  compacted, unrevoked, and not also live.
+	//
+	// They part company on the two axes that matter: whether COMPACTION removes an entry, and whether a
+	// REVOCATION does. Compaction takes an entry off the deck but not out of the authorization — a
+	// permission does not expire because its turn got summarised. A revocation is pending on both until
+	// the compaction that executes it, so a revoked grant still shows and still authorizes until then.
+	//
+	// `hoistedGrants()` is a SUBSET of `grants()` and disjoint from `attachments()` by construction: it
+	// exists for exactly the entries the deck has stopped showing. That is what makes the hoist a MOVE
+	// between tiers rather than a copy.
+	//
+	// Merge them and either the gutter starts drawing compacted files, or a permission silently expires at
+	// a compaction the user never asked for and cannot see.
 
 	/**
 	 * Every attachment this session carries — those already on a turn plus anything attached since the

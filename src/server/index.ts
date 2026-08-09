@@ -6,8 +6,8 @@
 export { McpServer } from './McpServer';
 export type { ToolDefinition, ToolResult, ContentBlock, ServerInfo } from './McpServer';
 
-export { CallMeta } from './CallMeta';
+export { CallMeta, GRANT_ENV } from './CallMeta';
 
 export { StarmindServer } from './StarmindServer';
-export type { ServerManifest } from './manifest';
+export type { ServerManifest, ServerWorkspace } from './manifest';
 export type { TestSpec, Assertion, VerifyReport } from './verify';
