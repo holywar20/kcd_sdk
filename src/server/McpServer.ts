@@ -56,7 +56,7 @@ export interface ToolDefinition {
 	 *  full read a surface fetches on demand. Emitted in `tools/list` when present. */
 	doc?:        string;
 	/** `meta` is the call's out-of-band envelope — JSON-RPC's `_meta`, which rides BESIDE `arguments`
-	 *  and is written by the CLIENT, never by the model ( see CallMeta ). Optional, so a handler with
+	 *  and is written by the CLIENT, never by the model ( see Authorization ). Optional, so a handler with
 	 *  no interest in it stays a one-parameter function.
 	 *
 	 *  A handler FORWARDS it and never reads it: only a guard interprets an envelope. That asymmetry is
@@ -216,7 +216,7 @@ export class McpServer {
 
 		const args = ( params?.[ 'arguments' ] ?? {} ) as Record<string, unknown>;
 		// `_meta` sits BESIDE `arguments` on params — outside the tool's inputSchema, and therefore
-		// outside anything the model can author. Carried opaquely from here to the guards; see CallMeta.
+		// outside anything the model can author. Carried opaquely from here to the guards; see Authorization.
 		const meta = ( params?.[ '_meta' ] ?? {} ) as Record<string, unknown>;
 		return this.invoke( name, args, meta );
 	}

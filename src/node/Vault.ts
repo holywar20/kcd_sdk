@@ -148,16 +148,25 @@ export class Vault {
 	}
 
 	/**
-	 * Is this vault-relative path part of the LIBRARY — i.e. a governed artifact rather than scratch?
+	 * Is this vault-relative path GRADED — held to the CURRENT document standard on a whole-vault sweep?
 	 *
-	 * `VaultLayout` already marks six directories `indexed: false` and calls them, in its own words,
-	 * "scratch and output space, not a gap". Validation has never honoured that: `scan()` walks the
-	 * whole root, so backups, work notes, and `.js` dev utilities were all graded as KCD documents.
-	 * That accounted for roughly half of every issue this vault has ever reported. Reported drift in
-	 * a frozen backup is not drift; it is a category error.
+	 * Two exclusions, and they are not the same thing:
+	 *
+	 *   • EPHEMERAL ( `indexed: false` — work, logs, reports, audits, scratch, dev-utilities ). Not
+	 *     installed into a user's vault at all, so it is neither graded nor legal to link into ( §1.1 ).
+	 *     `scan()` walks the whole root, so before this gate existed backups, work notes and `.js` dev
+	 *     utilities were all graded as KCD documents — roughly half of every issue this vault has ever
+	 *     reported. Reported drift in a frozen backup is not drift; it is a category error.
+	 *   • ARCHIVAL ( `archival: true` — `plans/plans_complete` ). The opposite on the shipping axis: it
+	 *     DOES install, and live artifacts link to it for provenance, so it cannot be ephemeral without
+	 *     making those links illegal. It stops being graded because the standard moved on after the
+	 *     document was retired. Same category error, arrived at from the other direction.
+	 *
+	 * Naming a file explicitly still grades it — the caller asked for that file. This gate binds only
+	 * the unscoped sweep, which is where a category error turns into noise nobody can act on.
 	 */
 	isLibraryPath( relPath: string ): boolean {
-		return !VaultLayout.isEphemeralHref( relPath );
+		return !VaultLayout.isEphemeralHref( relPath ) && !VaultLayout.isArchivalPath( relPath );
 	}
 
 	/** Is anything on disk at this href/address? A plain fact — never a verdict ( protocol §1.1 ). */
@@ -333,8 +342,12 @@ export class Vault {
 		const fromAbs = this.toAbs( from );
 		const destAbs = this.toAbs( to );
 
-		if ( !fs.existsSync( fromAbs ) ) throw new Error( `Cannot move: source "${ from }" does not exist` );
-		if ( fs.existsSync( destAbs ) )  throw new Error( `Cannot move: destination "${ to }" already exists` );
+		// Both refusals name the NEXT MOVE, not just the fault. These strings surface verbatim as a tool's
+		// error text, so whatever they omit is a round trip the caller pays to recover.
+		if ( !fs.existsSync( fromAbs ) )
+			throw new Error( `Cannot move: source "${ from }" does not exist — paths are vault-relative to "${ this.root }"; find the real one with a query before moving it` );
+		if ( fs.existsSync( destAbs ) )
+			throw new Error( `Cannot move: destination "${ to }" already exists — this never overwrites; pick a free path, or delete the occupant first` );
 
 		const newHref = `${ this.docRoot }/${ to }`.replace( /\\/g, '/' );
 		const plan: HealPlan = { op: 'move', from, to, edits: this.inboundEdits( fromAbs, newHref ) };
@@ -410,7 +423,8 @@ export class Vault {
 	 */
 	delete( target: string, opts?: { dryRun?: boolean } ): HealPlan {
 		const targetAbs = this.toAbs( target );
-		if ( !fs.existsSync( targetAbs ) ) throw new Error( `Cannot delete: "${ target }" does not exist` );
+		if ( !fs.existsSync( targetAbs ) )
+			throw new Error( `Cannot delete: "${ target }" does not exist — paths are vault-relative to "${ this.root }"; find the real one with a query before deleting it` );
 
 		const dependents = this.identityDependents( targetAbs );
 		if ( dependents.length > 0 )

@@ -31,6 +31,19 @@
  */
 export type ServerWorkspace = 'none' | 'cwd' | 'per-call';
 
+/**
+ * The hard wall-clock ceiling on ONE tool call, in ms, for a server that names none. Claude Code's own
+ * default is ~27.8 hours ( read off the binary and measured 2026-08-13 ), which is not a ceiling at all:
+ * a wedged call is never cut loose and burns the entire harness turn instead, surfacing as a failure that
+ * names no server and no tool.
+ *
+ * 180 000 is a LIVENESS ceiling, not a budget. Every installed server's measured worst case is SECONDS
+ * ( a 16 158-file survey walks in ~243ms; grep is capped at 100 files ), so this is ~100x margin. What
+ * picks the number is the far end: it must fire well inside `TURN_TIMEOUT_MS` so a wedge surfaces as
+ * "server X tool Y timed out" with the turn still live. Those two are ONE budget — if that moves, move this.
+ */
+export const DEFAULT_TOOL_TIMEOUT_MS = 180_000;
+
 export interface ServerManifest {
 	// ── Identity (author-declared) ──────────────────────────────────────────────
 	id:           string;                 // slug; matches the server's folder name
@@ -43,6 +56,7 @@ export interface ServerManifest {
 	doc?:         string;                 // the server's own doc-block — its account of what it is, the recursive parent of its tools' docs
 	config?:      ServerConfigSurface;    // the server's self-declared config surface — what the app's config screen renders for it (see below)
 	workspace?:   ServerWorkspace;        // how this server relates to a PROJECT — see below. Absent means 'none'.
+	timeoutMs?:   number;                 // hard ceiling on ONE tool call. Absent means DEFAULT_TOOL_TIMEOUT_MS.
 
 
 

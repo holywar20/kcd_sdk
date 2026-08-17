@@ -12,8 +12,9 @@
  * bridge whole via serialize / fromSerialized, the same trinity as Agent.
  */
 
-import { Transcript, type Turn, type WireMessage, type WireOptions, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type SessionPolicies, type SessionCompaction, type Grant, isGrant, grantSubject, grantKind, frameToolResultStub, KEEP_TOOL_RESULT_TURNS } from './TurnEntry';
+import { Transcript, type Turn, type WireMessage, type WireOptions, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type SessionPolicies, type SessionCompaction, type Grant, isGrant, grantSubject, grantKind, grantLevel, frameToolResultStub, KEEP_TOOL_RESULT_TURNS } from './TurnEntry';
 import { type GrantRef } from './InjectedItem';
+import type { SlotRow } from '../core/html/KcdContext';
 
 /**
  * A session's LIFECYCLE state — is this conversation live or filed away? Persisted, user-driven,
@@ -448,11 +449,11 @@ export class Session {
 			if ( turn.compacted ) continue;
 			for ( const entry of turn.entries ) {
 				if ( !isGrant( entry ) ) continue;
-				out.set( grantSubject( entry ), { kind: grantKind( entry ), subject: grantSubject( entry ) } );
+				out.set( grantSubject( entry ), _ref( entry ) );
 			}
 		}
 		for ( const entry of this.pendingAttachments ) {
-			out.set( grantSubject( entry ), { kind: grantKind( entry ), subject: grantSubject( entry ) } );
+			out.set( grantSubject( entry ), _ref( entry ) );
 		}
 		// …plus everything already CANONIZED. A compacted grant left the transcript but not the session: that
 		// is what promotion means, and an authorization that evaporated the moment its turn was summarised
@@ -462,20 +463,33 @@ export class Session {
 	}
 
 	/**
-	 * The CANONIZED grants as manifest rows — what/where/why, one line each, in the shape every other
-	 * manifest table uses.
+	 * The CANONIZED grants as manifest rows — what/where/why, in the shape every other manifest table uses.
 	 *
 	 * `why` is the same for all of them and says so plainly: a user granted this. That is not filler — it is
 	 * the whole authorization model in the one place the agent reads it, and an agent that knows a
 	 * capability came from the person it is working for reasons about it differently than one that found it
 	 * lying in its configuration.
 	 *
-	 * '' when nothing has been canonized, so the section drops out of the manifest entirely rather than
-	 * riding as an empty heading.
+	 * STRUCTURED ROWS, NOT PROSE, and that is the whole correction. This returned a pre-joined string, which
+	 * read like the shape every other manifest section uses and was not it: a manifest section is MERGED,
+	 * and the merge reads each block's structured `rows` and re-renders from them by design — it never
+	 * parses rendered text back apart. A block carrying only text therefore contributed no rows, so every
+	 * canonized grant was dropped on the way to the wire and the heading arrived alone. The empty `## Grants`
+	 * people saw was not a cosmetic slip; it was the entire section failing to say anything.
+	 *
+	 * `where` is the SUBJECT, which is also what the merge dedupes on — correct here rather than incidental,
+	 * because a grant's identity IS its subject. Two grants for one path are one row, exactly as two lenses
+	 * pointing at one reference are.
+	 *
+	 * Empty when nothing has been canonized, so the section drops out of the manifest rather than riding as
+	 * a heading with nothing under it.
 	 */
-	grantManifest(): string {
-		const rows = this.hoistedGrants().map( ( g ) => `- ${ g.kind } · ${ g.subject } · granted by the user for this session` );
-		return rows.length ? rows.join( '\n' ) : '';
+	grantRows(): SlotRow[] {
+		return this.hoistedGrants().map( ( g ) => ( {
+			what:  g.kind,
+			where: g.subject,
+			why:   'granted by the user for this session'
+		} ) );
 	}
 
 	/**
@@ -504,7 +518,7 @@ export class Session {
 				// promoted. Nothing else has to run — not-promoting is the execution, which is why one pass
 				// settles both deferred decisions.
 				if ( entry.removed ) { out.delete( subject ); continue; }
-				out.set( subject, { kind: grantKind( entry ), subject } );
+				out.set( subject, _ref( entry ) );
 			}
 		}
 		// A re-injection on a LIVE turn un-hoists it: the reference is riding again, so the manifest row
@@ -655,4 +669,18 @@ export class Session {
 		if ( this.title ) return this.title;
 		return 'New session';
 	}
+}
+
+/**
+ * One transcript entry read as an AUTHORIZATION — the three facts a gate needs, by the three rules that
+ * own them.
+ *
+ * A free function rather than three inline object literals because there are THREE producers above ( live
+ * grants, pending attachments, canonized grants ) and a field added to `GrantRef` has to reach all of
+ * them. When `level` was added, two of the three were the ones that mattered and the third was the one
+ * that would have shipped a grant without a depth — silently, since an absent field parses as the
+ * conservative rung and simply under-grants where a person expected write.
+ */
+function _ref( entry: Grant ): GrantRef {
+	return { kind: grantKind( entry ), subject: grantSubject( entry ), level: grantLevel( entry ) };
 }

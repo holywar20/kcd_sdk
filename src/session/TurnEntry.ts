@@ -1,7 +1,7 @@
 import { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
 import { Assert } from '../core/Assert';
 import { type SlotMode } from '../primitives/types';
-import { type InjectedKind } from './InjectedItem';
+import { type AccessLevel, type InjectedKind } from './InjectedItem';
 
 /**
  * TurnEntry / Turn / Transcript — the typed, sequential account of what happened in a session,
@@ -141,9 +141,9 @@ export type TurnEntry = EntryBase & (
 	| { kind: 'assistant';     text: string }
 	| { kind: 'tool-call';     id: string; name: string; input: unknown }
 	| { kind: 'tool-result';   toolUseId: string; content: string; isError?: boolean }
-	| { kind: 'injected-file'; path: string; name: string; mediaType: string; bytes: number; removed?: boolean }
-	| { kind: 'image';         path: string; name: string; mediaType: string; width?: number; height?: number; removed?: boolean }
-	| { kind: 'injected-folder'; path: string; name: string; removed?: boolean }
+	| { kind: 'injected-file'; path: string; name: string; mediaType: string; bytes: number; removed?: boolean; level?: AccessLevel }
+	| { kind: 'image';         path: string; name: string; mediaType: string; width?: number; height?: number; removed?: boolean; level?: AccessLevel }
+	| { kind: 'injected-folder'; path: string; name: string; removed?: boolean; level?: AccessLevel }
 	| { kind: 'injected-tool';   server: string; name: string; removed?: boolean }
 	| { kind: 'thinking';      text: string; signature?: string }
 	| { kind: 'error';         code: string; message: string; status: number | null; body: string | null; detail?: Record<string, unknown> }
@@ -190,6 +190,24 @@ export function grantKind( entry: Grant ): InjectedKind {
 	if ( entry.kind === 'injected-folder' ) return 'folder';
 	if ( entry.kind === 'injected-tool' )   return 'tool';
 	return 'file';
+}
+
+/**
+ * How deep a grant entry reaches — the transcript's `level | null | absent` resolved to the one value an
+ * authorization may carry.
+ *
+ * Beside `grantKind` and `grantSubject` on purpose: three facts read off one entry, by one rule each, in
+ * one file. Every producer of a `GrantRef` calls all three, so none of them can drift from the others.
+ *
+ * A TOOL is `none` — it is not a path grant and has no depth to report. A path entry that never chose
+ * resolves to `read`, the conservative rung and the one a grant meant before depths existed. That
+ * ambiguity is settled HERE rather than at each gate: null is an honest thing for a transcript row to say
+ * and a useless thing for a guard to be handed, and a guard left to decide for itself is three guards
+ * deciding differently.
+ */
+export function grantLevel( entry: Grant ): AccessLevel {
+	if ( entry.kind === 'injected-tool' ) return 'none';
+	return entry.level ?? 'read';
 }
 
 /** The discriminant values that count as the session's STANDING context cost — what `estimateTokens()`
@@ -327,18 +345,6 @@ export type SessionPolicies = {
 };
 
 /**
- * One COMPACTION of a session's transcript, as both processes read it — a structured summary standing in
- * for the turns it covers. The wire twin of main's `session_compactions` row.
- *
- * `throughTurnId` carries the window rule: a compaction covers the PREFIX of the transcript up to and
- * including that turn ( a DB turn id, i.e. an exchange's traceId — never a renderer-synthetic id, which
- * is regenerated on every reload ). `fromTurnId` is what the pass actually READ, which diverges the
- * moment a second compaction reads the first one plus what followed; it feeds display, never the window.
- *
- * `mode` is the SlotMode three-state, and `'off'` is the one that matters: an inert compaction stays in
- * the timeline as history while the raw turns ride again. Nothing here ever deletes a turn.
- */
-/**
  * How many completed EXCHANGES a session needs before compacting it is worth doing. Below this the
  * summary would cost more tokens than the turns it replaced, and the user would be paying a model call
  * to make their context bigger.
@@ -364,6 +370,25 @@ export const MIN_COMPACTION_TURNS = 4;
  */
 export const KEEP_TOOL_RESULT_TURNS = 3;
 
+/**
+ * One COMPACTION of a session's transcript, as both processes read it — a structured summary standing in
+ * for the turns it covers. The wire twin of main's `session_compactions` row.
+ *
+ * `throughTurnId` carries the window rule: a compaction covers the PREFIX of the transcript up to and
+ * including that turn ( a DB turn id, i.e. an exchange's traceId — never a renderer-synthetic id, which
+ * is regenerated on every reload ). `fromTurnId` is what the pass actually READ, which diverges the
+ * moment a second compaction reads the first one plus what followed; it feeds display, never the window.
+ *
+ * `mode` is the SlotMode three-state, and `'off'` is the one that matters: an inert compaction stays in
+ * the timeline as history, and its summary stops riding to the wire.
+ *
+ * It is NOT an undo, and this block said it was until 2026-08-10. Under the flag model the span the
+ * summary covered was marked `compacted: true` + `include: false` by `compactThrough()` and PERSISTED;
+ * neither `compacted()` nor `resetWindow()` ever re-includes a compacted turn ( see both, which say so
+ * outright ). So turning a compaction off drops the summary AND leaves its span dropped — a deliberate
+ * "discard this whole stretch", not a recovery. Nothing here deletes a turn from the RECORD; `turnRows()`
+ * still shows every one. What is gone is their place in the context sent to the model.
+ */
 export interface SessionCompaction {
 	id:            string;
 	sessionId:     string;
@@ -1197,14 +1222,22 @@ export class Transcript {
 		// `frameFolderListing` / `frameToolSurface` and hands over the result: the framing definition still
 		// lives here and is still tested here, which is the property that actually mattered. The alternative
 		// was a second transient field per payload shape.
-		if ( entry.contents ) {
+		// PRESENCE, not truthiness. `contents` is `string | undefined`, so an empty file is `''` — which is
+		// falsy, and testing it as a boolean reported a successfully-read empty file as a read FAILURE. The two
+		// states were always distinguishable in the type; the check simply was not asking the question the
+		// field answers. An empty file is a legitimate state and rides as an empty body.
+		//
+		// It is not cosmetic. `write` is whole-file replace with no append, so an agent told a populated file
+		// was unreadable is one blind write away from destroying it — and this arm is exactly what would have
+		// told it that. The empty case is only low-stakes by luck of there being nothing to lose.
+		if ( entry.contents !== undefined ) {
 			return entry.kind === 'injected-file' || entry.kind === 'image'
 				? frameFile( entry.name, entry.contents )
 				: entry.contents;
 		}
-		// A FILE with no contents on the live turn means the read FAILED, and the model is told so rather
-		// than handed silence. A folder or a tool has no compile yet, so absence there is ordinary and it
-		// simply reads as its reference — when that compile lands, absence becomes a failure for them too
+		// A FILE with NO contents field on the live turn means the read FAILED, and the model is told so
+		// rather than handed silence. A folder or a tool has no compile yet, so absence there is ordinary and
+		// it simply reads as its reference — when that compile lands, absence becomes a failure for them too
 		// and this arm should grow the same distinction.
 		if ( entry.kind === 'injected-file' || entry.kind === 'image' ) {
 			return frameFailedInjection( entry.name, entry.path, 'not read' );

@@ -1,8 +1,8 @@
 /**
  * SlotResolver — the habit-class mutual-exclusion cascade over a merged `TaggedBlock[]`
  * ( context-optimization plan, Phase 3, protocol §6 ). A `habit-class` is a named group where
- * exactly one member may apply ( "textual radio buttons" — `session-logging` = { session-log-
- * aggressive, session-log-never } ). Classless blocks are additive and never enter this cascade —
+ * exactly one member may apply ( "textual radio buttons" — `log-session` = { session-log-
+ * aggressive, log-session-never } ). Classless blocks are additive and never enter this cascade —
  * `ContextAssembler` alone governs them. Classed blocks compete: for each class, the most specific
  * source layer that contributes a member WINS; every other member of that class is dropped
  * (not merged, not stacked — genuinely absent from the compiled corpus), and the winner renders at
@@ -10,8 +10,8 @@
  *
  * ONE core computation, THREE-callable idiom: `compilePlan()` is the shared plan every public
  * method reads — computed once so the visualization and the compiled text can never drift against
- * each other, the same guarantee `identity()`/`identitySegments()` (Phase 1) and `ContextAssembler`
- * (Phase 2) already lean on.
+ * each other. The same guarantee `Agent.compiledContext()` leans on: one list, projected to the wire
+ * and to the per-source breakdown, rather than two derivations kept in step by hand.
  *   - `describe()` — the plan's `slots`, unreduced: every class, every candidate, who won and why.
  *     View-template-ready data for a Slot UI (Phase 5) to visualize the relationships — nothing here
  *     needs to render prose, just labels and a boolean.

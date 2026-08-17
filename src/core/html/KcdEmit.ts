@@ -78,9 +78,18 @@ export const KcdEmit = new class KcdEmit {
 		return `\t<dt>${ key }</dt><dd data-kcd-field="${ key }" data-kcd-type="${ type }">${ text }</dd>`;
 	}
 
-	/** Replace the existing `<dl data-kcd-frontmatter>` inside a body-HTML fragment with a freshly
-	 *  built one, leaving every sibling ( regions/sections/slots ) byte-for-byte as parsed. No existing
-	 *  block ( shouldn't happen on a validated artifact ) falls back to prepending it. */
+	/** Replace the existing `<dl data-kcd-frontmatter>` inside a body-HTML fragment with a freshly built
+	 *  one. No existing block ( shouldn't happen on a validated artifact ) falls back to prepending it.
+	 *
+	 *  SIBLINGS ARE RE-SERIALIZED, NOT PRESERVED — this said "byte-for-byte as parsed" until 2026-08-13
+	 *  and that was never true. It re-parses the whole body and rebuilds it through `HtmlTree.innerHtml`,
+	 *  which normalizes incidental whitespace and quote style ( its own doc-comment says so: "NORMALIZED,
+	 *  not byte-original" ). Fine by ruling — parity is asserted on section names, links and policy, never
+	 *  on body bytes — but a guarantee stated here that the code did not keep is how the raw-content
+	 *  escape defect stayed invisible: anyone auditing the save path read this line and stopped.
+	 *
+	 *  What IS byte-exact is raw content ( `<script>` / `<style>` ), which `serialize` now round-trips
+	 *  verbatim to match how `parse` captured it. */
 	spliceFrontmatter( body: string, dlHtml: string ): string {
 		const root = HtmlTree.parse( body );
 		const replacement = HtmlTree.parse( dlHtml ).kids.find( HtmlTree.isEl )!;

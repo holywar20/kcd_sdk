@@ -89,6 +89,22 @@ describe( 'injection — the live turn carries the file', () => {
 		expect( wire ).toContain( 'injection failed' );
 		expect( wire ).toContain( 'C:/repo/gone.ts' );
 	} );
+
+	it( 'carries an EMPTY file through as empty, never as a failed read', () => {
+		// The reported defect, pinned. `contents` was tested for truthiness, so `''` — a file that read
+		// perfectly and happens to be empty — took the failure arm and told the model it was unreadable.
+		//
+		// Worth a test rather than a comment because of what sits downstream: `write` is whole-file replace
+		// with no append, so an agent that believes a file is unreadable is one blind write from destroying
+		// it. The empty case is only harmless because there was nothing in it to lose.
+		const t = new Transcript();
+		const live = t.openTurn( 'turn-1', 0 );
+		t.append( { ...fileEntry( 'empty.md' ), contents: '' } as TurnEntry, live );
+
+		const wire = wireText( t );
+		expect( wire ).not.toContain( 'injection failed' );
+		expect( wire ).toContain( 'injected file — empty.md' );
+	} );
 } );
 
 describe( 'after injection — every prior turn carries a pointer', () => {

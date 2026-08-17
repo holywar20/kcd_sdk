@@ -8,7 +8,33 @@ import { Glob } from '../core/Glob'
 import { NameMatch } from '../core/NameMatch'
 import { EsCsv } from '../core/EsCsv'
 import type { FileEntry, FileStat, FileRoots } from '../core/FileTypes'
+import { higherLevel, operationsFor, verbFor, type AccessEntry } from '../core/AccessPolicy'
+import { accessRank, type AccessLevel } from '../session/InjectedItem'
 import type { GrantRef } from '../session/InjectedItem'
+
+/**
+ * What a path resolves to, and what supplied it.
+ *
+ * Carries `via` because BOTH outcomes have to be auditable, not just the refusal. `'config'` when the
+ * configured floor is what permitted this, the grant itself when a grant lifted it above that floor, and
+ * null only when the answer is `none` — so a caller can always answer "why was this allowed?" without
+ * recomputing anything.
+ */
+export interface AccessVerdict {
+	level: AccessLevel
+	via:   'config' | GrantRef | null
+	/**
+	 * The depth GRANTS alone give this path — the fact "a person explicitly handed this subject over, at
+	 * this rung", independent of whether that was what decided the verdict.
+	 *
+	 * Separate from `via` because they answer different questions and one caller needs both. `via` is for
+	 * the AUDIT line and names a grant only when it changed the outcome. This is for the write surface,
+	 * which relaxes its extension limit on an explicit hand-over — and that must not depend on whether
+	 * configuration happened to already cover the path, or the same gesture would work on a file outside
+	 * the project and be refused on one inside it, for reasons invisible to the person making it.
+	 */
+	granted: AccessLevel
+}
 
 const _execFile = promisify( execFile )
 
@@ -423,28 +449,62 @@ export class SdkFileAccess {
 	}
 
 	/**
-	 * The ONE admission check for an agent-facing read: contained by the whitelist, or excused by a
-	 * user-authored GRANT. Returns `'whitelist'`, the grant that excused it, or null for denied.
+	 * THE resolver — how deeply this path may be reached, and what supplied that depth.
+	 *
+	 * The one question every guard asks. A read guard needs `read`, a write guard `write`, a delete guard
+	 * `delete`, and all three ask this and compare with `levelMeets`. Before this existed the same fold
+	 * was performed in five places; they agreed, but by five careful authors rather than by construction.
 	 *
 	 * Shared because it is enforced in two PROCESSES — the spawned `starmind_file` child and the
-	 * in-process `starmind_files` built-in — and a security rule that lives in two places is a security
-	 * rule with two behaviours. `jail` alone was never enough to share: the ORDER (whitelist first, a
-	 * grant only as an exception afterwards) is the part that has to match.
+	 * in-process built-in behind `FileGate` — and a security rule living in two places is a security rule
+	 * with two behaviours. `jail` alone was never enough to share: the COMBINATION rule is the part that
+	 * has to match.
+	 *
+	 * FLOOR PLUS. The verdict is the deepest level anything grants this path — configured entries and
+	 * grants alike, maximised, never most-specific. See AccessPolicy for why the model is deliberately
+	 * this rigid.
 	 *
 	 * A grant covers EXACTLY its subject. A file grant permits that file; a folder grant permits that
 	 * folder and what sits under it — because a folder grant compiles to a LISTING, and a listing the
 	 * agent cannot then read from is a grant in name only. Nothing adjacent to either. Both cases run
-	 * through the same `jail` the whitelist uses, so a grant inherits its `..` collapse, its `sep`
-	 * boundary ( a grant on "/a/b.ts" cannot be stretched to "/a/b.ts.bak" ) and its Windows
-	 * case-folding, rather than growing a second path-comparison idiom beside the first.
+	 * through the same `jail` a configured root uses, so a grant inherits its `..` collapse, its `sep`
+	 * boundary ( a grant on "/a/b.ts" cannot be stretched to "/a/b.ts.bak" ) and its Windows case-folding,
+	 * rather than growing a second path-comparison idiom beside the first.
 	 *
-	 * A grant is an exception to the whitelist and NOTHING MORE. It does not reach the blacklist, which
+	 * A grant is an exception to CONTAINMENT and nothing more. It does not reach the blacklist, which
 	 * each caller applies afterwards: the deny-list exists to keep credentials out of a model's context,
 	 * and a rule a stray click can switch off is not that.
+	 *
+	 * `via` NAMES THE GRANT ONLY WHEN THE GRANT MATTERED — when it lifted the verdict above what
+	 * configuration alone would have given. That is the auditable fact: a capability EXCEPTION nobody can
+	 * see is the one outcome worse than not having the feature, while a grant duplicating access the
+	 * agent already had is not an exception at all and reporting it as one would train people to ignore
+	 * the line.
 	 */
-	static admits( path: string, roots: string[], grants: readonly GrantRef[] = [] ): 'whitelist' | GrantRef | null {
-		if( SdkFileAccess.jail( path, roots ) !== null ) return 'whitelist'
-		return grants.find( ( g ) => SdkFileAccess.jail( path, [ g.subject ] ) !== null ) ?? null
+	static resolveLevel( path: string, entries: readonly AccessEntry[], grants: readonly GrantRef[] = [] ): AccessVerdict {
+		let configured: AccessLevel = 'none'
+		for( const entry of entries ) {
+			if( SdkFileAccess.jail( path, [ entry.path ] ) === null ) continue
+			configured = higherLevel( configured, entry.level )
+		}
+
+		let best: GrantRef | null = null
+		let granted: AccessLevel = 'none'
+		for( const grant of grants ) {
+			// A TOOL grant is not a path grant and has nothing to say about a path. Skipped by KIND rather
+			// than left to its `none` level, because a qualified tool id is a string and `jail` would
+			// happily resolve it as a relative directory name — improbable, and improbable is not a
+			// containment argument.
+			if( grant.kind !== 'file' && grant.kind !== 'folder' ) continue
+			if( SdkFileAccess.jail( path, [ grant.subject ] ) === null ) continue
+			if( accessRank( grant.level ) <= accessRank( granted ) ) continue
+			granted = grant.level
+			best    = grant
+		}
+
+		if( accessRank( granted ) > accessRank( configured ) ) return { level: granted, via: best, granted }
+		if( configured !== 'none' ) return { level: configured, via: 'config', granted }
+		return { level: 'none', via: null, granted }
 	}
 
 	/**
@@ -460,13 +520,46 @@ export class SdkFileAccess {
 	 * `admits` is right and this is the bug. Read the other way round it becomes a permission model made
 	 * of prose.
 	 *
-	 * Deduped, because a granted path may already sit inside an enabled root: the user handed over
+	 * Deduped, because a granted path may already sit inside a configured root: the user handed over
 	 * something the agent could already reach, which is not an error and not worth reporting twice.
+	 *
+	 * FILTERED BY THE LEVEL THE CALLER NEEDS. A refusal for a write that pointed at read-only roots would
+	 * be the same fiction one rung down — the agent retries there and is refused again, having been told
+	 * where to go. Defaults to `read` because that is what the existing callers mean; naming the level in
+	 * the prose is Phase 6.
 	 */
-	static scope( roots: string[], grants: readonly GrantRef[] = [] ): string[] {
-		const paths = new Set( roots )
-		for( const grant of grants ) paths.add( grant.subject )
-		return [ ...paths ]
+	static scope( entries: readonly AccessEntry[], grants: readonly GrantRef[] = [], required: AccessLevel = 'read' ): string[] {
+		return SdkFileAccess.scopeEntries( entries, grants, required ).map( ( e ) => e.path )
+	}
+
+	/**
+	 * The same witness, still carrying each path's LEVEL — what an agent needs to reason about a boundary
+	 * instead of discovering it by tripping over it.
+	 *
+	 * The bare-path form above answers "where may I go", which is the right shape for a refusal that has
+	 * already happened. It is the wrong shape for the question an agent asks BEFORE acting, because a list
+	 * of paths with no depths means the only route to learning a root is read-only is to attempt a write and
+	 * be refused — the agent is forced to probe the gate to read the policy, and the trace then records a
+	 * failed attempt where it should have recorded an informed decision.
+	 *
+	 * FLOOR PLUS applies here too: a path named by both a configured entry and a grant reports the HIGHER of
+	 * the two, exactly as `resolveLevel` would answer for it. Reporting either one alone would make this
+	 * witness disagree with the boundary it describes, which is the one thing it may never do.
+	 */
+	static scopeEntries( entries: readonly AccessEntry[], grants: readonly GrantRef[] = [], required: AccessLevel = 'read' ): AccessEntry[] {
+		const best = new Map<string, AccessLevel>()
+		const raise = ( path: string, level: AccessLevel ): void => {
+			const held = best.get( path )
+			best.set( path, held ? higherLevel( held, level ) : level )
+		}
+		for( const entry of entries ) {
+			if( accessRank( entry.level ) >= accessRank( required ) ) raise( entry.path, entry.level )
+		}
+		for( const grant of grants ) {
+			if( grant.kind !== 'file' && grant.kind !== 'folder' ) continue
+			if( accessRank( grant.level ) >= accessRank( required ) ) raise( grant.subject, grant.level )
+		}
+		return [ ...best ].map( ( [ path, level ] ) => ( { path, level } ) )
 	}
 
 	/**
@@ -488,14 +581,50 @@ export class SdkFileAccess {
 	 * CONTAINMENT refusal rather than a missing file or a blacklisted one — three outcomes that want three
 	 * different next moves, and an agent that cannot tell them apart retries the wrong one. The where is
 	 * what stops the retry being a guess. Written to follow a caller's own `"…" was refused.` opener.
+	 *
+	 * ── AND NOW THE HOW DEEP, WHICH IS A THIRD OUTCOME, NOT A DETAIL ──
+	 * A graded ladder made a refusal possible that the boolean pair could not express: the path is inside a
+	 * configured root and the root is simply not deep enough. That is a different fact from "outside every
+	 * root" and it wants a different next move — one says GO SOMEWHERE ELSE, the other says ASK FOR MORE
+	 * HERE. Reported as the same refusal, an agent handed the first advice for the second problem relocates
+	 * a file it should have asked about, which is the worse of the two mistakes and the silent one.
+	 *
+	 * Deliberately answers in OPERATIONS ( see `operationsFor` / `verbFor` ), never rung names, and the
+	 * whole reason that vocabulary sits in the core beside the ladder is so this sentence and the spawned
+	 * server's own scope report cannot word one fact two ways.
 	 */
-	static scopeLine( scope: string[] ): string {
-		if( !scope.length ) {
-			return 'You have no file access at all right now — no roots are configured and nothing has been handed to you. '
-				+ 'Ask the user to add a root in the file-access settings, or to drop the file into the context gutter.'
+	static refusal( verdict: AccessVerdict, required: AccessLevel, scope: string[] ): string {
+		// TOO SHALLOW — reachable, just not this deeply. Checked FIRST because it is the most specific thing
+		// true about this path, and because the scope list below would otherwise send an agent looking
+		// elsewhere for a file it is already standing on.
+		if( verdict.level !== 'none' ) {
+			return `It is within reach but not deeply enough: you may ${ operationsFor( verdict.level ) } there, `
+				+ `and this needs ${ verbFor( required ) }. Ask the user to raise that folder in the file-access `
+				+ 'settings, or to drop the file into the context gutter.'
 		}
-		return `It sits outside every path you may read. You may read within: ${ scope.join( ', ' ) }. `
-			+ 'Work inside one of those, or ask the user to add that folder or drop the file into the context gutter.'
+
+		if( !scope.length ) {
+			// At READ this is the whole truth and says so. At a deeper rung it is not — an agent that may read
+			// a dozen roots must not be told it has no file access because none of them reach `write`.
+			return required === 'read'
+				? 'You have no file access at all right now — no roots are configured and nothing has been handed to you. '
+					+ 'Ask the user to add a root in the file-access settings, or to drop the file into the context gutter.'
+				: `Nothing you can reach is deep enough to ${ verbFor( required ) } — that is off everywhere right now. `
+					+ 'Ask the user to raise a root in the file-access settings, or to drop the file into the context gutter.'
+		}
+
+		return `It sits outside every path you may ${ verbFor( required ) }. You may ${ verbFor( required ) } within: `
+			+ `${ scope.join( ', ' ) }. Work inside one of those, or ask the user to add that folder or drop the `
+			+ 'file into the context gutter.'
+	}
+
+	/** The deny-list refusal, worded once for both doors. Says the thing an agent most needs to hear about
+	 *  this particular refusal: it is not a reach problem, so no amount of asking or relocating fixes it and
+	 *  a retry is wasted. Kept beside `refusal` because it is the OTHER containment answer, and the two doors
+	 *  drift the moment either one writes its own. */
+	static blacklistLine(): string {
+		return 'It matches a protected pattern ( credentials, keys, and repository internals are off-limits by '
+			+ 'policy ). This is not something a retry or a different path will fix.'
 	}
 
 	/** Pure path containment — resolve `path` and return it iff it sits inside one of `roots`, else

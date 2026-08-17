@@ -145,7 +145,7 @@ describe( 'KcdSynth — declared shape drives placement', () => {
 		// ROWS was reported missing `habits`.
 		const supplied = KcdSynth.suppliedSections( {
 			sections: { purpose: 'p', philosophy: 'q' },
-			slots:    [ { section: 'habits', rows: [ { what: 'add-todo' } ] } ],
+			slots:    [ { section: 'habits', rows: [ { what: 'track-todo-liberal' } ] } ],
 		} );
 
 		expect( supplied ).toContain( 'habits' );
@@ -183,14 +183,14 @@ describe( 'KcdSynth — regions and slot rows', () => {
 			sections: { purpose: 'p', philosophy: 'q' },
 			slots: [ {
 				section: 'habits',
-				rows: [ { what: 'add-todo', where: '_Claude/habits/todo-policy/add-todo.html', why: 'when a deferred item surfaces' } ],
+				rows: [ { what: 'track-todo-liberal', where: '_Claude/habits/track-todo/track-todo-liberal.html', why: 'when a deferred item surfaces' } ],
 			} ],
 		} );
 
 		expect( report.errors ).toEqual( [] );
 		expect( html ).toContain( '<div data-kcd-table>' );
 		expect( html ).toContain( 'data-kcd-slot="habit"' );          // kind defaulted from the shape
-		expect( html ).toContain( 'href="_Claude/habits/todo-policy/add-todo.html"' );
+		expect( html ).toContain( 'href="_Claude/habits/track-todo/track-todo-liberal.html"' );
 		expect( html ).not.toContain( '<table' );                      // never a real table
 	} );
 

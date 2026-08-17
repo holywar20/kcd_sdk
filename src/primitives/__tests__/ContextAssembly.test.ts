@@ -8,6 +8,7 @@ import { SlotResolver } from '../framework/SlotResolver';
 import { KCDPrimitive } from '../framework/KCDPrimitive';
 import { Agent } from '../../agent/Agent';
 import type { ReaderFn, TaggedBlock } from '../types';
+import type { SlotRow } from '../../core/html/KcdContext';
 
 const ROOT = 'C:/fixtures/root';
 
@@ -214,7 +215,7 @@ const slotLensHtml = ( mode: 'on' | 'suggested' ) => `<!DOCTYPE html>
 </dl>
 <section data-kcd-region="know">
 <section data-kcd-section="references">
-<div data-kcd-slot="reference"${ mode === 'suggested' ? ' data-kcd-mode="suggested"' : '' } data-kcd-habit-class="session-logging"><span data-kcd-field="what" data-kcd-type="text">session-log-aggressive</span><a data-kcd-field="where" data-kcd-type="path" href="_Claude/habits/session-logging/session-log-aggressive.html">session-log-aggressive</a><span data-kcd-field="why" data-kcd-type="text">default</span></div>
+<div data-kcd-slot="reference"${ mode === 'suggested' ? ' data-kcd-mode="suggested"' : '' } data-kcd-habit-class="log-session"><span data-kcd-field="what" data-kcd-type="text">log-session-liberal</span><a data-kcd-field="where" data-kcd-type="path" href="_Claude/habits/log-session/log-session-liberal.html">log-session-liberal</a><span data-kcd-field="why" data-kcd-type="text">default</span></div>
 </section>
 </section>
 </article>
@@ -222,7 +223,7 @@ const slotLensHtml = ( mode: 'on' | 'suggested' ) => `<!DOCTYPE html>
 `;
 
 describe( 'habit slot dredge is links-only — no mode rides full text; only a session inject does', () => {
-	it( 'default mode (on): neither session-log-aggressive (dredged) nor session-log-never (injected) contributes full text to the wire', () => {
+	it( 'default mode (on): neither log-session-liberal (dredged) nor log-session-never (injected) contributes full text to the wire', () => {
 		const readReal: ReaderFn = ( absPath ) => {
 			if ( absPath.replace( /\\/g, '/' ).endsWith( 'slot-lens.html' ) ) return slotLensHtml( 'on' );
 			return fs.readFileSync( absPath, 'utf-8' );
@@ -238,7 +239,7 @@ describe( 'habit slot dredge is links-only — no mode rides full text; only a s
 
 		// Inject the "never" pole too — same habit-class, higher specificity (injected > lens) — makes
 		// no difference to the LENS's own on-mode slot; injection is a separate, deliberate act.
-		const neverHabitPath = path.join( HABITS_DIR, 'session-logging/session-log-never.html' );
+		const neverHabitPath = path.join( HABITS_DIR, 'log-session/log-session-never.html' );
 		const neverHabit = fs.readFileSync( neverHabitPath, 'utf-8' );
 		lens.addInjected( KCDPrimitive.fromHtml( neverHabit, neverHabitPath ) );
 
@@ -251,7 +252,7 @@ describe( 'habit slot dredge is links-only — no mode rides full text; only a s
 		expect( afterInject ).not.toMatch( /breadcrumb a future session reads/ );
 
 		const slots = SlotResolver.describe( lens.getContextBlocks() );
-		const resolution = slots.find( s => s.habitClass === 'session-logging' );
+		const resolution = slots.find( s => s.habitClass === 'log-session' );
 		expect( resolution?.winner.sourceLayer ).toBe( 'injected' );
 	} );
 
@@ -269,8 +270,8 @@ describe( 'habit slot dredge is links-only — no mode rides full text; only a s
 		expect( lens.getNodes().length ).toBe( 0 );
 		const ctx = lens.serializeForContext();
 		expect( ctx ).not.toMatch( /breadcrumb a future session reads/ );
-		expect( ctx ).toContain( 'session-log-aggressive' );
-		expect( ctx ).toContain( '_Claude/habits/session-logging/session-log-aggressive.html' );
+		expect( ctx ).toContain( 'log-session-liberal' );
+		expect( ctx ).toContain( '_Claude/habits/log-session/log-session-liberal.html' );
 	} );
 } );
 
@@ -445,7 +446,7 @@ describe( 'Know/Care/Do labels are stripped from compiled context — real deplo
 
 		// Substance is untouched: section headings and the real slot rows still ride.
 		expect( joined ).toMatch( /Philosophy/ );
-		expect( joined ).toContain( 'write-approval-docs' );
+		expect( joined ).toContain( 'write-files-scoped' );
 	} );
 } );
 
@@ -666,5 +667,70 @@ describe( 'ContextAssembler — unit', () => {
 		// two groups, not one, since 'three' never shares the explicit key.
 		expect( merged ).toHaveLength( 2 );
 		expect( merged.find( b => b.text.includes( 'one' ) )!.text ).toBe( 'one\n\ntwo' );
+	} );
+} );
+
+describe( 'the Grants section reaches the wire, or does not ride at all', () => {
+
+	// A MANIFEST SECTION IS MERGED, and the merge re-renders from each block's structured `rows` rather
+	// than parsing rendered text back apart. Grants were bound as a composed STRING — which looked right,
+	// read right, and contributed no rows — so every canonized grant was dropped between the session and
+	// the wire and the heading arrived alone. The empty `## Grants` an agent reported was the whole
+	// section failing, not an empty session drawing a spare heading.
+
+	// `loadBase` is a per-describe local by convention in this file rather than a file-level helper, so
+	// this block declares its own instead of reaching into a sibling's scope.
+	const loadBase = (): Agent => {
+		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/_lens-base.html' ), {
+			projectRoot: PROJECT_ROOT, read: ( abs ) => fs.readFileSync( abs, 'utf-8' ), depth: 2
+		} );
+		return Agent.create( { lenses: [ lens ] } );
+	};
+
+	// POSIX-shaped on purpose. These are merge IDENTITIES, never touched on disk, and a Windows literal
+	// here buys nothing while costing an escaping hazard in a file that is mostly prose assertions.
+	const SUBJECT = '/vault/proj/notes.md';
+	const ROWS: SlotRow[] = [
+		{ what: 'file',   where: SUBJECT,           why: 'granted by the user for this session' },
+		{ what: 'folder', where: '/vault/proj/src', why: 'granted by the user for this session' }
+	];
+
+	it( 'carries the ROWS, not just the heading — the assertion that would have caught it', () => {
+		const agent = loadBase();
+		agent.bindEnv( { grants: ROWS } );
+		const out = agent.compiledContext().map( b => b.text ).join( '\n\n' );
+
+		expect( out ).toContain( '## Grants' );
+		expect( out ).toContain( SUBJECT );
+		expect( out ).toContain( '/vault/proj/src' );
+		expect( out ).toContain( 'granted by the user for this session' );
+	} );
+
+	it( 'does NOT ride at all when nothing has been canonized — most sessions', () => {
+		const agent = loadBase();
+		agent.bindEnv( { grants: [] } );
+		expect( agent.compiledContext().map( b => b.text ).join( '\n\n' ) ).not.toContain( '## Grants' );
+	} );
+
+	it( 'never emits a heading with nothing under it, which is what a dropped table looks like', () => {
+		// The shape of the bug, asserted directly: if a Grants heading is present, a row is present too.
+		// Stated as an invariant rather than as a case, because the failure was invisible precisely by
+		// looking like a legitimately empty section.
+		for( const rows of [ [] as SlotRow[], ROWS ] ) {
+			const agent = loadBase();
+			agent.bindEnv( { grants: rows } );
+			const out = agent.compiledContext().map( b => b.text ).join( '\n\n' );
+			if( out.includes( '## Grants' ) ) expect( out.split( '## Grants' )[ 1 ]?.trimStart() ).toMatch( /^- \S/ );
+		}
+	} );
+
+	it( 'dedupes two grants on one subject, which is what being a manifest section BUYS', () => {
+		// The reason grants are a merged section rather than a passthrough block. The claim was already in
+		// the code comment ( "the compressive merge dedupes them for free" ) and was not true of a string.
+		const agent = loadBase();
+		agent.bindEnv( { grants: [ ROWS[ 0 ], { ...ROWS[ 0 ], what: 'file again' } ] } );
+		const out = agent.compiledContext().map( b => b.text ).join( '\n\n' );
+
+		expect( out.split( SUBJECT ).length - 1 ).toBe( 1 );
 	} );
 } );

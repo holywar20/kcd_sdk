@@ -9,8 +9,6 @@
  * the board can point at WHERE a thing is.
  */
 
-import type { ContextSegment } from '../primitives/types';
-
 /**
  * A start node — the entry the read head (Navigator) begins at. Single exit, and the board enforces
  * that it can only connect to an agent. The board's repurposed gray "Start" box.
@@ -56,8 +54,7 @@ export interface StepNode {
 	// ── Commit-time SNAPSHOT (frozen at compile; the run uses these, not live state — re-commit to refresh) ──
 	agentId?:     string;     // the staffed agent's id — rides the turn so telemetry can key the run by agent
 	agentName?:   string;     // the staffed agent's display NAME — surfaced in the transcript / telemetry ("basic tester")
-	identity?:    string;     // the "who" — the staffed agent's frozen IDENTITY (systemPrompt + contribute())
-	identitySegments?: ContextSegment[]; // the same identity BROKEN OUT by source — the structured form, for telemetry
+	identity?:    string;     // the "who" — the staffed agent's frozen IDENTITY (systemPrompt + its lens compile)
 	instruction?: string;     // the "what" — the artifact body (the task). TWO separate frozen blocks; framing is a run-time knob
 	toolNames?:   string[];   // the agent's included tool NAMES; schemas resolve at run (never baked — wire stays lean)
 }

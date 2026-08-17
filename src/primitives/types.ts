@@ -54,6 +54,20 @@ export interface ContextSegment {
 }
 
 /**
+ * SegmentKey — where one compiled block files in the per-source breakdown: the folder a reader finds it
+ * under, and the human label beside it. The KEY half of `ContextSegment`, split out because the two are
+ * answered at different moments — a block's identity is decided per block (`Agent.segmentKey`), while a
+ * segment is the run of adjacent blocks that share one.
+ *
+ * `Agent.segmentKey` answers `null` for a STRUCTURAL block — a `---` divider, a band heading — which has
+ * no identity of its own and belongs to the segment it introduces.
+ */
+export interface SegmentKey {
+	source: string;
+	label:  string;
+}
+
+/**
  * A single issue returned by KCDPrimitive.typeCheck().
  * Non-throwing equivalent of the constructor validation errors.
  */

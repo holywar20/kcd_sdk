@@ -16,6 +16,36 @@ export const INJECTED_KINDS = [ 'file', 'folder', 'tool' ] as const;
 
 export type InjectedKind = typeof INJECTED_KINDS[ number ];
 
+/**
+ * ACCESS — the ordered ladder a subject is reached at: `none` below `read` below `write` below `delete`.
+ *
+ * ORDERED rather than a set of flags, so the illegal states cannot be expressed. Two booleans spell four
+ * combinations, one of which ( delete without write ) is nonsense the parse then has to defend against
+ * forever. Ordered, every guard asks one question instead of three — what does this resolve to, and is it
+ * at least what I need.
+ *
+ * `delete` is a CONFIGURATION level and is deliberately unreachable by any gesture. It lives in the union
+ * rather than outside it so the ceiling is expressed as a clamp on what a gesture may produce, not as an
+ * omission: a kind invented later cannot arrive at delete depth by simply never having been considered.
+ */
+export const ACCESS_LEVELS = [ 'none', 'read', 'write', 'delete' ] as const;
+
+export type AccessLevel = typeof ACCESS_LEVELS[ number ];
+
+/** The deepest level a user GESTURE may produce. Configuration goes deeper; a drag never does. */
+export const GESTURE_CEILING: AccessLevel = 'write';
+
+/** Rank on the ladder — the one comparison every "is this deep enough" question is made of. */
+export function accessRank( level: AccessLevel ): number {
+	return ACCESS_LEVELS.indexOf( level );
+}
+
+/** A level clamped to what a gesture may produce. Anything at or past the ceiling comes back AS the
+ *  ceiling, so the clamp is a property of the type's use rather than a rule each caller remembers. */
+export function clampToGesture( level: AccessLevel ): AccessLevel {
+	return accessRank( level ) > accessRank( GESTURE_CEILING ) ? GESTURE_CEILING : level;
+}
+
 /** What every injected kind carries, whatever it is. */
 interface InjectedBase {
 	kind: InjectedKind;
@@ -52,6 +82,13 @@ interface InjectedBase {
  *  every turn after. */
 export interface InjectedFile extends InjectedBase {
 	kind: 'file';
+	/** How deeply this subject may be reached — the level the DROP chose, clamped below `delete`.
+	 *
+	 *  NULL for a grant made before the drop zones existed, which is a real state and not a default worth
+	 *  inventing: a record that never chose is not the same fact as one that chose `none`, and folding them
+	 *  together would make old grants look like deliberate refusals. A reader treats null as "unspecified"
+	 *  and says so rather than assuming a depth. */
+	level: AccessLevel | null;
 	/** Which TranscriptEntry kind backs it. An image is not a text file: it frames differently and prices
 	 *  differently, and this is the only place that distinction survives on the view. */
 	entryKind: 'injected-file' | 'image';
@@ -63,6 +100,10 @@ export interface InjectedFile extends InjectedBase {
  *  standing listing compiled at the last send and costs nothing in between. */
 export interface InjectedFolder extends InjectedBase {
 	kind: 'folder';
+	/** How deeply this root may be reached — see InjectedFile.level. A folder carries the same ladder as a
+	 *  file: the roadmap settled that a dropped folder is a WORKING ROOT, not a read-only listing, and that
+	 *  the level comes from the zone the drop landed on rather than from anything a kind secretly means. */
+	level: AccessLevel | null;
 }
 
 /** A tool — `subject` is its qualified id ( `server.tool` ). Injectable whatever the agent's roster says,
@@ -94,6 +135,19 @@ export type InjectedItem = InjectedFile | InjectedFolder | InjectedTool;
 export interface GrantRef {
 	kind: InjectedKind;
 	subject: string;
+	/**
+	 * How deep this grant reaches ON DISK — the rung the drop landed on, clamped below `delete` where it
+	 * was created. Required, and never null: a record that never chose reports `null` on the transcript
+	 * entry, but by the time it is an AUTHORIZATION that ambiguity has to be resolved, and it resolves the
+	 * conservative way ( `read` ) in one place rather than at every gate that would otherwise have to
+	 * decide for itself.
+	 *
+	 * `none` for a TOOL grant, which is not a path grant at all. Path resolution skips non-path kinds
+	 * outright, so this value is belt to that braces — a tool's qualified id could in principle resolve as
+	 * a directory name, and two independent reasons it cannot widen a path is the right number for the
+	 * one field on this type that says how much.
+	 */
+	level: AccessLevel;
 }
 
 /**
@@ -104,6 +158,6 @@ export interface GrantRef {
  * out of step with them the way a parallel array would. Kinds other than `tool` are simply not this
  * question — a file grant has nothing to say about which tools exist.
  */
-export function grantedTools( grants: GrantRef[] ): string[] {
+export function grantedTools( grants: readonly GrantRef[] ): string[] {
 	return grants.filter( ( g ) => g.kind === 'tool' ).map( ( g ) => g.subject );
 }

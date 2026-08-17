@@ -103,11 +103,28 @@ export abstract class StarmindServer {
 	// ── Live doc ──────────────────────────────────────────────────────────────────
 
 	/**
-	 * The server's doc-block as served right now — the recursive parent of its tools' docs,
-	 * generated fresh rather than frozen at author-time. Default: the static manifest's authored
-	 * `doc`, unchanged. A subclass overrides this to fold in runtime data (live config, current
-	 * state) so what an agent reads reflects the server as it stands at the moment its tools are
-	 * attached to context, not just what was true when the manifest was written.
+	 * The server's doc-block as served right now — the recursive parent of its tools' docs, generated
+	 * fresh rather than frozen at author-time. Default: the static manifest's authored `doc`, unchanged.
+	 *
+	 * ── NOTHING PER-SESSION MAY BE FOLDED IN HERE. READ THIS BEFORE OVERRIDING. ──
+	 * Three servers once did exactly that — the file server folded in its readable ROOT PATHS, the browser
+	 * its enabled origins, Daedalus its vault root and census — each to save an agent a discovery call. All
+	 * three were removed, and the reason is structural rather than stylistic: a server doc is per-SERVER,
+	 * and one copy of a server now answers for SEVERAL SESSIONS at once. There is no call in scope here, so
+	 * there is no way to know whose doc is being asked for, and any workspace state folded in is whichever
+	 * one resolved last. That is not a leak of configuration; it is one session's paths handed to another.
+	 *
+	 * IT NEVER FIRED, WHICH IS THE ONLY REASON THIS IS A NOTE AND NOT AN INCIDENT. MCP has no call that
+	 * asks a running server for its documentation — `initialize` returns `serverInfo { name, version }` and
+	 * nothing more — so this seam was written against a protocol affordance that does not exist, and the
+	 * host reads the STATIC manifest doc off disk at discovery instead.
+	 *
+	 * The correct home for anything session-shaped is a TOOL, which receives the call's `_meta` and can be
+	 * answered per caller. `starmind_file` already had one — `roots` — that gave the same answer correctly
+	 * the whole time the override existed beside it.
+	 *
+	 * A per-SERVER fact ( a build stamp, a protocol version ) has no such problem, but it belongs in the
+	 * handshake, where a client actually reads it.
 	 */
 	liveDoc(): string {
 		return this.ownManifest().doc ?? '';

@@ -104,6 +104,7 @@ export const KcdValidate = new class KcdValidate {
 
 		const name = this.checkFrontmatter( article, rootType, err, warn );
 		this.checkStructure( article, rootType, err, warn );
+		this.checkBody( article, err );
 		this.checkAddressing( article, err, opts?.path );
 		if ( rootType === 'habit' ) this.checkHabit( article, err, warn );
 
@@ -224,6 +225,19 @@ export const KcdValidate = new class KcdValidate {
 					err( 'bad-mode', `mode:${ mode }`, `mode must be one of { ${ KcdAddress.MODES.join( ' | ' ) } }` );
 			}
 
+			// SEED mode — the same attribute, an entirely different closed set, and until now unchecked.
+			// The check above lives inside the slot branch, so a `data-kcd-mode` on a `<script
+			// data-kcd-seed>` was never graded against anything: `parseSeedsFrom` casts the raw string to the
+			// union and defaults a miss to `prepend`, so `create-onlyy` validated clean and then silently
+			// prepended into a file it was supposed to leave alone. Graded separately rather than by
+			// widening MODES — a slot mode on a seed, or a seed mode on a slot, is just as wrong as a typo,
+			// and one merged set would call both legal.
+			if ( HtmlTree.has( el, 'data-kcd-seed' ) ) {
+				const seedMode = HtmlTree.get( el, 'data-kcd-mode' );
+				if ( seedMode && !KcdAddress.SEED_MODES.includes( seedMode ) )
+					err( 'bad-seed-mode', `mode:${ seedMode }`, `seed mode must be one of { ${ KcdAddress.SEED_MODES.join( ' | ' ) } } ( absent ⇒ prepend )` );
+			}
+
 			// param — should carry the four typed cells
 			if ( KcdAddress.isParam( el ) ) {
 				const fields = HtmlTree.collect( el, d => KcdAddress.isField( d ) ).map( d => HtmlTree.get( d, 'data-kcd-field' ) );
@@ -258,6 +272,51 @@ export const KcdValidate = new class KcdValidate {
 		// composable-rule guard: one carrier ⇒ at most one slot per habit-class
 		for ( const [ hc, n ] of Object.entries( habitClasses ) )
 			if ( n > 1 ) err( 'dup-habit-class', `habit-class:${ hc }`, `${ n } slots share habit-class "${ hc }" — at most one per file ( §6 )` );
+	}
+
+	// ── Body pass — a document must SAY something ──────────────────────────────────
+	/**
+	 * Frontmatter is metadata ABOUT a document, not the document. A file carrying a well-formed
+	 * `<dl data-kcd-frontmatter>` and NOTHING else is a correctly-addressed empty box: every field
+	 * rule passes, `KcdParse` reads it clean, and it lands on disk saying nothing at all. Found live
+	 * 2026-08-04 on a `reference`.
+	 *
+	 * This is its own rule, not a shape-table row, because the shape table cannot reach it. Required-
+	 * section tiers catch an empty document for the CLOSED types ( `plan`, `lens` ), but every OPEN
+	 * type declares no required sections BY DESIGN — and `reference`, the largest population in the
+	 * vault, is one of them. The question here is not "which sections" but "any body at all", which
+	 * binds every type uniformly and belongs outside the per-type table.
+	 *
+	 * ERROR, not warning, deliberately. `kcd_save` refuses on errors only ( warnings ride along in the
+	 * result ), and the whole defect is that an empty artifact LANDS — a warning would leave the hole
+	 * exactly where it was.
+	 *
+	 * RULED: a document carrying only an `<h1>` PASSES. The rule asks whether the document has a body,
+	 * not whether the body is any good. Every stricter line — word counts, a minimum section count,
+	 * "real prose" — grades authorship rather than conformance, and gets subjective immediately. A
+	 * title-only stub is a THIN document, which is a review problem; an empty one is a BROKEN document,
+	 * which is a validator problem. The line is drawn there on purpose.
+	 *
+	 * TEMPLATES need no exemption: `validate()` returns above on `rootType === 'template'`, before any
+	 * structural pass runs, so a scaffold never reaches this method. Checked on the merits too — every
+	 * template in `daedalus/templates/` carries an h1 plus its target type's section skeleton, so none
+	 * would fail even without the blanket exemption.
+	 */
+	checkBody( article: HtmlEl, err: Emit ): void {
+		// Frontmatter subtree, not just the <dl> itself — otherwise the block's own <dt>/<dd> cells
+		// count as body and every empty document passes. `walk` visits DESCENDANTS only, so the article
+		// itself is never mistaken for its own content ( `collect` would include it and always match ).
+		const frontmatter = new Set<HtmlNode>();
+		for ( const fm of HtmlTree.collect( article, el => KcdAddress.isFrontmatter( el ) ) ) {
+			frontmatter.add( fm );
+			HtmlTree.walk( fm, d => frontmatter.add( d ) );
+		}
+
+		let hasBody = false;
+		HtmlTree.walk( article, el => { if ( !frontmatter.has( el ) ) hasBody = true; } );
+		if ( hasBody ) return;
+
+		err( 'empty-body', 'body', 'artifact carries frontmatter and nothing else — a document must say something ( at least one element outside the frontmatter block )' );
 	}
 
 	// ── Habit pass — the four-field contract ( see _habit_template ) ────────────────

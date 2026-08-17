@@ -4,7 +4,7 @@ import { KCDPrimitive } from '../primitives';
 import type { SlotMode, LinkEntry, AddressEntry } from '../primitives';
 import type { Vault } from './Vault';
 import type { ArtifactRef } from '../core';
-import { InstallManifest } from '../core';
+import { InstallManifest, VaultLayout } from '../core';
 
 /** Where the seed source lives, vault-relative — protocol §10's one payload-per-host document. */
 const ROOT_CONTEXT_PATH = 'root-context.html';
@@ -411,16 +411,39 @@ export class VaultUtilities {
 
 
 	/**
+	 * Does this glob deliberately reach into an archival bucket? A pattern that NAMES one is a caller
+	 * asking for retired material; anything looser is a sweep that should not be handed it.
+	 *
+	 * Prefix test rather than a match test, and that is the point: `plans/plans_complete/**` reaches,
+	 * `plans/**` does not. "Show me the plans" means the live ones — the retired bucket is named when
+	 * it is wanted.
+	 */
+	private static globReachesArchival( pattern: string | undefined ): boolean {
+		if ( !pattern ) return false;
+		const norm = pattern.replace( /\\/g, '/' ).replace( /^\.\//, '' ).replace( /^_Claude\//, '' );
+		return VaultLayout.archivalDirs().some( d => norm === d || norm.startsWith( d + '/' ) );
+	}
+
+	/**
 	 * The single read-query over a vault — glob, type, and text, AND-combined over one scan.
 	 * `glob` short-circuits through the Vault's own path filter; `type`/`text` narrow the
 	 * survivors. `groupBy: 'type'` returns a census instead of refs — the cheapest orientation
 	 * call, and how `kcd_query`'s inspector example works. Moved out of the MCP handler ( 1.i ):
 	 * this was the one tool whose filtering logic lived only on one face.
+	 *
+	 * ARCHIVAL BUCKETS ARE EXCLUDED from an unscoped query, on the same rule the grading gate uses:
+	 * naming them still returns them, because the caller asked. A retired plan answers "what did we
+	 * do"; every other query is asking "what is true now", and mixing the two is how a query for
+	 * live work comes back mostly history. It also stops churn — a document written against a
+	 * standard that has since moved on keeps inviting a rewrite nobody wants, and the cheapest way
+	 * to stop that is to not surface it.
 	 */
 	static query( vault: Vault, opts: QueryOptions = {} ): QueryResult {
 		const needle = opts.text?.toLowerCase();
 
 		let files = opts.glob ? vault.glob( opts.glob ) : vault.scan();
+		if ( !VaultUtilities.globReachesArchival( opts.glob ) )
+			files = files.filter( f => !VaultLayout.isArchivalPath( f.relativePath ) );
 		if ( opts.type ) files = files.filter( f => vault.classify( f.path ) === opts.type );
 		if ( needle )     files = files.filter( f => ( f.body + '\n' + JSON.stringify( f.frontmatter ) ).toLowerCase().includes( needle ) );
 

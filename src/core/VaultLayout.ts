@@ -32,6 +32,17 @@ export interface LayoutEntry {
 	layer: VaultLayer
 	/** Whether the library index descends into it. */
 	indexed: boolean
+	/** Retired content — still shipped, still linkable, but NOT graded.
+	 *
+	 *  Deliberately distinct from `indexed: false`. Ephemeral means "not installed into a vault at
+	 *  all", which is why protocol §1.1 forbids linking into it. Archival means the opposite on that
+	 *  axis: the content ships and live artifacts legitimately link to it for provenance. What it
+	 *  stops being is held to the CURRENT standard — a document retired under an older one is a
+	 *  historical record, and grading it reports a category error rather than a defect.
+	 *
+	 *  Matched by LONGEST PREFIX rather than top-level segment, so a nested bucket can be archival
+	 *  while its parent stays graded. That is the whole reason the flag exists separately. */
+	archival?: boolean
 	/** The document types this directory ACCEPTS on a write, when that is broader than the single type
 	 *  it implies. Absent ⇒ exactly `[ type ]`, which is the common case.
 	 *
@@ -93,6 +104,27 @@ const LAYOUT: readonly LayoutEntry[] = [
 	{
 		dir: 'plans', type: 'plan', layer: 'data', indexed: true,
 		purpose: 'Promoted plans that authorize action, plus the plans_complete/ and plans_deferred/ buckets beneath.'
+	},
+	{
+		// Nested and ARCHIVAL, not ephemeral — the distinction is load-bearing. Retired plans are linked
+		// from live artifacts for provenance ( 23 of them at last count, 50 link sites in the plans
+		// nav-index alone ), so putting them in ephemeral space would make every one of those links
+		// illegal under §1.1. They ship; they are simply not graded.
+		dir: 'plans/plans_complete', type: 'plan', layer: 'data', indexed: true, archival: true,
+		purpose: 'Retired plans, kept as a historical record. Shipped and linkable, but never graded — the standard they were written against has moved on.'
+	},
+	{
+		// Archival for the OPPOSITE reason to plans_complete: not "the standard moved on after this was
+		// written" but "this has not been brought up to standard yet". A deferred plan is a draft in
+		// churn — many are abandoned rather than finished — so grading it reports what everyone already
+		// knows and makes a clean vault harder to reach for no gain.
+		//
+		// THE WALL IS AT THE EXIT, NOT THE ENTRANCE. A deferred plan is graded when it is promoted OUT
+		// of here, which is the moment before it authorizes anything; until then it authorizes nothing.
+		// Grading it earlier buys no safety. And the exclusion binds only the unscoped sweep — anyone
+		// who wants a verdict on a parked draft names the file and gets one.
+		dir: 'plans/plans_deferred', type: 'plan', layer: 'data', indexed: true, archival: true,
+		purpose: 'Parked drafts, kept in case they come back. Shipped and linkable, but never graded — a draft in churn is held to the standard when it is promoted out, not while it sits.'
 	},
 	{
 		// `data`, not `agent`: a partial is never composed INTO an agent. It is appended after context
@@ -257,9 +289,39 @@ export class VaultLayout {
 	}
 
 	/**
+	 * The directories holding retired content — shipped and linkable, but not graded.
+	 *
+	 * Unlike `ephemeralDirs`, these are NOT collapsed to a top-level segment. The point of an archival
+	 * row is that a nested bucket differs from its parent, so the full declared prefix is what matters:
+	 * collapsing would archive `plans/` whole, or nothing at all.
+	 */
+	static archivalDirs(): string[] {
+		return LAYOUT.filter( e => e.archival ).map( e => e.dir )
+	}
+
+	/**
+	 * Does this path land in archival space? LONGEST-PREFIX match on the doc-root-anchored remainder,
+	 * using the same anchoring `isEphemeralHref` does — so an href ( `_Claude/plans/plans_complete/x` ),
+	 * a vault-relative path, and an absolute file path all answer alike.
+	 *
+	 * A path is archival if it IS a declared directory or sits beneath one. Segment-boundary matching,
+	 * never bare `startsWith`: `plans/plans_completed-notes` must not match `plans/plans_complete`.
+	 */
+	static isArchivalPath( href: string, docRoot = '_Claude' ): boolean {
+		const parts  = href.replace( /\\/g, '/' ).replace( /^\.\//, '' ).split( '/' ).filter( p => p !== '' )
+		const anchor = parts.lastIndexOf( docRoot )
+		const rel    = ( anchor >= 0 ? parts.slice( anchor + 1 ) : parts ).join( '/' )
+		return VaultLayout.archivalDirs().some( d => rel === d || rel.startsWith( d + '/' ) )
+	}
+
+	/**
 	 * Does a project-root-relative href land in ephemeral space? Hrefs resolve against the PROJECT
 	 * root ( `resolveHref` ), so a vault target carries its doc-root segment — `_Claude/work/x` — and
 	 * that segment is stripped before the first path element is judged.
+	 *
+	 * TOP-LEVEL segment only, deliberately — contrast `isArchivalPath` above, which matches the longest
+	 * declared prefix. The two exclusions are not interchangeable: ephemeral content never ships and may
+	 * not be linked into ( §1.1 ); archival content ships and must stay linkable.
 	 */
 	static isEphemeralHref( href: string, docRoot = '_Claude' ): boolean {
 		const parts = href.replace( /\\/g, '/' ).replace( /^\.\//, '' ).split( '/' ).filter( p => p !== '' )

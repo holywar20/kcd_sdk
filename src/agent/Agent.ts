@@ -3,9 +3,10 @@ import { SlotResolver } from '../primitives/framework/SlotResolver';
 import type { SlotResolution } from '../primitives/framework/SlotResolver';
 import { ContextAssembler, MANIFEST_SECTIONS } from '../primitives/framework/ContextAssembler';
 import { KcdContext } from '../core/html/KcdContext';
+import type { SlotRow } from '../core/html/KcdContext';
 import { InstallManifest } from '../core/InstallManifest';
 import { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
-import type { ArtifactType, ContextSegment, PolicyEntry, SerializedArtifact, SerializedLens, SlotMode, SourceLayer, TaggedBlock } from '../primitives/types';
+import type { ArtifactType, ContextSegment, PolicyEntry, SegmentKey, SerializedArtifact, SerializedLens, SlotMode, SourceLayer, TaggedBlock } from '../primitives/types';
 
 /**
  * One habit in the COMPOSITION view — an inventory entry, not a compiled block. Carries the two modes a
@@ -304,6 +305,15 @@ export class Agent {
 	// wire, flush-and-filled on change.
 	// With these bound, the agent answers `compiledContext()`/`wireSystem()`/`estimateTokens()` ALONE.
 
+	/** What the HOST — Starmind itself — says to every agent running inside it. Leads the compiled context,
+	 *  above even the agent's own identity.
+	 *
+	 *  BOUND like the rest of the environment rather than authored here, and that is the layering: an agent
+	 *  knows WHERE the host's voice sits, never what it says. It is written in code by the dispatch tier —
+	 *  never in the vault, never through a link, and never user-editable, because a user cannot be allowed
+	 *  to rewrite the app's own description of its own surfaces. '' when nothing binds it, which is every
+	 *  SDK-built agent outside a dispatch. */
+	hostPrompt: string = '';
 	/** The model-bound root-context text ( CLAUDE.md / Winston.html et al. ) — leads the compiled context.
 	 *  '' when the agent's model declares none. */
 	rootContext: string = '';
@@ -323,16 +333,30 @@ export class Agent {
 	 *  it and composes it, and an agent reaching into `session/` would invert the layering — a session is a
 	 *  run of an agent, not the reverse. '' when nothing is attached. */
 	attachments: string = '';
-	/** The bound session's CANONIZED grants, already composed ( `Session.grantManifest()` ) — the what/where/
-	 *  why rows for everything the user handed this run whose turns have since been compacted.
+	/** The bound session's CANONIZED grants ( `Session.grantRows()` ) — the what/where/why rows for
+	 *  everything the user handed this run whose turns have since been compacted.
 	 *
-	 *  A STRING for the same reason `attachments` is: the session owns the grants and composes them, and an
-	 *  agent reaching into `session/` would invert the layering.
+	 *  STRUCTURED ROWS, unlike `attachments`, and the difference is not a style choice — it is what the
+	 *  destination requires. Attachments ride as an `extraBlock`, which passes through the assembler
+	 *  untouched, so a composed string is exactly right there. Grants ride as a manifest SECTION, and a
+	 *  manifest section is merged: the assembler reads each block's `rows` and re-renders from them, never
+	 *  parsing text back apart. Held as a string, this contributed nothing and every canonized grant was
+	 *  dropped between here and the wire.
 	 *
 	 *  Only the HOISTED set arrives here. A grant whose turn still rides already carries its reference line
 	 *  in the transcript, and a manifest row beside it would state one fact twice; promotion waits for the
-	 *  compaction that removed the line. '' when nothing has been canonized yet, which is most sessions. */
-	grants: string = '';
+	 *  compaction that removed the line. Empty until something has been canonized, which is most sessions. */
+	grantRows: SlotRow[] = [];
+	/** The CALLER's layer above the lens — a room frame, a Constellation step frame, whatever framed this
+	 *  particular turn. Bound per ROUND like the rest of the environment; '' when nothing framed it.
+	 *
+	 *  It trails the agent's own identity for the reason attachments do: general before specific. A standing
+	 *  identity is true of every turn this agent will ever take; a frame is true of exactly one. */
+	frame: string = '';
+	/** The turn's prompt-SHAPING line — today, the thinking-mode request to reason in the visible reply.
+	 *  Opaque bound TEXT, deliberately not something this object derives: deciding what shapes a turn is
+	 *  dispatch policy, and the agent's only job is knowing where it sits. '' when nothing shapes it. */
+	modeLine: string = '';
 
 	private constructor(
 		id: string,
@@ -520,13 +544,16 @@ export class Agent {
 	 * defs / model root context / baseline memory change ( then `triggerRef` ); the orchestrator calls it per
 	 * round on the canonical agent. Never persisted — this is live environment, not agent identity.
 	 */
-	bindEnv( env: { rootContext?: string; toolDefs?: ToolDef[]; memory?: string; memoryTags?: string[]; attachments?: string; grants?: string } ): void {
+	bindEnv( env: { hostPrompt?: string; rootContext?: string; toolDefs?: ToolDef[]; memory?: string; memoryTags?: string[]; attachments?: string; grants?: SlotRow[]; frame?: string; modeLine?: string } ): void {
+		if ( env.hostPrompt  !== undefined ) this.hostPrompt  = env.hostPrompt;
 		if ( env.rootContext !== undefined ) this.rootContext = env.rootContext;
 		if ( env.toolDefs    !== undefined ) this.toolDefs    = env.toolDefs;
 		if ( env.memory      !== undefined ) this.memory      = env.memory;
 		if ( env.memoryTags  !== undefined ) this.memoryTags  = env.memoryTags;
 		if ( env.attachments !== undefined ) this.attachments = env.attachments;
-		if ( env.grants      !== undefined ) this.grants      = env.grants;
+		if ( env.grants      !== undefined ) this.grantRows   = env.grants;
+		if ( env.frame       !== undefined ) this.frame       = env.frame;
+		if ( env.modeLine    !== undefined ) this.modeLine    = env.modeLine;
 	}
 
 	/** What this agent actually carries = bolted-on ∪ inherited-from-lenses. The permissions
@@ -888,8 +915,8 @@ export class Agent {
 
 	/**
 	 * The recursive context query as one source-blind string: `getContextBlocks()` run through
-	 * `SlotResolver` ( habit-class contention resolved — a losing session-log-never never rides alongside
-	 * the session-log-aggressive it lost to ) and `ContextAssembler` ( merged by `data-kcd-merge-key`,
+	 * `SlotResolver` ( habit-class contention resolved — a losing log-session-never never rides alongside
+	 * the log-session-liberal it lost to ) and `ContextAssembler` ( merged by `data-kcd-merge-key`,
 	 * sorted Care-first / injected-last ). A DRAFT still contributes its inherited base floor — base rides
 	 * on every agent, composed or not ( see `domainLenses` ); the empty-array guard below is the genuinely
 	 * lensless case ( an SDK-built agent, or a vault with no base file ), not draft-ness. ( The `systemPrompt`
@@ -1000,9 +1027,16 @@ export class Agent {
 	/**
 	 * THE compiled context for this agent's live wire — `compiledBlocks()` with the bound environment folded
 	 * in as real blocks: the model root context LEADS ( `before` ), the baseline memory sorts into its tier,
-	 * and the `on`-mode tool manifest + every `suggested` tool's full schema TRAIL ( `after` ). Memory rides
-	 * only when the agent's own `system.memoryEnabled` gate is on. Zero-arg: the extras that used to be
-	 * hand-gathered in `Session.compiledBlocksFor` are the agent's own bound env now.
+	 * and the `on`-mode tool manifest, every `suggested` tool's full schema, the attachments and the two
+	 * caller layers TRAIL ( `after` ). Memory rides only when the agent's own `system.memoryEnabled` gate is
+	 * on. Zero-arg: the extras that used to be hand-gathered in `Session.compiledBlocksFor` are the agent's
+	 * own bound env now.
+	 *
+	 * This list is TOTAL — every layer that reaches the system wire is a block in it, including the caller's
+	 * frame and the turn's shaping line, which the dispatcher used to join onto the projected text from
+	 * outside. Totality is the point rather than a tidiness: it is what lets the wire, the round breakdown,
+	 * the budget and the renderer preview all be projections of one object instead of four descriptions of
+	 * the same thing, which is how they drifted before.
 	 */
 	compiledContext(): TaggedBlock[] {
 		const manifest  = this.toolManifest();
@@ -1015,11 +1049,22 @@ export class Agent {
 		// lookup table exactly like References and Habits, and tagging them as one is what puts them under the
 		// `# Manifest` band with its read-on-demand directive rather than inside required reading. Being a
 		// section also means the compressive merge dedupes them for free.
-		const grants = this.grants ? [ Agent.sectionBlock( 'grants', this.grants ) ] : [];
+		// EMPTY MEANS ABSENT, and it has to be checked on the rows rather than on a composed string: a
+		// heading with nothing under it is not a harmless artifact of an empty session, it is what a dropped
+		// table looks like, and it told every reader the section was working.
+		const grants = this.grantRows.length
+			? [ Agent.sectionBlock( 'grants', this.grantRows.map( ( r ) => KcdContext.renderRow( r ) ).join( '\n' ), this.grantRows ) ]
+			: [];
 		return this.compiledBlocks( {
 			sections: grants,
 			before: Agent.joinSegments( [
-				// The agent's OWN authored instruction leads everything — it is the most specific statement of
+				// The HOST's own prompt leads everything — Starmind describing the environment the agent is
+				// running inside, above the agent's identity rather than beside it. Ordered first for the
+				// prefix cache as much as for meaning: it is the most-SHARED layer on the wire, identical for
+				// every agent in every session, and a cache invalidates from the earliest edit forward, so the
+				// layer that never varies belongs where nothing beneath it can force it to be re-prefilled.
+				this.hostPrompt   ? [ Agent.extraBlock( 'host-prompt',   this.hostPrompt   ) ] : [],
+				// The agent's OWN authored instruction follows it — the most specific statement of
 				// who this agent is, and it led the wire long before the compile existed ( the orchestrator's
 				// old `assembleSystem([ systemPrompt, ... ])` put it first ). Folding it in HERE is what closes
 				// the preview ≠ wire gap on the system half: the preview showed the compile WITHOUT the system
@@ -1035,16 +1080,78 @@ export class Agent {
 				// user attaches and detaches mid-conversation while root context and lens identity sit still —
 				// and prefix caching invalidates from the earliest edit forward, so the churning thing belongs
 				// last. Placed beside root context it would re-prefill the lens + tool weight on every attach.
-				this.attachments ? [ Agent.extraBlock( 'attachments', this.attachments ) ] : []
+				this.attachments ? [ Agent.extraBlock( 'attachments', this.attachments ) ] : [],
+				// The two CALLER layers close the system half. They were joined onto this string from OUTSIDE
+				// until the one-assembly pass; folding them in is what makes this list TOTAL, so the wire, the
+				// round breakdown, the budget and the renderer preview each project from one place instead of
+				// three of them rebuilding it separately. The order is the order the hand-assembly used —
+				// frame, then shaping — which is what keeps the projection byte-identical to what it replaced.
+				this.frame    ? [ Agent.extraBlock( 'frame', this.frame ) ] : [],
+				this.modeLine ? [ Agent.extraBlock( 'mode-line', this.modeLine ) ] : []
 			] )
 		} );
 	}
 
-	/** The system half a real turn sends — `compiledContext()` projected to text. THE one string: the
-	 *  renderer preview and the orchestrator's `_buildReq` both read this method, so preview == wire on
-	 *  the stable half by construction. Its dynamic twin is `session.wireMessages()`. */
+	/** The system half a real turn sends — `compiledContext()` projected to text. THE one string, and the
+	 *  WHOLE of it: `_buildReq` sends exactly this, with nothing joined on afterwards, and the renderer
+	 *  preview reads the same method — so preview == wire by construction rather than by two formulas kept
+	 *  in step. Its dynamic twin is `session.wireMessages()`. */
 	wireSystem(): string {
 		return this.compiledContext().map( b => b.text ).join( '\n\n' );
+	}
+
+	/**
+	 * The same compiled list, projected to the per-source BREAKDOWN the round record and the inspector read
+	 * — `wireSystem()`'s sibling, and the second of the two projections this object exists to serve.
+	 *
+	 * A projection, never a second derivation. The breakdown used to be rebuilt from the agent's parts by a
+	 * different method under different rules, which is precisely how it came to disagree with the string
+	 * that shipped. Reading the one list makes the two incapable of drifting, and the property is
+	 * CHECKABLE rather than merely intended: joining these segments' text reproduces `wireSystem()` exactly,
+	 * because every block's text reaches exactly one segment.
+	 *
+	 * Adjacent blocks sharing an identity merge into one segment, which is what keeps structure out of the
+	 * reader's way — a divider does not become a row that says nothing, and one source does not appear
+	 * twice under the same name. Counts are null here: the tokenizer lives main-side on the connector, and
+	 * a guess would be worse than an absence.
+	 */
+	contextSegments(): ContextSegment[] {
+		const out: ContextSegment[] = [];
+		// Structural blocks waiting for the segment they introduce — see the `!owner` branch below.
+		let pending: string[] = [];
+
+		for ( const block of this.compiledContext() ) {
+			const owner = Agent.segmentKey( block );
+
+			// STRUCTURAL — a `---` divider or a band heading. It has no identity of its own, and it belongs
+			// to the segment it INTRODUCES rather than to the one before it, so hold it until that segment
+			// arrives. Holding rather than dropping is what keeps this a projection: every block's text
+			// reaches exactly one segment, so joining the segments reproduces the wire.
+			if ( !owner ) {
+				pending.push( block.text );
+				continue;
+			}
+
+			const text = [ ...pending, block.text ].join( '\n\n' );
+			pending = [];
+
+			// The open segment already carries this identity, so this block continues it rather than
+			// starting a second segment under the same name.
+			const open = out[ out.length - 1 ];
+			if ( open && open.source === owner.source && open.label === owner.label ) {
+				open.text = open.text + '\n\n' + text;
+				continue;
+			}
+
+			out.push( { source: owner.source, label: owner.label, text, tokens: null } );
+		}
+
+		// A TRAILING divider has nothing after it to introduce, so it joins the last segment instead. A
+		// compile of nothing but structure has no segment to join, and produces none.
+		const last = out[ out.length - 1 ];
+		if ( pending.length && last ) last.text = last.text + '\n\n' + pending.join( '\n\n' );
+
+		return out;
 	}
 
 	/** This agent's whole-context token ESTIMATE — a single pile over its assembled `wireSystem()`, so it
@@ -1125,19 +1232,84 @@ export class Agent {
 		return { region: 'know', section, mergeKey: null, text, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
 	}
 
-	/** The coarse budget bucket one compiled block groups under — read straight off its `section` tag ( the
-	 *  system-prompt + root-context extras are System, the tool extras are Tools, everything else —
-	 *  identity, routing, memory, headings — is Lenses ). One read of a field the block already carries,
-	 *  no second compilation. */
+	/** The compiled sections that price as SYSTEM rather than as lens identity — the layers above and around
+	 *  the lens rather than the lens itself.
+	 *
+	 *  `attachments` is PARKED here knowingly. It is not lens identity and not tools, and a fourth bucket is
+	 *  probably right — the whole point of the gauge is seeing what context costs what, and folding files
+	 *  into "Root context" hides the exact number a user attaches a file to watch. That is a
+	 *  `compiledBudget()` signature change plus the inspector band, so it lands with the renderer slice
+	 *  rather than being half-done here. `frame` and `mode-line` join for the same reason and carry the same
+	 *  reservation. */
+	private static readonly SYSTEM_SECTIONS = new Set<string>( [ 'host-prompt', 'system-prompt', 'root-context', 'attachments', 'frame', 'mode-line' ] );
+	/** The compiled sections that price as TOOLS — the surface, not the identity that may reach for it. */
+	private static readonly TOOL_SECTIONS = new Set<string>( [ 'tool-manifest', 'suggested-tools' ] );
+	/** Every section the bottom-of-context manifest emits — the routing tables a reader finds filed together.
+	 *
+	 *  `files` is deliberately NOT a `MANIFEST_SECTIONS` entry: no lens slots into it, the agent synthesizes
+	 *  it from its own lens list. But it is a routing table exactly like the rest, so the breakdown files it
+	 *  with them. Reading `MANIFEST_SECTIONS` alone dropped it through to the artifact branch, where a
+	 *  synthetic block has no artifact to be named after and reported its source as `unknown`. */
+	private static readonly ROUTING_SECTIONS = new Set<string>( [ 'files', ...MANIFEST_SECTIONS ] );
+
+	/** The coarse budget bucket one compiled block groups under — read straight off its `section` tag
+	 *  against the two tables above; everything they do not claim — identity, routing, memory, headings,
+	 *  dividers — is Lenses. One read of a field the block already carries, no second compilation. */
 	static bucketOf( b: TaggedBlock ): 'system' | 'lenses' | 'tools' {
-		// `attachments` is PARKED on system, knowingly. It is not lens identity and not tools, and a fourth
-		// bucket is probably right — the whole point of the gauge is seeing what context costs what, and
-		// folding files into "Root context" hides the exact number a user attaches a file to watch. That is
-		// a compiledBudget() signature change plus the inspector band, so it lands with the renderer slice
-		// rather than being half-done here.
-		if ( b.section === 'system-prompt' || b.section === 'root-context' || b.section === 'attachments' ) return 'system';
-		if ( b.section === 'tool-manifest' || b.section === 'suggested-tools' ) return 'tools';
+		if ( !b.section ) return 'lenses';
+		if ( Agent.SYSTEM_SECTIONS.has( b.section ) ) return 'system';
+		if ( Agent.TOOL_SECTIONS.has( b.section ) )   return 'tools';
 		return 'lenses';
+	}
+
+	/** The human label for a synthetic section — the name a reader sees in the breakdown beside a block
+	 *  that has no source artifact to be named after. A section absent from this table labels itself.
+	 *
+	 *  Read through `labelFor` from OUTSIDE, never copied. What a block is CALLED belongs here beside what
+	 *  it is; a view that keeps its own list of the same names is a second answer to one question, and the
+	 *  two only ever agree until one of them is edited. */
+	private static readonly SECTION_LABELS: Record<string, string> = {
+		'host-prompt':     'host prompt',
+		'system-prompt':   'agent instruction',
+		'root-context':    'root context',
+		'attachments':     'attachments',
+		'frame':           'caller frame',
+		'mode-line':       'shaping line',
+		'tool-manifest':   'available tools',
+		'suggested-tools': 'suggested tools'
+	};
+
+	/** This section's canonical name, or `null` for one that has none — a lens section, a routing table, or
+	 *  anything that already names itself off its source artifact. Lowercase, as the wire breakdown wants
+	 *  it; a display surface that wants it capitalized or decorated does that to the answer rather than
+	 *  keeping a second copy of the question. */
+	static labelFor( section: string ): string | null {
+		return Agent.SECTION_LABELS[ section ] ?? null;
+	}
+
+	/**
+	 * Where one compiled block files in the per-source breakdown, or `null` when it is STRUCTURAL — a `---`
+	 * divider or a band heading, which has no identity of its own and belongs to the segment it introduces.
+	 *
+	 * `source` is the reader's FOLDER, deliberately not `bucketOf`'s pricing bucket. Pricing asks what a
+	 * block costs against; this asks where a person should find it — and an artifact body wants its own
+	 * type either way, so the two questions genuinely have different answers.
+	 */
+	static segmentKey( b: TaggedBlock ): SegmentKey | null {
+		if ( !b.section ) return null;
+		if ( Agent.SYSTEM_SECTIONS.has( b.section ) ) return { source: 'system', label: Agent.SECTION_LABELS[ b.section ] ?? b.section };
+		if ( b.section === 'memory' )                 return { source: 'memory', label: 'memory' };
+		if ( Agent.TOOL_SECTIONS.has( b.section ) )   return { source: 'tools',  label: Agent.SECTION_LABELS[ b.section ] ?? b.section };
+		if ( Agent.ROUTING_SECTIONS.has( b.section ) ) return { source: 'index', label: b.section };
+		if ( b.region === 'care' )                    return { source: 'lens',   label: b.section };
+		return { source: b.artifactType, label: Agent.basename( b.path ) || b.section };
+	}
+
+	/** A path's file name without its extension — the human label for an artifact-sourced segment. Plain
+	 *  string work rather than the `path` module, so this stays Node-free like the rest of core. */
+	private static basename( p: string ): string {
+		const tail = p.split( /[\\/]/ ).pop() ?? '';
+		return tail.replace( /\.[^.]+$/, '' );
 	}
 
 	/**
@@ -1281,9 +1453,15 @@ export class Agent {
 	/** A block tagged as one of the MANIFEST sections — the door for a manifest table sourced from OUTSIDE
 	 *  the lens graph. Identical to `extraBlock` but for what the tag means downstream: a section in
 	 *  `INDEX_SECTIONS` sinks to the manifest tier, merges compressively with any other source's rows for
-	 *  that section, and wears the canonical heading rather than an ad-hoc one. */
-	static sectionBlock( section: string, text: string ): TaggedBlock {
-		return { region: 'know', section, mergeKey: null, text, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
+	 *  that section, and wears the canonical heading rather than an ad-hoc one.
+	 *
+	 *  TAKES ITS ROWS, and a caller that omits them gets a heading and nothing else. That is not a defensive
+	 *  note — it is what happened: the grants section passed text alone, the merge read `rows` as it is
+	 *  documented to, and the whole table evaporated. `text` is what a lone-block preview renders; `rows` is
+	 *  what survives a merge. A manifest section owes BOTH.
+	 */
+	static sectionBlock( section: string, text: string, rows: SlotRow[] = [] ): TaggedBlock {
+		return { region: 'know', section, mergeKey: null, text, rows, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
 	}
 
 	/**
@@ -1388,8 +1566,10 @@ export class Agent {
 		return views;
 	}
 
-	/** The separator between system-prompt layers — the one place the live turn and the Constellation
-	 *  commit-bake agree on how the layers join, so they can never drift apart. */
+	/** The separator between system-prompt layers — the one place any caller stitching wire-order layers
+	 *  agrees on how they join, so no two of them can drift apart. `joinSegments` spells the same boundary
+	 *  as a block, which is what lets a hand-joined string and a compiled block list produce identical
+	 *  text. */
 	static readonly SYSTEM_SEP = '\n\n---\n\n';
 
 	/** The id every `Vault.buildAgent` agent carries — a lens substrate with no authored identity, built to
@@ -1400,47 +1580,31 @@ export class Agent {
 	static readonly VAULT_AGENT_ID = 'vault-agent';
 
 	/**
-	 * Join system layers in order, dropping empties, with the canonical separator. The ONE formula shared
-	 * by the live turn (the orchestrator's per-round system assembly) and the Constellation commit-bake —
-	 * extract-once so the two surfaces can't drift.
+	 * Join system layers in order, dropping empties, with the canonical separator — for a caller stitching
+	 * RAW STRINGS rather than blocks.
+	 *
+	 * The live turn no longer does: its system half is one projection of `compiledContext()`, and the
+	 * boundary is a real block ( `joinSegments` ) rather than a separator spliced between strings. What is
+	 * left here are the callers that genuinely have no block list to project — a tier that assembles an
+	 * identity as text, and `identity()` below.
 	 */
 	static assembleSystem( parts: ( string | null | undefined )[] ): string {
 		return parts.filter( Boolean ).join( Agent.SYSTEM_SEP );
 	}
 
 	/**
-	 * This agent's frozen IDENTITY — the "who": its `systemPrompt` over its recursive lens contribution
-	 * (Know/Care/Do). The Constellation bakes this onto a work node at commit, so the run carries the
-	 * agent's whole KCD framework rather than a bare model. (The live session interleaves the — currently
-	 * empty — above-lens layer between the two; here there is nothing between them.)
+	 * This agent's frozen IDENTITY — the "who": its `systemPrompt` over its recursive lens contribution.
+	 *
+	 * The ONE remaining caller that freezes an identity to text instead of letting the agent project it
+	 * live, and therefore the one place an agent's context is decided anywhere other than
+	 * `compiledContext()`. A run that carries this string carries a snapshot: no bound root context, no
+	 * memory, no tool manifest, and no way to reflect anything tuned after the freeze.
+	 *
+	 * That is a limitation of the caller, not a second design. Anything asking "what does this agent send"
+	 * wants `wireSystem()`; anything asking "what did it send, broken out" wants `contextSegments()`.
 	 */
 	identity(): string {
 		return Agent.assembleSystem( [ this.systemPrompt, this.compile() ] );
 	}
 
-	/**
-	 * The agent's identity BROKEN OUT by source — the PRE-MERGE, per-source twin of `identity()`, in
-	 * flat load order (systemPrompt, then per lens its header block + each contributing node). This
-	 * is the Atlas's human-audience view — the context-optimization plan's design deliberately keeps
-	 * it separate from the wire: `identity()`/`contribute()` now run every lens's blocks through
-	 * `ContextAssembler` (Care-hoisted, `data-kcd-merge-key` groups fused, injected sunk last), so
-	 * joining these segments no longer reproduces `identity()` byte-for-byte once a session has
-	 * Care content, a merge group, or injected context. Reconciling the two views is Phase 5; today
-	 * they intentionally diverge — see the plan's "Atlas is the human audience; the wire is the AI
-	 * audience" ruling. Token counts are filled at run time (null here — the tokenizer lives
-	 * main-side, on the connector).
-	 */
-	identitySegments(): ContextSegment[] {
-		const segs: ContextSegment[] = [];
-		if ( this.systemPrompt ) segs.push( { source: 'system', label: 'system prompt', text: this.systemPrompt, tokens: null } );
-		for ( const lens of this.lenses ) {
-			const block = lens.toContextBlock();
-			if ( block ) segs.push( { source: 'lens', label: lens.getPath() ?? 'lens', text: block, tokens: null } );
-			for ( const node of lens.getNodes() ) {
-				const text = node.contribute();
-				if ( text ) segs.push( { source: node.getType(), label: node.getName(), text, tokens: null } );
-			}
-		}
-		return segs;
-	}
 }

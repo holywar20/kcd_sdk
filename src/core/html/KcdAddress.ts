@@ -36,6 +36,16 @@ export const KcdAddress = new class KcdAddress {
 	 *  slot can point at ) shares — same three states MCP tool exposure already uses. Absent on a
 	 *  slot ⇒ 'on', the default. See PolicyEntry / SlotMode in primitives/types.ts. */
 	MODES        = [ 'off', 'on', 'suggested' ];
+	/** The §10 SEED modes — a completely separate vocabulary that happens to share the
+	 *  `data-kcd-mode` attribute with slots above. `prepend` maintains a `<!-- kcd:begin/end -->`
+	 *  block inside a host entry file; `create-only` writes the whole file and then never touches it
+	 *  again. Absent ⇒ `prepend` ( see `VaultUtilities.parseSeedsFrom` ).
+	 *
+	 *  Closed and checked HERE because the parse casts the raw attribute straight to the union with no
+	 *  check, and every miss folds to the `prepend` arm: a typo'd `create-only` does not fail, it
+	 *  quietly does the other thing — on the one document the installer reads BEFORE a vault exists,
+	 *  where nobody is watching. Two vocabularies on one attribute is the trap; naming both closes it. */
+	SEED_MODES   = [ 'prepend', 'create-only' ];
 	/** The closed slot-KIND vocabulary ( protocol §3 — `data-kcd-slot="<kind>"` ). Dredge roles
 	 *  ( reference / habit / contract / tool / rule ) plus the non-dredge kinds ( `link` = a nav row
 	 *  carrying an href, `table-data` = a plain faux-table row ); `domains` folds into `reference`.

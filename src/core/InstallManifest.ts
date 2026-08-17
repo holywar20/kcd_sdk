@@ -67,6 +67,10 @@ const MANIFEST: readonly ManifestEntry[] = [
 		purpose: 'Procedural references the bundled lenses link into by path. Currently read-a-survey, which lens-crafter loads when proposing artifacts for an unfamiliar codebase — the "read this INSTEAD of exploring" instruction that the whole survey-as-anchor design rests on.'
 	},
 	{
+		bundleSource: 'prompts', vaultHome: 'prompts', required: true,
+		purpose: 'The house agent\'s prompt relics — the wording every house task sends. REQUIRED in the strongest sense: `HouseTask.prompt` names a relic and `instructionFor` THROWS on a missing one by ruling, with deliberately no inline fallback, so a vault without this directory does not degrade — it explodes on its first house task. Titling fires automatically on a session\'s first prompt, so the failure is immediate rather than eventual. Shipped as a directory: the set grows with the task registry, and a row per relic would drift out of step with it.'
+	},
+	{
 		bundleSource: 'utilities/deployed', vaultHome: 'utilities/deployed', required: false,
 		purpose: 'Bundled example utilities for the registered tool tier — a starting point, not a requirement.'
 	},

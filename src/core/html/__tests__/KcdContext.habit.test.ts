@@ -23,9 +23,9 @@ const DONT_STYLE = `<article data-kcd="habit">
 
 describe( 'KcdContext.projectHabit — the dense four-field directive', () => {
 	it( 'do-style: line one is "{name} — when {when}, execute {action}."; line two is "↳ {explanation} · {rules}"', () => {
-		const out = KcdContext.projectHabit( habit( 'session-log-aggressive', DO_STYLE ) );
+		const out = KcdContext.projectHabit( habit( 'log-session-liberal', DO_STYLE ) );
 		expect( out ).toBe(
-			'session-log-aggressive — when the user asks to "log", or a session closes after changing _Claude/, execute prepend one dated breadcrumb line to _Claude/logs/session.md.\n' +
+			'log-session-liberal — when the user asks to "log", or a session closes after changing _Claude/, execute prepend one dated breadcrumb line to _Claude/logs/session.md.\n' +
 			'↳ the session log is read in full to orient every new session, so it stays a terse, scannable trail. · one line, ≤40 words; newest on top'
 		);
 	} );
@@ -44,7 +44,7 @@ describe( 'KcdContext.projectHabit — the dense four-field directive', () => {
 	} );
 
 	it( 'projectBlocks routes a habit to ONE dense block ( region do, section "habit" ), not section-by-section', () => {
-		const blocks = KcdContext.projectBlocks( habit( 'session-log-aggressive', DO_STYLE ), 'do' );
+		const blocks = KcdContext.projectBlocks( habit( 'log-session-liberal', DO_STYLE ), 'do' );
 		expect( blocks ).toHaveLength( 1 );
 		expect( blocks[ 0 ].region ).toBe( 'do' );
 		expect( blocks[ 0 ].section ).toBe( 'habit' );

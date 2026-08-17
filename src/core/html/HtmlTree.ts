@@ -166,14 +166,69 @@ export const HtmlTree = new class HtmlTree {
 		return out.trim();
 	}
 
+	/**
+	 * Node tree → HTML string. The inverse of `parse`, and the two must agree on every text path or a
+	 * save corrodes what it did not touch — see `HtmlTree.entities.test.ts` for the seam this locks.
+	 */
 	serialize( n: HtmlNode ): string {
 		if ( n.type === 'text' ) return this.escapeText( n.value );
 		const attrs = Object.entries( n.attrs )
 			.map( ( [ k, v ] ) => v === '' ? ` ${ k }` : ` ${ k }="${ this.escapeAttr( v ) }"` )
 			.join( '' );
 		if ( this.VOID.has( n.tag ) ) return `<${ n.tag }${ attrs }>`;
+
+		// RAW content round-trips VERBATIM, because `parse` captured it verbatim — its RAW branch is the
+		// one text path that skips `decode`, so escaping here adds a layer nothing ever removes. Same
+		// rule as the entity seam: what parse leaves alone, serialize leaves alone.
+		//
+		// Not cosmetic. Protocol §10 seed payloads are markdown inside <script type="text/kcd-md">, and
+		// `>` is markdown's blockquote character — escaped here, it is written into a real CLAUDE.md by
+		// the next `daedalus seed`. The corruption is one-time and then stable, so nothing ever gets
+		// visibly worse and nothing prompts a look.
+		//
+		// `RAW` is script/style ONLY. <pre> is deliberately not raw, and the double-escape trade pinned
+		// in HtmlTree.entities.test.ts stays exactly as it is.
+		if ( this.RAW.has( n.tag ) ) {
+			const raw = n.kids.map( k => k.type === 'text' ? k.value : this.serialize( k ) ).join( '' );
+			this.assertRawContainable( n.tag, raw );
+			return `<${ n.tag }${ attrs }>${ raw }</${ n.tag }>`;
+		}
+
 		const kids = n.kids.map( k => this.serialize( k ) ).join( '' );
 		return `<${ n.tag }${ attrs }>${ kids }</${ n.tag }>`;
+	}
+
+	/**
+	 * REFUSE to emit a raw element that would terminate itself — the raw-text breakout.
+	 *
+	 * There is no escape hatch to reach for here, which is why this refuses rather than repairs: entity
+	 * references are NOT decoded inside raw text, so writing `&lt;/script` would leave those literal
+	 * characters in the payload — broken JS, broken markdown — while making the document look fixed.
+	 * The content is unrepresentable in HTML, not merely awkward.
+	 *
+	 * Emitting it anyway is the dangerous outcome, not a cosmetic one: the element ends early on the next
+	 * read and everything after it is re-tokenized as markup, so the document that comes back is a
+	 * DIFFERENT TREE from the one written. That is the shape every raw-text injection takes.
+	 *
+	 * `parse` can never produce this ( its lexer ends the element at the first `</tag` ), so reaching
+	 * here means a hand-built or DOM-sourced node — a bug in the caller, which is exactly what should
+	 * fail loudly. Throwing is safe at this layer: the tool handlers above catch and return a structured
+	 * refusal, so a malformed write is declined whole and nothing lands.
+	 *
+	 * The test is the LEXER'S OWN condition, deliberately — `parse` searches for a bare `'</' + tag`
+	 * with no following-character check, so a stricter-than-spec reader and this guard agree by
+	 * construction. Leaving a gap between what the writer permits and what the reader stops at is the
+	 * affordance a breakout needs.
+	 */
+	assertRawContainable( tag: string, raw: string ): void {
+		// Both sides folded here rather than trusting the caller's normalization — this is public, and a
+		// guard that only works when its input was already lowercased is a guard with a quiet edge.
+		if ( !raw.toLowerCase().includes( '</' + tag.toLowerCase() ) ) return;
+		throw new Error(
+			`HtmlTree.serialize: <${ tag }> content contains "</${ tag }", which cannot be represented ` +
+			`inside a raw text element — the emitted document would reparse into a different tree. ` +
+			`Raw text has no entity escaping, so this must be split at the source ( in JS, "<\\/${ tag }" ).`
+		);
 	}
 
 	// ── Lexer internals ──────────────────────────────────────────────────────────
@@ -211,6 +266,23 @@ export const HtmlTree = new class HtmlTree {
 			.replace( /&amp;/g, '&' );
 	}
 
-	escapeText( s: string ): string { return s.replace( /&/g, '&amp;' ).replace( /</g, '&lt;' ).replace( />/g, '&gt;' ); }
-	escapeAttr( s: string ): string { return s.replace( /&/g, '&amp;' ).replace( /"/g, '&quot;' ); }
+	/**
+	 * Escaping is IDEMPOTENT — an `&` that already opens an entity reference ( `&mdash;`, `&#8212;`,
+	 * `&amp;` ) is left alone; only a BARE `&` is escaped.
+	 *
+	 * This is the other half of `decode` above, and the two must agree. `decode` knows a handful of
+	 * entities and passes every other one through as literal text; escaping every `&` unconditionally
+	 * therefore added a layer to `&mdash;` on the first parse → serialize round trip ( `&amp;mdash;` ),
+	 * and the document rendered the literal text to the reader. Every `kcd_save` runs that round trip —
+	 * `KcdEmit.spliceFrontmatter` re-parses and re-serializes the whole body — so an unowned entity was
+	 * corroded by any edit that touched the file. The rule is now symmetric: what decode leaves alone,
+	 * escape leaves alone. Widening `decode` to a named-entity table is the alternative and is worse —
+	 * there are thousands of them and the list would rot.
+	 *
+	 * `escapeAttr` carries the same rule for the same reason: attribute values are re-serialized by the
+	 * identical round trip. The quoting guarantee is untouched — `"` is still escaped unconditionally,
+	 * so a value can never break out of its attribute.
+	 */
+	escapeText( s: string ): string { return s.replace( /&(?!#?\w+;)/g, '&amp;' ).replace( /</g, '&lt;' ).replace( />/g, '&gt;' ); }
+	escapeAttr( s: string ): string { return s.replace( /&(?!#?\w+;)/g, '&amp;' ).replace( /"/g, '&quot;' ); }
 }();
