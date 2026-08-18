@@ -4,7 +4,7 @@ import { KCDPrimitive } from '../primitives';
 import type { SlotMode, LinkEntry, AddressEntry } from '../primitives';
 import type { Vault } from './Vault';
 import type { ArtifactRef } from '../core';
-import { InstallManifest, VaultLayout } from '../core';
+import { InstallManifest, VaultLayout, KcdEmit } from '../core';
 
 /** Where the seed source lives, vault-relative — protocol §10's one payload-per-host document. */
 const ROOT_CONTEXT_PATH = 'root-context.html';
@@ -28,10 +28,25 @@ export interface HealthIssue {
 	section?:  string;
 }
 
-/** Full health output — the flat issue list plus an errors-vs-warnings tally. */
+/**
+ * Full health output — the flat issue list, an errors-vs-warnings tally, and THE DENOMINATOR.
+ *
+ * `scanned` / `checked` exist because `{ total: 0 }` alone cannot distinguish *I examined 314
+ * documents and found nothing* from *I examined nothing*. That is the dominant defect class in this
+ * project's own register — a check that succeeds because there was nothing to check — and it was
+ * live on the one command a person runs to prove a vault is sound. A clean report over an empty
+ * input is the correct answer to the wrong question, which is exactly why no return-value assertion
+ * could ever see it.
+ */
 export interface HealthReport {
 	issues:  HealthIssue[];
 	summary: {
+		/** Files the scan walked, before any filtering. Zero here means the sweep found NOTHING —
+		 *  a missing or mis-pointed vault, not a healthy one. */
+		scanned:  number;
+		/** Documents actually parsed and validated. The real denominator: `total: 0` is only good
+		 *  news in proportion to this. `scanned - checked` is what the filters passed over. */
+		checked:  number;
 		total:    number;
 		errors:   number;
 		warnings: number;
@@ -262,6 +277,11 @@ export interface StylesheetFixReport {
 	oldHref: string;
 	newHref: string;
 	applied: boolean;
+	/** Whether this document was missing the tier-1 baseline and had one inserted. Reported separately
+	 *  from the href because the two fail independently: a document can carry a correct link and no
+	 *  baseline, which renders perfectly in a browser and is unreadable in a viewer that will not load
+	 *  a stylesheet — the exact case §8.1's second tier exists for. */
+	baselineAdded: boolean;
 }
 
 /**
@@ -282,13 +302,33 @@ export class VaultUtilities {
 	 *   REFERENCE INTEGRITY ( cross-file, advisory ) — dangling links and unresolved base/lens
 	 *   refs. The logic lives in `vault.referenceIssues`; this only folds it into one list.
 	 *
-	 * Returns `{ issues, summary }`. The pre-flight before a save/move sweep and the observable
-	 * form of the "internal state always viable" invariant.
+	 * Returns `{ issues, summary }` where the summary carries A DENOMINATOR — `scanned` and
+	 * `checked` — and not only a tally of what went wrong.
+	 *
+	 * WHY THE DENOMINATOR IS THE POINT. This reported `{ total: 0 }` for both *I examined 314
+	 * documents and found nothing* and *I examined nothing*, on the one command a person runs to
+	 * prove a vault is sound. That is this project's dominant failure class stated exactly: a check
+	 * that succeeds because there was nothing to check never returns a WRONG answer — it returns the
+	 * right answer for an empty input, which is why every existing assertion passed it and why no
+	 * return-value test could see it. `checked: 0` now says so out loud.
+	 *
+	 * WHAT IT STILL CANNOT SEE, stated so a clean report is not over-read: a document that fails to
+	 * PARSE is counted in `checked` and reported as an error ( good ), but `vault.scan()` is the
+	 * source of the file list, so anything the scan itself drops is invisible here — and reference
+	 * probing only resolves `_Claude/`-rooted hrefs, so a `file://` or off-vault link is neither
+	 * resolved nor reported. The gap between `scanned` and `checked` is the filters; the gap between
+	 * the filesystem and `scanned` is not measured at all.
+	 *
+	 * The pre-flight before a save/move sweep and the observable form of the "internal state always
+	 * viable" invariant.
 	 */
 	static health( vault: Vault, onlyFile?: string ): HealthReport {
 		const issues: HealthIssue[] = [];
+		let scanned = 0;
+		let checked = 0;
 
 		const checkFile = ( filePath: string ) => {
+			checked++;
 			const rel = vault.toVaultRel( filePath );
 
 			try {
@@ -306,6 +346,7 @@ export class VaultUtilities {
 		};
 
 		if ( onlyFile ) {
+			scanned = 1;
 			checkFile( onlyFile );
 		} else {
 			// The registry decides what is graded. Directories marked `indexed: false` are
@@ -315,9 +356,15 @@ export class VaultUtilities {
 			// declarative code, not a KCD artifact — the protocol says so outright ( "utility is
 			// not a document type" ) — so grading it against the document schema reports a
 			// category error, not a defect. This is the file-kind gate.
-			for ( const f of vault.scan() )
-				if ( vault.isLibraryPath( f.relativePath ) && /\.html?$/i.test( f.relativePath ) )
-					checkFile( f.path );
+			// RAW WALK, not `scan()`. `scan()` parses every file and drops whatever fails, so the
+			// malformed document — the one this sweep exists to find — was absent from its own report.
+			// Verified live: an unparseable file appeared only in a per-path check, never in a
+			// whole-vault one, while the summary read clean. A reporting tool must enumerate the
+			// filesystem, because failing to be an artifact IS the defect.
+			for ( const rel of vault.documentPaths() ) {
+				scanned++;
+				if ( vault.isLibraryPath( rel ) ) checkFile( rel );
+			}
 		}
 
 		for ( const ri of vault.referenceIssues( onlyFile || undefined ) )
@@ -326,6 +373,8 @@ export class VaultUtilities {
 		return {
 			issues,
 			summary: {
+				scanned,
+				checked,
 				total:    issues.length,
 				errors:   issues.filter( i => i.severity === 'error' ).length,
 				warnings: issues.filter( i => i.severity === 'warn' ).length,
@@ -924,9 +973,13 @@ export class VaultUtilities {
 				if ( action.kind === 'delete-duplicate' ) {
 					const kcdAbs  = vault.toAbs( action.kcdPath );
 					const newHref = `${ DOC_ROOT_PREFIX }/${ action.deployedPath }`;
-					for ( const edit of vault.inboundEdits( kcdAbs, newHref ) ) vault.rewriteHref( edit );
+					// Both passes, exactly as `move()` does it — this IS a move with the destination
+					// already occupied, so it must see the same references a real move would.
+					const found = vault.healOccurrences( kcdAbs, newHref );
+					for ( const edit of [ ...found.graph, ...found.text ] ) vault.rewriteHref( edit );
 					fs.unlinkSync( kcdAbs );
-					vault.assertNoResidual( kcdAbs, 'migrate' );
+					const after = vault.healOccurrences( kcdAbs );
+					vault.assertNoResidual( kcdAbs, 'migrate', [ ...after.graph, ...after.text ] );
 				} else {
 					vault.move( action.kcdPath, action.targetPath! );
 				}
@@ -939,46 +992,78 @@ export class VaultUtilities {
 	}
 
 	/**
-	 * Normalize every document's stylesheet `<link>` onto `cssHref` — the ONE configured absolute
-	 * `file:///` URL every document in the vault shares. Deliberately unconditional: a link already
-	 * correct is reported `applied: false` ( nothing to do ), not skipped.
+	 * Bring every document up to the TWO-TIER stylesheet contract ( protocol §8.1, amended 2026-08-17 ):
+	 * an inline baseline followed by a depth-relative `<link>`. Repairs both halves, reports both.
 	 *
-	 * This used to recompute a RELATIVE href from each file's own depth, mirroring the same math the
-	 * emitter ran — and existed largely to keep those two copies of the math agreeing. The href is now
-	 * one value handed in by whoever knows the install ( daedalus `Config`, tiers 1–4 ), so there is no
-	 * per-file computation left to get wrong and no second copy to drift.
+	 * `cssVaultRel` is where `kcd.css` sits relative to the vault root — omit it for a current vault
+	 * ( root ), pass `kcd/kcd.css` for one created before 2026-07-26. The per-file href is DERIVED from
+	 * it by `KcdEmit.cssHrefFor`, the same function the emitter calls, so the sweep and the writer
+	 * cannot disagree. It previously took a finished href as a parameter and stamped one value across
+	 * the corpus; handing one in is exactly how a machine-bound `file:///` URL reached 35 documents.
 	 *
-	 * NOT automatic and not required. Documents written through `kcd_save` are born with the configured
-	 * href; the older relative links still resolve on their own. This is the opt-in one-shot for making
-	 * an existing corpus uniform, invoked only by `daedalus fix-css confirm`.
+	 * LOAD-BEARING, not tidiness. An existing corpus carries no baseline at all until this runs, and
+	 * until then those documents are unreadable in any viewer that will not load a stylesheet — which
+	 * is the surface most readers use. A document written through `kcd_save` is born with both tiers.
 	 *
-	 * KNOWN GAP ( unchanged, deliberate ): matches one exact `<link rel="stylesheet" href="…">` form and
+	 * NOT A RE-EMIT, deliberately. Rebuilding each document through `KcdEmit` would also re-serialize
+	 * its body, and `HtmlTree` normalizes whitespace on that round trip — so a repair sweep would
+	 * flatten every document it touched. This performs head surgery instead and leaves the body's bytes
+	 * alone. Revisit once the emitter stops flattening.
+	 *
+	 * KNOWN GAP ( narrowed 2026-08-17 ): matches one exact `<link rel="stylesheet" href="…">` form and
 	 * passes over a document with no link, or a link whose attribute order differs, WITHOUT reporting
-	 * it. The totals are "of the links we recognized", not "of every document".
+	 * it. The totals are "of the links we recognized", never "of every document". The OTHER half of
+	 * that gap is closed — it walked `vault.scan()`, which drops anything that fails to parse, so a
+	 * malformed document was invisible to the verb whose job is repairing documents.
 	 */
-	static fixStylesheetLinks( vault: Vault, cssHref: string, opts?: { confirm?: boolean } ): StylesheetFixReport[] {
+	static fixStylesheetLinks( vault: Vault, cssVaultRel?: string, opts?: { confirm?: boolean } ): StylesheetFixReport[] {
 		const reports: StylesheetFixReport[] = [];
-		const linkRe = /<link\s+rel="stylesheet"\s+href="([^"]+)"\s*\/?>/;
+		const linkRe  = /<link\s+rel="stylesheet"\s+href="([^"]+)"\s*\/?>/;
 
-		for ( const f of vault.scan() ) {
-			const rel = f.relativePath.replace( /\\/g, '/' );
-
+		// RAW WALK, not `scan()` — a repair tool must reach the file it is repairing. `scan()` parses
+		// each file and drops what fails, so the malformed document was invisible to the verb whose job
+		// is fixing documents. Same correction as `health`; this docstring admitted the gap for weeks
+		// while the code kept the behaviour.
+		for ( const rel of vault.documentPaths() ) {
 			const raw = vault.read( rel );
 			const m   = linkRe.exec( raw );
 			if ( !m ) continue;
 
 			const oldHref = m[ 1 ];
-			if ( oldHref === cssHref ) {
-				reports.push( { path: rel, oldHref, newHref: cssHref, applied: false } );
+			const newHref = KcdEmit.cssHrefFor( rel, cssVaultRel );
+			const before  = raw.slice( 0, m.index );
+			const after   = raw.slice( m.index + m[ 0 ].length );
+			const link    = m[ 0 ].replace( oldHref, newHref );
+
+			// The link's own indentation, which `before` ends with. It has to be lifted off and put back
+			// in FRONT of the link, or the inserted block inherits it ( `\t\t<style>` ) and the link is
+			// left flush against the margin — harmless to render and exactly the kind of stair-stepped
+			// head that makes a corpus look machine-mangled.
+			const indent = /([ \t]*)$/.exec( before )?.[ 1 ] ?? '';
+			let   head   = before.slice( 0, before.length - indent.length );
+
+			// Any baseline already sitting immediately before the link is REMOVED and rebuilt rather than
+			// left alone. That is what makes this verb idempotent — a re-run repairs rather than
+			// duplicating, and a block written by an older version of this code gets corrected instead of
+			// being permanently grandfathered by a has-one-already check.
+			const priorBaseline = /[ \t]*<style\b[^>]*>[\s\S]*?<\/style>[ \t]*\r?\n?$/i;
+			const hadBaseline   = priorBaseline.test( head );
+			head = head.replace( priorBaseline, '' );
+
+			// Baseline in FRONT of the link, never behind it — §8.1's cascade rule. Behind it, the
+			// document looks repaired and is styled by the wrong sheet.
+			const rebuilt = head + KcdEmit.baselineBlock() + indent + link + after;
+
+			// Compared as bytes rather than guessed at from the two flags: "already correct" then means
+			// the file is byte-identical to what this verb would write, not merely that it has A link and
+			// A style block somewhere.
+			if ( rebuilt === raw ) {
+				reports.push( { path: rel, oldHref, newHref, applied: false, baselineAdded: false } );
 				continue;
 			}
 
-			if ( opts?.confirm ) {
-				const before = raw.slice( 0, m.index );
-				const after  = raw.slice( m.index + m[ 0 ].length );
-				vault.write( rel, before + m[ 0 ].replace( oldHref, cssHref ) + after );
-			}
-			reports.push( { path: rel, oldHref, newHref: cssHref, applied: !!opts?.confirm } );
+			if ( opts?.confirm ) vault.write( rel, rebuilt );
+			reports.push( { path: rel, oldHref, newHref, applied: !!opts?.confirm, baselineAdded: !hadBaseline } );
 		}
 		return reports;
 	}

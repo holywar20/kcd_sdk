@@ -73,6 +73,31 @@ export interface SynthResult {
 /** Block-level tags that mark a body as already-authored HTML rather than plain text. */
 const BLOCK_START = /^\s*<(p|div|ul|ol|section|table|pre|blockquote|h[1-6]|dl|figure)\b/i;
 
+/**
+ * HTML comment syntax an agent tried to author in prose. STRIPPED, not escaped.
+ *
+ * RULING ( Bryan, 2026-08-17 ): comments are a HUMAN channel. An agent should neither read them nor
+ * write them — it has the document body for anything it needs to say, and a side channel an agent
+ * can write but a reader does not expect is a contamination surface, which is the opposite of what
+ * these documents are for.
+ *
+ * Stripping also settles a disagreement between the two input paths. A comment inside an authored
+ * `body` is dropped by `HtmlTree.parse` before it can reach disk; the same comment typed into
+ * `content` prose was ESCAPED and rendered a literal `<!-- … -->` onto the page. Same intent, two
+ * outcomes, and the visible one is the wrong one. Both paths now yield nothing.
+ *
+ * NOT a security control — an authored body is handled by the parser, not here. This is about what a
+ * document ends up SAYING.
+ */
+const COMMENT_SYNTAX = /<!--[\s\S]*?-->/g;
+
+/** Markdown an author probably meant to be interpreted, which prose emission renders literally. */
+const MARKDOWN_TELLS: { probe: RegExp; fix: string }[] = [
+	{ probe: /\*\*\S[^*]*\*\*/,        fix: '**bold** → <strong>' },
+	{ probe: /`[^`\n]+`/,              fix: '`code` → <code>' },
+	{ probe: /\[[^\]\n]+\]\([^)\s]+\)/, fix: '[text](target) → <a href>' },
+];
+
 export const KcdSynth = new class KcdSynth {
 
 	/**
@@ -180,6 +205,34 @@ export const KcdSynth = new class KcdSynth {
 		return names;
 	}
 
+	/**
+	 * Advisories about the PROSE itself — markup an author meant to be interpreted and which prose
+	 * emission renders as literal characters.
+	 *
+	 * Distinct from `KcdShapes.audit`, which asks whether the right SECTIONS are present. This asks
+	 * whether what is inside them will read the way the author intended. Both are advisory: synthesis
+	 * owns shape, `KcdValidate` is the only gate, and neither may become a second half-enforcing
+	 * authority.
+	 *
+	 * WHY ADVISE RATHER THAN CONVERT. Interpreting `**bold**` would mint a markdown dialect this
+	 * project then owns and has to keep in step with its own escaping rules forever — for a corpus
+	 * whose documents are HTML by deliberate choice. The cheap honest move is to tell the author, at
+	 * the one moment they still hold the content, that what they wrote is not what will render.
+	 *
+	 * A section that is already authored HTML is skipped: an author writing markup means it.
+	 */
+	proseWarnings( input: SynthInput ): string[] {
+		const out: string[] = [];
+
+		for ( const [ name, text ] of Object.entries( input.sections ?? {} ) ) {
+			if ( !text || BLOCK_START.test( text.trim() ) ) continue;
+			const hits = MARKDOWN_TELLS.filter( t => t.probe.test( text ) ).map( t => t.fix );
+			if ( hits.length )
+				out.push( `markdown in section "${ name }": ${ hits.join( ', ' ) } — prose is escaped verbatim, so these render as literal characters rather than formatting.` );
+		}
+		return out;
+	}
+
 	// ── Rendering ─────────────────────────────────────────────────────────────────
 
 	/**
@@ -256,7 +309,9 @@ export const KcdSynth = new class KcdSynth {
 	 * direction, so a stray `<` in prose can never open a tag.
 	 */
 	proseToHtml( text: string ): string {
-		const trimmed = text.trim();
+		// Comments come off BEFORE the markup test, so a block that merely opens with one is still
+		// recognized as authored HTML rather than escaped wholesale.
+		const trimmed = text.replace( COMMENT_SYNTAX, '' ).trim();
 		if ( !trimmed ) return '';
 		if ( BLOCK_START.test( trimmed ) ) return trimmed;
 

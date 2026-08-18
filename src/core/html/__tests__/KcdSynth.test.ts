@@ -1,3 +1,51 @@
+import { describe as describeProse, it as itProse, expect as expectProse } from 'vitest';
+import { KcdSynth as Synth } from '../KcdSynth';
+
+/**
+ * Prose hygiene ( 2026-08-17 ). Two rules that both answer "what will this document actually SAY".
+ *
+ * Comments are stripped because they are a HUMAN channel ( ruling: Bryan ) — an agent has the body
+ * for anything it needs to say, and a side channel it can write but a reader does not expect is a
+ * contamination surface. Before this, the two input paths disagreed: a comment in an authored `body`
+ * was dropped by the parser, and the same comment in `content` prose was ESCAPED and rendered a
+ * literal `<!-- … -->` onto the page.
+ *
+ * Markdown is advised rather than converted, because interpreting it would mint a dialect this
+ * project then owns forever, in a corpus that is HTML by deliberate choice.
+ */
+describeProse( 'KcdSynth — prose hygiene', () => {
+
+	itProse( 'strips comment syntax rather than escaping it into visible text', () => {
+		const html = Synth.proseToHtml( 'Before <!-- a human note --> after.' );
+		expectProse( html ).not.toContain( '&lt;!--' );
+		expectProse( html ).not.toContain( '<!--' );
+		expectProse( html ).toContain( 'Before' );
+		expectProse( html ).toContain( 'after.' );
+	} );
+
+	itProse( 'still recognizes authored HTML that merely opens with a comment', () => {
+		expectProse( Synth.proseToHtml( '<!-- lead-in --><p>Real markup.</p>' ) ).toBe( '<p>Real markup.</p>' );
+	} );
+
+	itProse( 'flags each markdown form with the tag to use instead', () => {
+		const warn = Synth.proseWarnings( { sections: { why: 'This is **bold** and `code` and [a link](x.html).' } } );
+		expectProse( warn ).toHaveLength( 1 );
+		expectProse( warn[ 0 ] ).toContain( 'why' );
+		expectProse( warn[ 0 ] ).toContain( '<strong>' );
+		expectProse( warn[ 0 ] ).toContain( '<code>' );
+		expectProse( warn[ 0 ] ).toContain( '<a href>' );
+	} );
+
+	itProse( 'says nothing about prose that carries no markers', () => {
+		expectProse( Synth.proseWarnings( { sections: { why: 'Ordinary prose, nothing clever.' } } ) ).toEqual( [] );
+	} );
+
+	// An author writing markup means it — a <code> element is not a backtick mistake.
+	itProse( 'does not flag a section already authored as HTML', () => {
+		expectProse( Synth.proseWarnings( { sections: { why: '<p>Real <code>markup</code> here.</p>' } } ) ).toEqual( [] );
+	} );
+} );
+
 import { describe, it, expect } from 'vitest';
 import { KcdSynth } from '../KcdSynth';
 import { KcdEmit } from '../KcdEmit';

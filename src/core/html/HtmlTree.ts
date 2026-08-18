@@ -34,6 +34,23 @@ export const HtmlTree = new class HtmlTree {
 	VOID = new Set( [ 'meta', 'link', 'input', 'br', 'hr', 'img', 'source', 'col', 'area', 'base', 'wbr' ] );
 	RAW  = new Set( [ 'script', 'style' ] );
 
+	/**
+	 * Elements that live INSIDE a line of text. Everything not named here is treated as block-level and
+	 * gets its own line when `serialize` pretty-prints.
+	 *
+	 * The set is deliberately the inline one rather than the block one: the block vocabulary is open
+	 * ( `section`, `article`, `figure`, and every `div` a document invents ), while the inline
+	 * vocabulary is small and closed. Guessing wrong about a block costs a newline nobody sees;
+	 * guessing wrong about an inline WELDS OR SPLITS WORDS — `</strong> <code>` collapsing to
+	 * `canonical:_Claude` is the defect the parser's own whitespace rule already exists to prevent.
+	 * So the safe default is "block", and this list is what opts out.
+	 */
+	INLINE = new Set( [
+		'a', 'abbr', 'b', 'bdi', 'bdo', 'br', 'cite', 'code', 'data', 'del', 'dfn', 'em', 'i', 'img',
+		'ins', 'kbd', 'label', 'mark', 'q', 'rp', 'rt', 'ruby', 's', 'samp', 'small', 'span', 'strong',
+		'sub', 'sup', 'time', 'u', 'var', 'wbr',
+	] );
+
 	// ── Construction ───────────────────────────────────────────────────────────
 
 	/** Parse an HTML string into a normalized node tree. Returns the synthetic `#document` root. */
@@ -159,18 +176,39 @@ export const HtmlTree = new class HtmlTree {
 	 * NORMALIZED, not byte-original: the source's incidental whitespace/quote style is not preserved.
 	 * That is fine by ruling — the section body is the substrate-coupled half of the seam, free to
 	 * change; parity is asserted on section NAMES / links / policy, never on body bytes.
+	 *
+	 * PRETTY-PRINTED since 2026-08-17. It used to concatenate with no separator at all, which — since
+	 * `parse` collapses every whitespace-only run to a single space and `serialize` emitted no
+	 * newlines — flattened each document onto ONE PHYSICAL LINE. A 6KB body on line 11 was the
+	 * standing example. The cost was not cosmetic: `KcdSynth` built carefully indented markup and
+	 * `KcdEmit.spliceFrontmatter` re-parsed it through here in the same call and discarded the
+	 * formatting, so the two halves of one pipeline undid each other; and every diff of an
+	 * agent-written document was one unreadable line.
 	 */
-	innerHtml( el: HtmlEl ): string {
-		let out = '';
-		for ( const k of el.kids ) out += this.serialize( k );
-		return out.trim();
+	innerHtml( el: HtmlEl, indent: string = '' ): string {
+		const kids = el.kids.filter( k => !this.isBlank( k ) );
+		if ( !kids.length ) return '';
+		const sep = kids.some( k => !this.isInline( k ) ) ? '\n' + indent : '';
+		return kids.map( k => this.serialize( k, indent ) ).join( sep ).trim();
+	}
+
+	/** A text node that is only whitespace — `parse` emits these as a single space to keep adjacent
+	 *  inline elements from welding. They carry no content, so a block layout drops them and rebuilds
+	 *  the spacing structurally; an INLINE run keeps them, which is the whole reason they exist. */
+	isBlank( n: HtmlNode ): boolean {
+		return n.type === 'text' && n.value.trim() === '';
+	}
+
+	/** Text, or an element from the closed inline set. Anything else is block-level. */
+	isInline( n: HtmlNode ): boolean {
+		return n.type === 'text' || this.INLINE.has( n.tag );
 	}
 
 	/**
 	 * Node tree → HTML string. The inverse of `parse`, and the two must agree on every text path or a
 	 * save corrodes what it did not touch — see `HtmlTree.entities.test.ts` for the seam this locks.
 	 */
-	serialize( n: HtmlNode ): string {
+	serialize( n: HtmlNode, indent: string = '' ): string {
 		if ( n.type === 'text' ) return this.escapeText( n.value );
 		const attrs = Object.entries( n.attrs )
 			.map( ( [ k, v ] ) => v === '' ? ` ${ k }` : ` ${ k }="${ this.escapeAttr( v ) }"` )
@@ -194,8 +232,24 @@ export const HtmlTree = new class HtmlTree {
 			return `<${ n.tag }${ attrs }>${ raw }</${ n.tag }>`;
 		}
 
-		const kids = n.kids.map( k => this.serialize( k ) ).join( '' );
-		return `<${ n.tag }${ attrs }>${ kids }</${ n.tag }>`;
+		// `<pre>` is whitespace-SIGNIFICANT — reformatting it changes what the reader sees, so its
+		// children are concatenated exactly as an inline run and never indented. It is deliberately not
+		// in RAW ( see the double-escape trade pinned in HtmlTree.entities.test.ts ); this is the other
+		// half of that decision.
+		if ( n.tag === 'pre' )
+			return `<${ n.tag }${ attrs }>${ n.kids.map( k => this.serialize( k ) ).join( '' ) }</${ n.tag }>`;
+
+		// THE ONE RULE: an element breaks lines only when it actually CONTAINS a block child. A run of
+		// text and inline elements is emitted exactly as it was, on one line, because whitespace between
+		// inline nodes is rendered content — injecting a newline there splits or welds words. Whitespace
+		// BETWEEN blocks renders to nothing, so it is free to use for structure.
+		const kids = n.kids.filter( k => !this.isBlank( k ) );
+		if ( !kids.some( k => !this.isInline( k ) ) )
+			return `<${ n.tag }${ attrs }>${ n.kids.map( k => this.serialize( k ) ).join( '' ) }</${ n.tag }>`;
+
+		const inner = indent + '\t';
+		const body  = kids.map( k => inner + this.serialize( k, inner ) ).join( '\n' );
+		return `<${ n.tag }${ attrs }>\n${ body }\n${ indent }</${ n.tag }>`;
 	}
 
 	/**

@@ -21,30 +21,91 @@ import { KcdAddress } from './KcdAddress';
 import { KcdValidate } from './KcdValidate';
 import type { SerializedArtifact } from '../../primitives/types';
 
-/** The fallback stylesheet href — the bare filename, correct only for a document sitting AT the vault
- *  root. A real write path passes the configured absolute href instead; this exists so a caller that
- *  never lands a file ( `KCDPrimitive.toHtml()`, the emit tests ) still produces a well-formed head. */
+/** The stylesheet's default location relative to the vault root. A pre-2026-07-26 vault keeps it at
+ *  `kcd/kcd.css` instead, which is why `cssHrefFor` takes it as an argument rather than assuming it.
+ *  Used bare when no destination is supplied ( `KCDPrimitive.toHtml()`, the emit tests ) — correct for
+ *  a document AT the vault root, and the safest guess when the depth is unknown. */
 const CSS_FALLBACK = 'kcd.css';
+
+/**
+ * TIER 1 of the stylesheet contract ( protocol §8.1, amended 2026-08-17 ) — the baseline every emitted
+ * document carries inline. LEGIBILITY, NEVER DESIGN.
+ *
+ * It exists because the surface most readers actually use cannot load an external stylesheet at all:
+ * a document rendered detached from its directory has nothing for a `<link>` to resolve against, and
+ * it fails SILENTLY — no warning, just an unstyled page. Relative or absolute made no difference, so
+ * the answer is to carry the minimum and reference the rest.
+ *
+ * KEEP IT UNDER TEN LINES. Past that it has stopped being a baseline and become a second design
+ * language that must then be kept in step with `kcd.css` — the exact failure this tier avoids. It is
+ * deliberately NOT a copy of the real stylesheet: a full inline copy would be ~10KB per document,
+ * would go stale the moment `kcd.css` changed, and would put a corpus one commit from an every-file
+ * diff. Two colours and a measure never go stale, because an out-of-date "dark background, light
+ * text" is still correct.
+ */
+const BASELINE_CSS =
+	'\t\t/* KCD baseline — legibility only, never design. Overridden by kcd.css below. */\n' +
+	'\t\tbody { background:#0d0d1c; color:#e6e6f2; font:16px/1.65 system-ui,-apple-system,"Segoe UI",sans-serif;\n' +
+	'\t\t       max-width:72rem; margin:2.5rem auto; padding:0 1.25rem; }\n' +
+	'\t\ta    { color:#8b7ff0; }\n' +
+	'\t\tcode { background:#17172e; border-radius:4px; padding:.05rem .3rem; }\n';
 
 export const KcdEmit = new class KcdEmit {
 
 	/**
 	 * A full artifact → a full HTML document string ( doctype through `</html>` ).
 	 *
-	 * `cssHref` is the stylesheet link, handed in whole. It used to be COMPUTED here from the
-	 * document's own depth ( one `../` per level up to the vault root ), and that shape was wrong twice
-	 * over: the depth math had to be MIRRORED in a corpus-wide sweep to stay honest, and a document
-	 * that moved carried a link that silently stopped resolving. The href is now one configured
-	 * ABSOLUTE value every document shares — resolved by whoever knows the install ( `Config`, in
-	 * daedalus ), passed down, never derived. kcd_sdk sits below that config and does not read it.
+	 * `cssHref` is TIER 2 — the relative link to the real stylesheet, built by `cssHrefFor` from the
+	 * destination's vault-relative path. TIER 1, the inline baseline, is emitted unconditionally and
+	 * takes no argument: it is the same nine lines in every document by design.
 	 *
-	 * Omitted, it falls back to the bare filename — correct only at the vault root, and meant for a
-	 * caller that never lands a file. A WRITE path that omits it is a bug.
+	 * Omitted, `cssHref` falls back to the bare filename — correct only at the vault root, and meant
+	 * for a caller that never lands a file. A WRITE path that omits it is a bug.
+	 *
+	 * HISTORY, because this has been settled three times and twice on the wrong axis. Depth-relative
+	 * originally; replaced 2026-07-29 by one configured ABSOLUTE `file:///` value to stop two copies of
+	 * the depth math drifting; reversed to relative on 2026-08-17 by a session that had not read §8.1
+	 * and reverted the same day. The axis was never absolute-versus-relative — a viewer that renders a
+	 * document detached from its directory cannot follow a reference of EITHER kind. §8.1 was amended
+	 * on evidence: carry a baseline, reference the design language, and put the depth math in ONE
+	 * function so the original duplication objection is answered rather than sidestepped.
 	 */
 	emit( artifact: SerializedArtifact, cssHref: string = CSS_FALLBACK ): string {
 		const dl = this.frontmatterBlock( artifact.frontmatter );
 		const article = this.spliceFrontmatter( artifact.body, dl );
 		return this.document( artifact.type, this.titleOf( artifact ), article, cssHref );
+	}
+
+	/** TIER 1 as it is actually written into a head — `<style>` open, the baseline, `</style>`, all with
+	 *  the emitter's own indentation. ONE SOURCE: `document()` and `VaultUtilities.fixStylesheetLinks`
+	 *  both call this, so a swept document and a freshly-emitted one carry the identical block and the
+	 *  sweep cannot drift from the writer. */
+	baselineBlock(): string {
+		return '\t<style>\n' + BASELINE_CSS + '\t</style>\n';
+	}
+
+	/**
+	 * TIER 2's href — one `../` per directory level from the document up to the vault root, then the
+	 * stylesheet's own location within it.
+	 *
+	 * THE ONE COPY OF THIS MATH ( protocol §8.1 ). The emitter and `VaultUtilities.fixStylesheetLinks`
+	 * both call this rather than each computing a run of `../`, which is the drift the 2026-07-29
+	 * absolute-href ruling was actually trying to prevent — it removed the relativity instead of the
+	 * duplication, and lost portability to buy it.
+	 *
+	 * `cssVaultRel` is where the stylesheet sits RELATIVE TO THE VAULT ROOT, and it is a parameter
+	 * rather than a constant because it genuinely varies: a current vault keeps `kcd.css` at the root,
+	 * while a vault created before 2026-07-26 keeps it at `kcd/kcd.css` and is not wrong. Assuming the
+	 * root would emit a confidently broken link into every document of an older vault.
+	 *
+	 * So `references/patterns/x.html` → `../../kcd.css`, and the same document in a legacy vault →
+	 * `../../kcd/kcd.css`. A root-level or empty path yields the location unchanged.
+	 */
+	cssHrefFor( vaultRelDocPath: string, cssVaultRel: string = CSS_FALLBACK ): string {
+		const clean = ( s: string ) => s.replace( /\\/g, '/' ).replace( /^\.\//, '' ).replace( /^\/+/, '' );
+		const target = clean( cssVaultRel ) || CSS_FALLBACK;
+		const depth  = clean( vaultRelDocPath ).split( '/' ).filter( Boolean ).length - 1;
+		return depth > 0 ? '../'.repeat( depth ) + target : target;
 	}
 
 	/** frontmatter → `<dl data-kcd-frontmatter>…</dl>`, the inverse of `KcdParse.frontmatter()`.
@@ -119,11 +180,16 @@ export const KcdEmit = new class KcdEmit {
 	 *  `cssHref` defaults to the bare filename ( vault-root only ). Callers reach this through `emit`,
 	 *  which takes the configured absolute href from its own caller — see `emit`. */
 	document( type: string, title: string, articleInner: string, cssHref: string = CSS_FALLBACK ): string {
+		// THE ORDER IS LOAD-BEARING ( protocol §8.1 ): baseline FIRST, link SECOND. Both set `body` at
+		// identical specificity, so the later declaration wins and kcd.css overrides the baseline.
+		// Reversed, nine lines silently beat the real stylesheet in every browser — a page that looks
+		// fine, styled by the wrong sheet, with nothing anywhere to indicate it.
 		return '<!DOCTYPE html>\n'
 			+ '<html lang="en">\n'
 			+ '<head>\n'
 			+ '\t<meta charset="utf-8">\n'
 			+ `\t<title>${ HtmlTree.escapeText( title ) }</title>\n`
+			+ this.baselineBlock()
 			+ `\t<link rel="stylesheet" href="${ cssHref }">\n`
 			+ '</head>\n'
 			+ '<body>\n\n'

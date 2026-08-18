@@ -7,27 +7,57 @@ import type { ScannedFile } from '../scanner';
 import { inferProjectRoot, loadLensFromDisk } from './io';
 
 /**
- * One inbound link that a heal touches. `file` is the referrer ( vault-relative ); `oldHref` is the
- * EXACT authored href as written in that file ( so the on-disk swap is precise ); `newHref` is its
- * replacement on a move, or undefined on a delete strip.
+ * One inbound reference a heal found. `file` is the referrer ( vault-relative, or `../CLAUDE.md` for a
+ * host entry file at the project root ); `oldHref` is the EXACT authored href as written in that file
+ * ( so the on-disk swap is precise ); `newHref` is its replacement on a move, or undefined on a delete
+ * strip. `untouched` is set only on a reference the heal deliberately LEFT ALONE, and names why.
+ *
+ * ONE EDIT IS ONE ( referrer, authored href ) SWAP, not one occurrence. `rewriteHref` replaces every
+ * occurrence of that string in that file, so a document naming the target six times is one edit — and
+ * a heal plan's length is therefore a count of REFERRERS, which is the number a reader can act on.
  */
 export interface HealEdit {
-	file:     string;
-	oldHref:  string;
-	newHref?: string;
+	file:       string;
+	oldHref:    string;
+	newHref?:   string;
+	untouched?: 'quoted' | 'not-excisable';
 }
 
 /**
- * The full effect of a move/delete BEFORE it touches disk — the rename ( or removal ) plus every
- * referrer edit that keeps the graph viable. Vault.move/delete compute this first ( the preview ) and
- * then apply it; that split is the seam a human-approval gate slots into. Returned from the applied
- * call too, so the caller sees exactly what changed.
+ * Every reference to one target a heal can see, in three buckets — the raw finding, before a caller
+ * decides what to do with each. `move` and `delete` compose these differently, which is exactly why
+ * they arrive separated rather than pre-merged.
+ */
+export interface HealFindings {
+	/** From the GRAPH pass: a link read out of a PARSED artifact, matched on resolved identity. The
+	 *  only bucket a delete can EXCISE, because excision is parse-and-splice. */
+	graph:  HealEdit[];
+	/** From the TEXT pass: a reference position in raw bytes ( `href=`, `data-kcd-address=`, markdown
+	 *  `](…)` ). Rewritable by literal swap in any text file. Disjoint from `graph`. */
+	text:   HealEdit[];
+	/** From the TEXT pass: a QUOTED-SPEECH position — `<code>` / `<pre>` element content, a markdown
+	 *  fence or inline span. Reported, never rewritten: the corpus teaches agents what to SAY, and a
+	 *  blind sweep would edit the lesson. */
+	quoted: HealEdit[];
+}
+
+/**
+ * The full effect of a move/delete BEFORE it touches disk — the rename ( or removal ), every referrer
+ * edit that keeps the graph viable, AND every reference deliberately left alone. Vault.move/delete
+ * compute this first ( the preview ) and then apply it; that split is the seam a human-approval gate
+ * slots into. Returned from the applied call too, so the caller sees exactly what changed.
+ *
+ * `edits` and `reported` are separate because collapsing them would rebuild the defect this plan
+ * exists to fix: an `edits: []` that reads identically as *nothing pointed at this* and *I could not
+ * see what pointed at this*. Every reference found lands in one array or the other, and a reference
+ * in `reported` carries `untouched` saying why.
  */
 export interface HealPlan {
-	op:    'move' | 'delete';
-	from:  string;
-	to?:   string;
-	edits: HealEdit[];
+	op:       'move' | 'delete';
+	from:     string;
+	to?:      string;
+	edits:    HealEdit[];
+	reported: HealEdit[];
 }
 
 /**
@@ -227,6 +257,44 @@ export class Vault {
 		return total;
 	}
 
+	/**
+	 * Every `.html` file under the indexed directories, as vault-relative paths — a RAW WALK that
+	 * opens nothing.
+	 *
+	 * THE DIFFERENCE FROM `scan()` IS THE WHOLE POINT. `scan()` parses each file, so a document that
+	 * fails to parse is DROPPED from its result — which is fine for a consumer that wants artifacts
+	 * and wrong by construction for one that wants to REPORT ON or REPAIR them, because failing to be
+	 * an artifact IS the defect. A health sweep built on `scan()` cannot see the file it most needs
+	 * to: the malformed one is absent from the list, so the sweep returns clean and is not lying, it
+	 * simply never looked. Verified live 2026-08-17 — an unparseable document did not appear in a
+	 * whole-vault report at all, only in a per-path check.
+	 *
+	 * Unlike `countArtifacts`, `nav-index.html` is INCLUDED: a navigation stub is scaffolding rather
+	 * than an artifact for counting purposes, but it is a real document that can be malformed, and a
+	 * checker that skips it grades less than it claims to.
+	 *
+	 * Total, like the counter: an unreadable directory costs that directory's files, not the walk.
+	 */
+	documentPaths(): string[] {
+		const out: string[] = [];
+		const walk = ( dir: string ): void => {
+			let entries: fs.Dirent[];
+			try {
+				entries = fs.readdirSync( dir, { withFileTypes: true } );
+			} catch {
+				return;
+			}
+			for ( const entry of entries ) {
+				const full = path.join( dir, entry.name );
+				if ( entry.isDirectory() ) { walk( full ); continue; }
+				if ( !/\.html?$/i.test( entry.name ) ) continue;
+				out.push( this.toVaultRel( full ) );
+			}
+		};
+		for ( const dir of VaultLayout.indexedDirs() ) walk( path.join( this.root, dir ) );
+		return out;
+	}
+
 	/** Scanned files whose vault-relative path matches a glob ( * within a segment, ** across ). */
 	glob( pattern: string ): ScannedFile[] {
 		return this.scan().filter( f => Glob.matches( f.relativePath, pattern ) );
@@ -332,11 +400,14 @@ export class Vault {
 	 * Move ( or rename ) an artifact AND heal every inbound link so the graph never rots.
 	 *
 	 * Every referrer authors the target as a project-root-relative href ( `_Claude/...` ), so healing
-	 * is a targeted swap of that one authored string in each referrer — keyed off the link's RESOLVED
-	 * identity, not a text grep — which preserves the hand-authored formatting a full HtmlTree
-	 * round-trip would normalize away. The HealPlan is computed first, then applied unless `dryRun`
-	 * ( the approval seam ). On apply it rewrites each referrer, renames the file, and asserts the
-	 * post-condition: no link may still resolve to the old path ( a residual throws — fail loud ).
+	 * is a targeted swap of that one authored string in each referrer, which preserves the
+	 * hand-authored formatting a full HtmlTree round-trip would normalize away. Referrers come from
+	 * BOTH passes ( `healOccurrences` ) — the parse graph and the raw byte sweep — because neither
+	 * alone sees the whole corpus. The HealPlan is computed first, then applied unless `dryRun` ( the
+	 * approval seam ). On apply it rewrites each referrer, renames the file, and asserts the
+	 * post-condition: no rewritable reference may still resolve to the old path ( a residual throws —
+	 * fail loud ). Quoted-speech occurrences are exempt from that post-condition by construction: they
+	 * were never going to change, so they can never be a residual.
 	 */
 	move( from: string, to: string, opts?: { dryRun?: boolean } ): HealPlan {
 		const fromAbs = this.toAbs( from );
@@ -350,7 +421,12 @@ export class Vault {
 			throw new Error( `Cannot move: destination "${ to }" already exists — this never overwrites; pick a free path, or delete the occupant first` );
 
 		const newHref = `${ this.docRoot }/${ to }`.replace( /\\/g, '/' );
-		const plan: HealPlan = { op: 'move', from, to, edits: this.inboundEdits( fromAbs, newHref ) };
+		const found   = this.healOccurrences( fromAbs, newHref );
+		const plan: HealPlan = {
+			op: 'move', from, to,
+			edits:    [ ...found.graph, ...found.text ],
+			reported: found.quoted,
+		};
 
 		if ( opts?.dryRun ) return plan;
 
@@ -358,7 +434,8 @@ export class Vault {
 		fs.mkdirSync( path.dirname( destAbs ), { recursive: true } );
 		fs.renameSync( fromAbs, destAbs );
 
-		this.assertNoResidual( fromAbs, 'move' );
+		const after = this.healOccurrences( fromAbs );
+		this.assertNoResidual( fromAbs, 'move', [ ...after.graph, ...after.text ] );
 		return plan;
 	}
 
@@ -379,11 +456,227 @@ export class Vault {
 		return edits;
 	}
 
+	// ── Heal by canonical path ( the TEXT pass ) ──────────────────────────────
+
 	/**
-	 * Apply one move edit to disk — swap the authored old href for the new one in the referrer, in
-	 * both HTML ( `href="…"` / `href='…'` ) and `.js` comment ( `[text](…)` ) forms. Literal replace of
-	 * every occurrence ( split/join, never a regex — a path with metacharacters is safe ). A no-op
-	 * ( nothing matched ) is left for assertNoResidual to catch rather than silently swallowed.
+	 * Host entry files at the PROJECT root that a heal reaches — outside the vault, and named one by
+	 * one rather than discovered by walking the project.
+	 *
+	 * `CLAUDE.md` is the first document every agent reads, it is markdown so the artifact scan never
+	 * sees it, and its prose sits BELOW the `kcd:end` marker so the seeder cannot reach it either. It
+	 * carried a dead architecture claim and three broken links for weeks while `kcd_health` reported
+	 * 0 issues across 0 files and was correct, because it never looked.
+	 *
+	 * An explicit list, never a project walk: a heal that can rewrite arbitrary files outside the vault
+	 * is a blast radius nobody asked for, and this is a move tool, not a refactorer.
+	 */
+	static readonly HOST_ENTRY_FILES: readonly string[] = [ 'CLAUDE.md' ];
+
+	/**
+	 * Ephemeral log space the text sweep is RULED into ( Bryan, 2026-08-17 ): `logs/{lens}/todo/` are
+	 * live routing surfaces and the actual source of the pain — a todo pointing at a retired plan
+	 * three days after a triage declared the repair held.
+	 *
+	 * `logs/session.md` and `logs/{lens}/completed/` are deliberately OUT. Those are historical
+	 * records, and rewriting a path inside a dated entry makes the corpus more consistent and the entry
+	 * less true. A WHITELIST, never a blacklist: a new log sub-folder is out of scope until somebody
+	 * rules it in, which is the safe direction for a verb that writes.
+	 */
+	static readonly LOGS_DIR           = 'logs';
+	static readonly HEALED_LOG_SUBDIR  = 'todo';
+
+	/** Reference POSITIONS the text pass recognizes — an attribute href, an address, or a markdown
+	 *  link target. Deliberately not "any occurrence of the path": a bare path in prose is a mention,
+	 *  and rewriting a mention is editing somebody's sentence. Source string, not a literal, because a
+	 *  `/g` regex carries `lastIndex` and a shared one would skip matches. */
+	private static readonly REFERENCE_POSITION =
+		'(?:href|data-kcd-address)\\s*=\\s*"([^"]*)"' +
+		'|(?:href|data-kcd-address)\\s*=\\s*\'([^\']*)\'' +
+		'|\\]\\(([^)\\s]+)\\)';
+
+	/** `logs/{lens}/todo` directories that exist on disk — see `HEALED_LOG_SUBDIR` for the ruling. */
+	private healedLogDirs(): string[] {
+		const base = path.join( this.root, Vault.LOGS_DIR );
+		let entries: fs.Dirent[];
+		try {
+			entries = fs.readdirSync( base, { withFileTypes: true } );
+		} catch {
+			return [];
+		}
+		return entries
+			.filter( e => e.isDirectory() )
+			.map( e => path.join( base, e.name, Vault.HEALED_LOG_SUBDIR ) )
+			.filter( d => fs.existsSync( d ) );
+	}
+
+	/**
+	 * Every file the TEXT sweep opens — wider than the artifact graph on purpose, and narrower than
+	 * "everything" on purpose.
+	 *
+	 * WIDER: the indexed library in raw form ( so a document that fails to PARSE is still repaired —
+	 * the file most in need of it ), plus `.md` and `.js`, plus ruled-in todo space, plus the host
+	 * entry files. NARROWER: it stops there. Ephemeral space other than todos, archival records, and
+	 * the project tree at large are not swept, because each was ruled out by name rather than missed.
+	 *
+	 * Total, like every other walk here: an unreadable directory costs that directory's files, not
+	 * the sweep.
+	 */
+	healSweepFiles(): string[] {
+		const out: string[] = [];
+		const walk = ( dir: string ): void => {
+			let entries: fs.Dirent[];
+			try {
+				entries = fs.readdirSync( dir, { withFileTypes: true } );
+			} catch {
+				return;
+			}
+			for ( const entry of entries ) {
+				const full = path.join( dir, entry.name );
+				if ( entry.isDirectory() ) { walk( full ); continue; }
+				if ( !/\.(html?|md|js)$/i.test( entry.name ) ) continue;
+				out.push( this.toVaultRel( full ).replace( /\\/g, '/' ) );
+			}
+		};
+
+		for ( const dir of VaultLayout.indexedDirs() ) walk( path.join( this.root, dir ) );
+		for ( const dir of this.healedLogDirs() ) walk( dir );
+
+		for ( const name of Vault.HOST_ENTRY_FILES ) {
+			const abs = path.join( this.projectRoot, name );
+			if ( fs.existsSync( abs ) ) out.push( this.toVaultRel( abs ).replace( /\\/g, '/' ) );
+		}
+		return out;
+	}
+
+	/**
+	 * Is the occurrence at `at` QUOTED SPEECH rather than a live reference?
+	 *
+	 * 225 of this corpus's 1,555 `_Claude/` occurrences sit inside `<code>`, where the protocol
+	 * deliberately puts quoted speech and flag templates — so a blind sweep would edit a habit that
+	 * teaches an agent what to SAY. The discriminator is the protocol's own `<a>`-versus-`<code>` rule,
+	 * applied to bytes rather than to a parse tree.
+	 */
+	private static isQuoted( text: string, at: number, markdown: boolean ): boolean {
+		if ( markdown ) {
+			const fences = text.slice( 0, at ).match( /```/g );
+			if ( fences && fences.length % 2 === 1 ) return true;
+			const lineStart = text.lastIndexOf( '\n', at ) + 1;
+			const ticks     = text.slice( lineStart, at ).match( /`/g );
+			return !!ticks && ticks.length % 2 === 1;
+		}
+		return Vault.insideElementText( text, at, 'code' ) || Vault.insideElementText( text, at, 'pre' );
+	}
+
+	/**
+	 * Is `at` inside a `<tag>` element's TEXT CONTENT — as opposed to inside its opening tag?
+	 *
+	 * THE DISTINCTION IS THE WHOLE POINT and it is not pedantry. `data-kcd-address` is BY PROTOCOL an
+	 * attribute of `<code>`, so a naive "the match sits within a code element" would classify every
+	 * address in the corpus as quoted speech and heal none of them. What disqualifies a match is
+	 * sitting PAST the opening tag's `>` — that is exactly where quoted speech begins.
+	 */
+	private static insideElementText( text: string, at: number, tag: string ): boolean {
+		const open  = text.lastIndexOf( `<${ tag }`,  at );
+		const close = text.lastIndexOf( `</${ tag }`, at );
+		if ( open < 0 || close > open ) return false;
+		const gt = text.indexOf( '>', open );
+		return gt >= 0 && gt < at;
+	}
+
+	/** Stable identity for one reference — referrer plus the exact authored string, which is what a
+	 *  rewrite keys off. Used to keep the graph and text passes disjoint. */
+	private static editKey( e: HealEdit ): string {
+		return `${ e.file }\u0000${ e.oldHref }`;
+	}
+
+	/**
+	 * Every reference to `targetAbs` a heal can see, in three buckets — the GRAPH pass over parsed
+	 * artifacts, and the TEXT pass over raw bytes.
+	 *
+	 * BOTH EXIST BECAUSE NEITHER IS A SUPERSET. The graph pass reads links out of a parsed artifact,
+	 * so it reaches an href authored in any form — and reaches NOTHING in a file that fails to parse,
+	 * is not an artifact at all ( markdown, `.js` ), or lives outside the indexed library. The text
+	 * pass reaches exactly those, and only in the canonical vault-root-relative form the base lens
+	 * mandates. Running one and calling it the answer is what produced `edits: []` on 2026-08-17 while
+	 * two documents referenced the target — the Phase 2 defect appearing inside the repair tool.
+	 *
+	 * No annotation is added at ingest to make references findable, because THE PATH ALREADY IS THE
+	 * MARKER: the base lens mandates exactly one form, so an occurrence is self-identifying. A
+	 * `data-kcd-ref` attribute would rebuild the very defect it fixes — an unannotated hand-written
+	 * link becomes invisible again, and *unmarked* would mean both *not a reference* and *nobody
+	 * marked it*.
+	 *
+	 * The three buckets are DISJOINT, and the graph wins any overlap: a real `<a href>` that happens
+	 * to sit inside a `<pre>` sample is still a link that renders and navigates.
+	 */
+	healOccurrences( targetAbs: string, newHref?: string ): HealFindings {
+		// De-duplicated by ( referrer, authored href ), because that pair IS one swap — `rewriteHref`
+		// replaces every occurrence of the string in the file. `inboundEdits` reports one entry per LINK,
+		// so a document linking the target twice yielded two identical edits, the second a guaranteed
+		// no-op inflating the count. The text pass never had them, and a plan whose two halves count
+		// differently is a plan nobody can read.
+		const seen  = new Set<string>();
+		const graph = this.inboundEdits( targetAbs, newHref ).filter( e => {
+			const key = Vault.editKey( e );
+			if ( seen.has( key ) ) return false;
+			seen.add( key );
+			return true;
+		} );
+
+		const text: HealEdit[]   = [];
+		const quoted: HealEdit[] = [];
+
+		for ( const file of this.healSweepFiles() ) {
+			const abs = this.toAbs( file );
+			if ( abs === targetAbs ) continue;
+
+			let body: string;
+			try {
+				body = fs.readFileSync( abs, 'utf-8' );
+			} catch {
+				continue;
+			}
+			if ( !body.includes( this.docRoot ) ) continue;   // no vault reference of any kind in this file
+
+			const markdown = /\.md$/i.test( abs );
+			const re       = new RegExp( Vault.REFERENCE_POSITION, 'g' );
+
+			for ( let m = re.exec( body ); m; m = re.exec( body ) ) {
+				const href = m[ 1 ] ?? m[ 2 ] ?? m[ 3 ] ?? '';
+				if ( !href || href.startsWith( '#' ) || href.startsWith( 'http' ) ) continue;
+				if ( this.resolveHref( href ) !== targetAbs ) continue;
+
+				const edit: HealEdit = { file, oldHref: href, newHref };
+				if ( Vault.isQuoted( body, m.index, markdown ) ) { quoted.push( { ...edit, untouched: 'quoted' } ); continue; }
+				if ( seen.has( Vault.editKey( edit ) ) ) continue;
+				seen.add( Vault.editKey( edit ) );
+				text.push( edit );
+			}
+		}
+
+		return { graph, text, quoted: quoted.filter( q => !seen.has( Vault.editKey( q ) ) ) };
+	}
+
+	/**
+	 * Apply one move edit to disk — swap the authored old href for the new one in the referrer, across
+	 * every REFERENCE POSITION the text pass recognizes: an HTML `href` ( either quote ), a
+	 * `data-kcd-address`, and a markdown / `.js`-comment `[text](…)`. Literal replace of every
+	 * occurrence ( split/join, never a regex — a path with metacharacters is safe ). A no-op ( nothing
+	 * matched ) is left for `assertNoResidual` to catch rather than silently swallowed.
+	 *
+	 * An ADDRESS is rewritten alongside a link even though the two are not the same claim — an address
+	 * asserts a LOCATION and is never validated for occupancy ( protocol §1.1 ). Repointing it keeps
+	 * the location it names true, which is the only thing it was ever asserting; leaving it stale keeps
+	 * a claim that is now simply false. Whether the moved target should still be addressed rather than
+	 * linked is a doctrine question this verb deliberately does not answer.
+	 *
+	 * KNOWN LIMIT, stated rather than discovered: the swap is WHOLE-FILE, so a referrer that carries
+	 * BOTH a live reference and a quoted sample of the same href has the sample rewritten too. The
+	 * quoted-speech rule is honoured per FILE, not per occurrence. Making it per-occurrence means
+	 * rewriting by index instead of by string, which trades the formatting-preserving literal swap for
+	 * positional surgery — a real change to the write path, not a tweak, and not worth it for a case
+	 * that needs one document to both link a target and quote a link to it. Covered by a test so the
+	 * next reader inherits the fact instead of the surprise.
 	 */
 	rewriteHref( edit: HealEdit ): void {
 		if ( edit.newHref === undefined ) return;
@@ -392,17 +685,25 @@ export class Vault {
 		const after  = before
 			.split( `href="${ edit.oldHref }"` ).join( `href="${ edit.newHref }"` )
 			.split( `href='${ edit.oldHref }'` ).join( `href='${ edit.newHref }'` )
+			.split( `data-kcd-address="${ edit.oldHref }"` ).join( `data-kcd-address="${ edit.newHref }"` )
+			.split( `data-kcd-address='${ edit.oldHref }'` ).join( `data-kcd-address='${ edit.newHref }'` )
 			.split( `](${ edit.oldHref })` ).join( `](${ edit.newHref })` );
 		if ( after !== before ) fs.writeFileSync( abs, after, 'utf-8' );
 	}
 
 	/**
-	 * Post-condition guard: after an apply, NO link in the vault may still resolve to the old path.
-	 * A residual means a reference form the healer did not cover ( e.g. an href authored in a shape the
-	 * swap did not match ) — throw rather than leave the graph rotted.
+	 * Post-condition guard: after an apply, NO reference the heal claimed to cover may still resolve to
+	 * the old path. A residual means a reference form the healer did not cover ( e.g. an href authored
+	 * in a shape the swap did not match ) — throw rather than leave the graph rotted.
+	 *
+	 * The residual set is passed IN rather than recomputed here, because the two callers do not cover
+	 * the same ground and the guard must not assert more than the verb promised. A move rewrites both
+	 * passes, so it re-checks both. A delete EXCISES, which is parse-and-splice and therefore reaches
+	 * only the graph pass — so it re-checks the graph, and what the text pass found rides its plan's
+	 * `reported` array as `not-excisable` instead of being failed here. Quoted-speech occurrences are
+	 * in neither: they were never going to change, so they can never be a residual.
 	 */
-	assertNoResidual( targetAbs: string, op: string ): void {
-		const residual = this.inboundEdits( targetAbs );
+	assertNoResidual( targetAbs: string, op: string, residual: HealEdit[] ): void {
 		if ( residual.length === 0 ) return;
 		const where = residual.map( e => e.file ).join( ', ' );
 		throw new Error(
@@ -432,13 +733,23 @@ export class Vault {
 				`Cannot delete "${ target }": ${ dependents.length } artifact(s) reference it by identity ( ${ dependents.join( ', ' ) } ) — repoint or rename those first`
 			);
 
-		const plan: HealPlan = { op: 'delete', from: target, edits: this.inboundEdits( targetAbs ) };
+		// EXCISION is parse-and-splice, so it reaches only what the GRAPH pass found — a parsed HTML or
+		// `.js` referrer. What the TEXT pass adds ( a markdown todo, an unparseable file, an address, a
+		// host entry file ) is REPORTED and left alone: there is no span-precise removal of a reference
+		// from a sentence, and quietly rewriting somebody's prose is not a delete's job. Those
+		// references will dangle — and the plan says so, rather than the caller finding out later.
+		const found = this.healOccurrences( targetAbs );
+		const plan: HealPlan = {
+			op: 'delete', from: target,
+			edits:    found.graph,
+			reported: [ ...found.quoted, ...found.text.map( e => ( { ...e, untouched: 'not-excisable' as const } ) ) ],
+		};
 		if ( opts?.dryRun ) return plan;
 
 		this.exciseReferrers( plan.edits, targetAbs );
 		fs.rmSync( targetAbs );
 
-		this.assertNoResidual( targetAbs, 'delete' );
+		this.assertNoResidual( targetAbs, 'delete', this.healOccurrences( targetAbs ).graph );
 		return plan;
 	}
 

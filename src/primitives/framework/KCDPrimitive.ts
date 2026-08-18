@@ -87,9 +87,16 @@ export class KCDPrimitive {
 	 * state → a full HTML document string. Regenerates frontmatter only — sections/regions/slots ride
 	 * through from `body` untouched ( see KcdEmit's doc comment ). Callers ( `KcdService.save` ) are
 	 * expected to validate the result before writing; this method does not.
+	 *
+	 * `cssHref` is TIER 2 of the stylesheet contract ( protocol §8.1 ). OMITTING IT IS ONLY SAFE FOR A
+	 * CALLER THAT NEVER LANDS A FILE — the fallback is the bare filename, correct only at the vault
+	 * root, so a nested artifact written without one carries a link that resolves to nothing. §8.1
+	 * names this as a deliberate gap for the in-memory uses ( `Agents._draftLens` builds HTML and hands
+	 * it straight to a reader ); a WRITE path must pass `KcdEmit.cssHrefFor( vaultRelPath )`. Tier 1,
+	 * the inline baseline, rides automatically either way.
 	 */
-	toHtml(): string {
-		return KcdEmit.emit( this.serialize() );
+	toHtml( cssHref?: string ): string {
+		return KcdEmit.emit( this.serialize(), cssHref );
 	}
 
 	/**

@@ -27,6 +27,29 @@ export function inferProjectRoot( startPath: string, docRoot = LensObject.DEFAUL
 }
 
 /**
+ * Walk up from a start path to the nearest directory holding a `package.json` — "which package am I
+ * part of?".
+ *
+ * The companion to `inferProjectRoot` above, and the answer to a different question: that one finds the
+ * WORKSPACE by its vault, this one finds the PACKAGE by its manifest. Reach for this whenever code needs
+ * a path inside its own project, because the alternative is counting directories up and naming a folder
+ * on the way back down — an assertion about the tree's shape that nothing checks and that a differently
+ * named checkout silently invalidates.
+ *
+ * Throws rather than falling back. A guessed root can name a directory that exists but belongs to someone
+ * else, and writing to the wrong tree while reporting success is worse than not starting.
+ */
+export function findPackageRoot( startPath: string ): string {
+	let dir = path.resolve( startPath );
+	while ( true ) {
+		if ( fs.existsSync( path.join( dir, 'package.json' ) ) ) return dir;
+		const parent = path.dirname( dir );
+		if ( parent === dir ) throw new Error( `Could not find a package root above "${ startPath }" — no ancestor contains a package.json` );
+		dir = parent;
+	}
+}
+
+/**
  * Dredge a lens from disk with the real fs reader injected — the node-side convenience so
  * main never hand-wires `fs` into LensObject.load. projectRoot is inferred if not given.
  */

@@ -6,8 +6,8 @@
 export * from '../core';
 export * from '../scanner';
 export * from '../server';
-export { fsReader, inferProjectRoot, loadLensFromDisk } from './io';
-export { Vault, type HealPlan, type HealEdit, type RefIssue } from './Vault';
+export { fsReader, inferProjectRoot, findPackageRoot, loadLensFromDisk } from './io';
+export { Vault, type HealPlan, type HealEdit, type HealFindings, type RefIssue } from './Vault';
 export {
 	VaultUtilities,
 	type HealthReport, type HealthIssue, type CompileResult,

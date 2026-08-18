@@ -32,7 +32,12 @@ describe( 'KcdEmit — round trip against KcdParse', () => {
 		expect( report.ok ).toBe( true );
 	} );
 
-	it( 'edited frontmatter rides through; untouched body content survives byte-for-byte', () => {
+	// NOT byte-for-byte, and the name used to say it was. `spliceFrontmatter` re-parses and
+	// re-serializes the whole body, so what survives is CONTENT and structure, never the source's
+	// exact whitespace — and since 2026-08-17 the output is deliberately reformatted. The assertion
+	// below was always a `toContain`, so only the name was ever wrong; that is precisely how the claim
+	// survived being repeated into the tool description an agent reads.
+	it( 'edited frontmatter rides through; untouched body content survives', () => {
 		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
 		const edited = { ...artifact, frontmatter: { ...artifact.frontmatter, status: 'draft' } };
 
@@ -61,5 +66,96 @@ describe( 'KcdEmit — round trip against KcdParse', () => {
 		const html = KcdEmit.emit( artifact );
 		expect( html ).not.toContain( 'data-kcd-field="author"' );
 		expect( html ).not.toContain( 'data-kcd-field="origin"' );
+	} );
+} );
+
+/**
+ * The two-tier stylesheet contract — protocol §8.1, amended 2026-08-17.
+ *
+ * This block exists because the previous ruling had NO detector, and on 2026-08-17 a session reversed
+ * it in good faith: it read `KcdEmit`'s own comment ( which recorded the superseded reasoning ) plus a
+ * plan Open Question calling the absolute href a defect, and never opened §8.1. Nothing objected,
+ * because nothing asserted the rule. A settled ruling with no case behind it is one confident session
+ * away from being undone — so every clause of the amended rule gets a case here.
+ */
+describe( 'KcdEmit — the two-tier stylesheet ( §8.1 )', () => {
+
+	it( 'emits the inline baseline in every document', () => {
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const html = KcdEmit.emit( artifact, '../kcd.css' );
+		expect( html ).toContain( '<style>' );
+		expect( html ).toContain( 'background:#0d0d1c' );
+		expect( html ).toContain( 'color:#e6e6f2' );
+	} );
+
+	/**
+	 * THE ONE THAT MATTERS. Both tiers set `body` at identical specificity, so the LATER declaration
+	 * wins. Baseline first, link second ⇒ kcd.css overrides. Reversed, nine lines silently beat the
+	 * real stylesheet in every browser and the page still looks fine — the failure is invisible by
+	 * construction, which is exactly why it needs an assertion rather than an eyeball.
+	 */
+	it( 'puts the baseline BEFORE the link, so the real stylesheet wins the cascade', () => {
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const html = KcdEmit.emit( artifact, '../../kcd.css' );
+		expect( html.indexOf( '<style>' ) ).toBeLessThan( html.indexOf( '<link rel="stylesheet"' ) );
+	} );
+
+	// A baseline that grows into a second design language is the failure this tier exists to avoid,
+	// and prose in §8.1 cannot stop it. Ten lines is the stated ceiling; assert it.
+	it( 'keeps the baseline under ten lines', () => {
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const html  = KcdEmit.emit( artifact, 'kcd.css' );
+		const block = html.slice( html.indexOf( '<style>' ), html.indexOf( '</style>' ) );
+		expect( block.split( '\n' ).filter( l => l.trim() ).length ).toBeLessThanOrEqual( 10 );
+	} );
+
+	it( 'emits the tier-2 href exactly as given', () => {
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		expect( KcdEmit.emit( artifact, '../../kcd.css' ) ).toContain( '<link rel="stylesheet" href="../../kcd.css">' );
+		expect( KcdEmit.emit( artifact ) ).toContain( '<link rel="stylesheet" href="kcd.css">' );
+	} );
+
+	it( 'never emits a machine-bound href', () => {
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		expect( KcdEmit.emit( artifact, KcdEmit.cssHrefFor( 'references/patterns/x.html' ) ) ).not.toContain( 'file:///' );
+	} );
+} );
+
+describe( 'KcdEmit.cssHrefFor — the one copy of the depth math', () => {
+
+	it( 'walks up one level per directory below the vault root', () => {
+		expect( KcdEmit.cssHrefFor( 'nav-index.html' ) ).toBe( 'kcd.css' );
+		expect( KcdEmit.cssHrefFor( 'plans/daedalus-integrity.html' ) ).toBe( '../kcd.css' );
+		expect( KcdEmit.cssHrefFor( 'references/patterns/two-facts-one-value.html' ) ).toBe( '../../kcd.css' );
+		expect( KcdEmit.cssHrefFor( 'lenses/driver/context/notes.html' ) ).toBe( '../../../kcd.css' );
+	} );
+
+	// The corpus is the fixture: hand-authored documents already carry the relative form, so the tool's
+	// output and a human's must be the same string or one of them is wrong.
+	it( 'matches what hand-authored documents in this corpus carry', () => {
+		expect( KcdEmit.cssHrefFor( 'habits/unslotted/index-format.html' ) ).toBe( '../../kcd.css' );
+	} );
+
+	/**
+	 * A pre-2026-07-26 vault keeps the stylesheet at `kcd/kcd.css`. Mockingjay is a live instance and
+	 * every document there already links `../../kcd/kcd.css` — correctly. Assuming the vault root
+	 * would emit a confidently broken link into every document of that vault.
+	 */
+	it( 'honours a stylesheet that does not sit at the vault root', () => {
+		expect( KcdEmit.cssHrefFor( 'nav-index.html', 'kcd/kcd.css' ) ).toBe( 'kcd/kcd.css' );
+		expect( KcdEmit.cssHrefFor( 'contracts/plan.html', 'kcd/kcd.css' ) ).toBe( '../kcd/kcd.css' );
+		expect( KcdEmit.cssHrefFor( 'lenses/front_end/front_end.html', 'kcd/kcd.css' ) ).toBe( '../../kcd/kcd.css' );
+	} );
+
+	it( 'normalizes separators and stray prefixes rather than emitting them', () => {
+		expect( KcdEmit.cssHrefFor( 'references\\patterns\\x.html' ) ).toBe( '../../kcd.css' );
+		expect( KcdEmit.cssHrefFor( './references/patterns/x.html' ) ).toBe( '../../kcd.css' );
+		expect( KcdEmit.cssHrefFor( 'contracts/plan.html', '/kcd.css' ) ).toBe( '../kcd.css' );
+	} );
+
+	it( 'degrades to the default location rather than guessing a depth', () => {
+		expect( KcdEmit.cssHrefFor( '' ) ).toBe( 'kcd.css' );
+		expect( KcdEmit.cssHrefFor( 'x.html' ) ).toBe( 'kcd.css' );
+		expect( KcdEmit.cssHrefFor( 'contracts/plan.html', '' ) ).toBe( '../kcd.css' );
 	} );
 } );
