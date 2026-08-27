@@ -321,7 +321,38 @@ export const KcdContext = new class KcdContext {
 		const tail  = [ explanation, action ? rules : '' ].filter( Boolean );
 		const line2 = tail.length ? `↳ ${ tail.join( ' · ' ) }` : '';
 
-		return [ line1, line2 ].filter( Boolean ).join( '\n' );
+		return [ line1, line2, ...this.paramBlocks( artifact.body ) ].filter( Boolean ).join( '\n' );
+	}
+
+	/** The section names whose ROWS the dense form carries as data rather than prose. Params were ruled
+	 *  in as a document convention on 2026-08-17 and had no consumer until 2026-08-18 — a habit could
+	 *  declare a whitelist, and `run-command-list` did, but nothing ever put it in front of an agent, so
+	 *  the pole silently behaved as `run-command-ask` while reading as populated on disk.
+	 *
+	 *  PRIVATE vs PUBLIC is an EDIT boundary, never a read one. Both project. `private` means the agent
+	 *  does not author the rows on its own initiative ( each habit states its own churn guard ); it has
+	 *  always had to READ them, since a whitelist it cannot see is not a whitelist. A section marked
+	 *  `data-kcd-audience="human"` is still skipped, which is the one real way to withhold rows. */
+	PARAM_SECTIONS = [ 'private-habit-params', 'public-habit-params' ];
+
+	/** Each params section as its own labelled block of rows — the label rides because a habit may carry
+	 *  both, and a rule that says "never edit the whitelist" needs the reader to know which set it means.
+	 *  Rows render through `renderRow`, the same one-line shape every other slot uses; a params row is an
+	 *  ordinary `what` / `why` record, and inventing a second shape for it would be a translation for its
+	 *  own sake. The cost is real and worth stating: a populated whitelist is the largest thing a habit
+	 *  contributes to a session and it rides every turn. That is the price of the rows binding at all. */
+	paramBlocks( html: string ): string[] {
+		const out: string[] = [];
+		if ( !html || !html.trim() ) return out;
+		const root = HtmlTree.parse( html );
+		for ( const el of HtmlTree.collect( root, e => KcdAddress.isSection( e ) ) ) {
+			if ( KcdAddress.isHumanOnly( el ) ) continue;
+			const name = HtmlTree.get( el, 'data-kcd-section' );
+			if ( !name || !this.PARAM_SECTIONS.includes( name ) ) continue;
+			const rows = this.collectRows( el.kids );
+			if ( rows.length ) out.push( `↳ ${ name }:\n${ rows.map( r => this.renderRow( r ) ).join( '\n' ) }` );
+		}
+		return out;
 	}
 
 	/** section-name → { text, items } for a flat-sectioned artifact ( a habit ). `text` is the section's

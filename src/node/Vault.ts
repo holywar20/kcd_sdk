@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { LensObject, Glob, KcdExcise, VaultLayout, Agent, InstallManifest } from '../core';
+import { LensObject, Glob, KcdExcise, VaultLayout, Agent, InstallManifest, KcdEmit } from '../core';
 import type { ArtifactRef, ArtifactType } from '../core';
 import { scan } from '../scanner';
 import type { ScannedFile } from '../scanner';
@@ -433,10 +433,60 @@ export class Vault {
 		for ( const edit of plan.edits ) this.rewriteHref( edit );
 		fs.mkdirSync( path.dirname( destAbs ), { recursive: true } );
 		fs.renameSync( fromAbs, destAbs );
+		this.restampStylesheet( to );
 
 		const after = this.healOccurrences( fromAbs );
 		this.assertNoResidual( fromAbs, 'move', [ ...after.graph, ...after.text ] );
 		return plan;
+	}
+
+	/**
+	 * Re-point a moved document's OWN stylesheet link at its new depth.
+	 *
+	 * A move heals every link POINTING AT the document and, until this existed, nothing at all pointing
+	 * OUT of it. The stylesheet href is depth-relative by protocol §8.1, so any move that changes
+	 * directory depth left the moved file reaching past the vault for a file that is not there.
+	 *
+	 * IT FAILED SILENTLY, which is why it survived. The document still parses, `health` still returns
+	 * zero issues, and the page still renders — on the Tier 1 inline baseline, so it looks merely plain
+	 * rather than broken, and the one reader who would notice is a human opening it in a browser. Two
+	 * instances were found the same day by doing exactly that, one of them a day old.
+	 *
+	 * The target is read back off the document rather than resolved from configuration. `Vault` has no
+	 * `cssVaultRel` and should not grow one for this: the file already says what it points at, and a
+	 * legacy vault keeping `kcd.css` under `kcd/` stays correct for free. Depth math stays in the one
+	 * place that owns it — `cssHrefFor` and its inverse, both on `KcdEmit`.
+	 *
+	 * Best-effort by construction. A document with no link, an unparseable href, or an unwritable file
+	 * leaves the move untouched: healing the graph is this operation's contract and a cosmetic link is
+	 * not worth failing it over. The corpus sweep ( `VaultUtilities.fixStylesheetLinks` ) remains the
+	 * backstop for whatever this passes over.
+	 */
+	private restampStylesheet( toRel: string ): void {
+		// ONE MATCHER, shared with `VaultUtilities.fixStylesheetLinks` — see `KcdEmit.stylesheetLink`.
+		try {
+			const destAbs = this.toAbs( toRel );
+			const raw     = fs.readFileSync( destAbs, 'utf8' );
+			const link    = KcdEmit.stylesheetLink( raw );
+			if ( !link || link.href === null ) return;
+
+			const target = KcdEmit.cssTargetFrom( link.href );
+			if ( target === null ) return;
+
+			const newHref = KcdEmit.cssHrefFor( toRel, target );
+			if ( newHref === link.href ) return;
+
+			const rebuilt = link.tag.replace( link.href, newHref );
+			fs.writeFileSync(
+				destAbs,
+				raw.slice( 0, link.index ) + rebuilt + raw.slice( link.index + link.tag.length ),
+				'utf8'
+			);
+		} catch {
+			// Deliberately swallowed — see the best-effort note above. Nothing here can fail in a way that
+			// should cost the caller a completed move: the file is already renamed and the graph is already
+			// healed by the time this runs.
+		}
 	}
 
 	/**

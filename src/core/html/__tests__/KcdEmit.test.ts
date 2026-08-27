@@ -159,3 +159,48 @@ describe( 'KcdEmit.cssHrefFor — the one copy of the depth math', () => {
 		expect( KcdEmit.cssHrefFor( 'contracts/plan.html', '' ) ).toBe( '../kcd.css' );
 	} );
 } );
+
+describe( 'KcdEmit.cssTargetFrom — the inverse, so a MOVE can re-express a link', () => {
+
+	it( 'recovers the target by stripping the depth padding', () => {
+		expect( KcdEmit.cssTargetFrom( 'kcd.css' ) ).toBe( 'kcd.css' );
+		expect( KcdEmit.cssTargetFrom( '../kcd.css' ) ).toBe( 'kcd.css' );
+		expect( KcdEmit.cssTargetFrom( '../../../kcd.css' ) ).toBe( 'kcd.css' );
+		expect( KcdEmit.cssTargetFrom( '../../kcd/kcd.css' ) ).toBe( 'kcd/kcd.css' );
+	} );
+
+	// The property that makes the pair usable: whatever depth a document was written for, round-tripping
+	// its href through both functions lands on the href its CURRENT location deserves.
+	it( 'round-trips with cssHrefFor for any depth', () => {
+		for ( const doc of [ 'nav-index.html', 'plans/x.html', 'lenses/driver/context/n.html' ] ) {
+			for ( const css of [ 'kcd.css', 'kcd/kcd.css' ] ) {
+				const href = KcdEmit.cssHrefFor( doc, css );
+				expect( KcdEmit.cssHrefFor( doc, KcdEmit.cssTargetFrom( href )! ) ).toBe( href );
+			}
+		}
+	} );
+
+	/**
+	 * SELF-HEALING IS THE POINT, not a side effect. A document moved to a new depth carries an href that
+	 * is wrong for where it now sits; the target it names is still right. Re-expressing therefore fixes
+	 * the link rather than faithfully carrying the error along — which is exactly the defect found on
+	 * 2026-08-19, where a promoted plan kept three `../` at two levels deep and rendered unstyled.
+	 */
+	it( 'recovers the right target from an href that was already wrong for its location', () => {
+		const stale = '../../../kcd.css';                              // written at depth 3
+		expect( KcdEmit.cssHrefFor( 'plans/capability/x.html', KcdEmit.cssTargetFrom( stale )! ) ).toBe( '../../kcd.css' );
+	} );
+
+	/**
+	 * A protocol URL is the RETIRED absolute form ( protocol §8.1 amended it away on 2026-08-17 ) and a
+	 * root-absolute path is a hand edit. Both are a different repair with a ruling behind them, so a mover
+	 * declines rather than deciding on its own authority. `fixStylesheetLinks` is the verb that owns them.
+	 */
+	it( 'declines anything that is not a plain relative reference', () => {
+		expect( KcdEmit.cssTargetFrom( 'file:///C:/vault/kcd.css' ) ).toBeNull();
+		expect( KcdEmit.cssTargetFrom( 'https://example.com/kcd.css' ) ).toBeNull();
+		expect( KcdEmit.cssTargetFrom( '/kcd.css' ) ).toBeNull();
+		expect( KcdEmit.cssTargetFrom( '' ) ).toBeNull();
+		expect( KcdEmit.cssTargetFrom( '../../' ) ).toBeNull();
+	} );
+} );

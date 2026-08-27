@@ -229,3 +229,116 @@ describe( 'Vault heal — delete reports what it cannot excise instead of failin
 		expect( plan.reported[ 0 ]!.file ).toBe( 'logs/driver/todo/todo.md' );
 	} );
 } );
+
+/**
+ * A move heals every link POINTING AT the document. Until 2026-08-19 it healed nothing pointing OUT of
+ * it, and the stylesheet href is depth-relative by protocol §8.1 — so any move that changed directory
+ * depth left the moved file reaching past the vault for a file that is not there.
+ *
+ * IT FAILED SILENTLY, which is the whole reason it survived: the document still parses, `health` still
+ * returns zero issues, and the page still renders on its Tier 1 inline baseline, so it looks merely
+ * plain rather than broken. Two live instances were found by a human opening one in a browser, one of
+ * them a day old. Every case below pins the href on disk, because "it did not throw" was already true.
+ */
+describe( 'Vault move — the moved document\'s OWN stylesheet link', () => {
+
+	/** The fixture with a head that carries a link, at whatever depth the case needs it written for. */
+	const linked = ( name: string, href: string ) =>
+		doc( name, '<p>The target.</p>' ).replace( '</head>', `<link rel="stylesheet" href="${ href }">\n</head>` );
+
+	const hrefIn = ( rel: string ) => /<link\s+rel="stylesheet"\s+href="([^"]+)"/.exec( readAt( rel ) )?.[ 1 ] ?? null;
+
+	it( 'restamps the href when the move changes depth', () => {
+		put( `_Claude/${ TARGET }`, linked( 'alpha', '../../kcd.css' ) );
+
+		vaultOf().move( TARGET, 'plans/alpha.html' );
+
+		expect( hrefIn( '_Claude/plans/alpha.html' ) ).toBe( '../kcd.css' );
+	} );
+
+	/**
+	 * ATTRIBUTE ORDER IS NOT SIGNIFICANT, and until 2026-08-24 it silently was.
+	 *
+	 * Both readers of the link declared `/<link\s+rel="stylesheet"\s+href="([^"]+)"\s*\/?>/` privately —
+	 * first match only, exact order — so a head with `href` before `rel`, or carrying any third attribute,
+	 * was skipped WITHOUT A REPORT and read identically to a document with no link at all. It survived
+	 * because the emitter writes the attributes in exactly that order, so every document this system
+	 * AUTHORED matched; the exposed case was a HAND-EDITED head, which is the document a person cared
+	 * enough to touch.
+	 *
+	 * The six cases around this one all use the emitter's order, which is precisely why a green suite said
+	 * nothing about the gap. These two are here so it cannot come back invisibly.
+	 */
+	const linkedRaw = ( name: string, tag: string ) =>
+		doc( name, '<p>The target.</p>' ).replace( '</head>', `${ tag }
+</head>` );
+
+	const anyHrefIn = ( rel: string ) => /<link\b[^>]*\bhref\s*=\s*"([^"]*)"/.exec( readAt( rel ) )?.[ 1 ] ?? null;
+
+	it( 'restamps a link whose href comes BEFORE rel', () => {
+		put( `_Claude/${ TARGET }`, linkedRaw( 'alpha', '<link href="../../kcd.css" rel="stylesheet">' ) );
+
+		vaultOf().move( TARGET, 'plans/alpha.html' );
+
+		expect( anyHrefIn( '_Claude/plans/alpha.html' ) ).toBe( '../kcd.css' );
+	} );
+
+	it( 'restamps a link carrying an extra attribute', () => {
+		put( `_Claude/${ TARGET }`, linkedRaw( 'alpha', '<link rel="stylesheet" type="text/css" href="../../kcd.css" />' ) );
+
+		vaultOf().move( TARGET, 'plans/alpha.html' );
+
+		expect( anyHrefIn( '_Claude/plans/alpha.html' ) ).toBe( '../kcd.css' );
+	} );
+
+	it( 'leaves the href alone when the depth is unchanged', () => {
+		put( `_Claude/${ TARGET }`, linked( 'alpha', '../../kcd.css' ) );
+
+		vaultOf().move( TARGET, MOVED );
+
+		expect( hrefIn( `_Claude/${ MOVED }` ) ).toBe( '../../kcd.css' );
+	} );
+
+	/** A legacy vault keeps the stylesheet under `kcd/`. The target is read back off the document, so
+	 *  this is correct for free rather than needing `Vault` to learn where `kcd.css` lives. */
+	it( 'preserves a stylesheet that does not sit at the vault root', () => {
+		put( `_Claude/${ TARGET }`, linked( 'alpha', '../../kcd/kcd.css' ) );
+
+		vaultOf().move( TARGET, 'plans/alpha.html' );
+
+		expect( hrefIn( '_Claude/plans/alpha.html' ) ).toBe( '../kcd/kcd.css' );
+	} );
+
+	/** Self-healing, and it is the point rather than a side effect: the stale href names the right
+	 *  target, so re-expressing it fixes the link instead of carrying the error to the new path. */
+	it( 'corrects an href that was ALREADY wrong for its old location', () => {
+		put( `_Claude/${ TARGET }`, linked( 'alpha', '../../../../kcd.css' ) );
+
+		vaultOf().move( TARGET, 'plans/alpha.html' );
+
+		expect( hrefIn( '_Claude/plans/alpha.html' ) ).toBe( '../kcd.css' );
+	} );
+
+	/** The retired absolute form is a different repair with a ruling behind it — `fixStylesheetLinks`
+	 *  owns those. A mover rewriting one would be making that decision on its own authority. */
+	it( 'declines to rewrite a machine-bound absolute href', () => {
+		put( `_Claude/${ TARGET }`, linked( 'alpha', 'file:///C:/vault/kcd.css' ) );
+
+		vaultOf().move( TARGET, 'plans/alpha.html' );
+
+		expect( hrefIn( '_Claude/plans/alpha.html' ) ).toBe( 'file:///C:/vault/kcd.css' );
+	} );
+
+	/** Best-effort by construction: healing the graph is the operation's contract, and a cosmetic link
+	 *  must never cost a caller a completed move. */
+	it( 'completes the move and its link healing when there is no stylesheet at all', () => {
+		put( `_Claude/${ TARGET }`, doc( 'alpha', '<p>The target.</p>' ) );
+		put( '_Claude/logs/driver/todo/todo.md', `- [ ] see [alpha](${ TARGET_REF }) about this\n` );
+
+		const plan = vaultOf().move( TARGET, 'plans/alpha.html' );
+
+		expect( plan.edits.length ).toBe( 1 );
+		expect( readAt( '_Claude/logs/driver/todo/todo.md' ) ).toContain( '_Claude/plans/alpha.html' );
+		expect( hrefIn( '_Claude/plans/alpha.html' ) ).toBeNull();
+	} );
+} );

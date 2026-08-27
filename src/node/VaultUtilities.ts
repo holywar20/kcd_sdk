@@ -1018,22 +1018,29 @@ export class VaultUtilities {
 	 */
 	static fixStylesheetLinks( vault: Vault, cssVaultRel?: string, opts?: { confirm?: boolean } ): StylesheetFixReport[] {
 		const reports: StylesheetFixReport[] = [];
-		const linkRe  = /<link\s+rel="stylesheet"\s+href="([^"]+)"\s*\/?>/;
 
 		// RAW WALK, not `scan()` — a repair tool must reach the file it is repairing. `scan()` parses
 		// each file and drops what fails, so the malformed document was invisible to the verb whose job
 		// is fixing documents. Same correction as `health`; this docstring admitted the gap for weeks
 		// while the code kept the behaviour.
 		for ( const rel of vault.documentPaths() ) {
-			const raw = vault.read( rel );
-			const m   = linkRe.exec( raw );
-			if ( !m ) continue;
+			const raw  = vault.read( rel );
+			const link = KcdEmit.stylesheetLink( raw );
+			if ( !link ) continue;
 
-			const oldHref = m[ 1 ];
+			// A LINK WE COULD NOT READ IS NOT A DOCUMENT WITHOUT ONE. Reported rather than skipped, so the
+			// totals mean "of every document" instead of "of the ones we recognised" — the difference this
+			// verb used to hide, because an unmatched tag left no trace at all.
+			if ( link.href === null ) {
+				reports.push( { path: rel, oldHref: '( unreadable href )', newHref: '', applied: false, baselineAdded: false } );
+				continue;
+			}
+
+			const oldHref = link.href;
 			const newHref = KcdEmit.cssHrefFor( rel, cssVaultRel );
-			const before  = raw.slice( 0, m.index );
-			const after   = raw.slice( m.index + m[ 0 ].length );
-			const link    = m[ 0 ].replace( oldHref, newHref );
+			const before  = raw.slice( 0, link.index );
+			const after   = raw.slice( link.index + link.tag.length );
+			const tag     = link.tag.replace( oldHref, newHref );
 
 			// The link's own indentation, which `before` ends with. It has to be lifted off and put back
 			// in FRONT of the link, or the inserted block inherits it ( `\t\t<style>` ) and the link is
@@ -1052,7 +1059,7 @@ export class VaultUtilities {
 
 			// Baseline in FRONT of the link, never behind it — §8.1's cascade rule. Behind it, the
 			// document looks repaired and is styled by the wrong sheet.
-			const rebuilt = head + KcdEmit.baselineBlock() + indent + link + after;
+			const rebuilt = head + KcdEmit.baselineBlock() + indent + tag + after;
 
 			// Compared as bytes rather than guessed at from the two flags: "already correct" then means
 			// the file is byte-identical to what this verb would write, not merely that it has A link and

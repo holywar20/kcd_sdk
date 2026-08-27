@@ -3,6 +3,7 @@ import { SlotResolver } from '../primitives/framework/SlotResolver';
 import type { SlotResolution } from '../primitives/framework/SlotResolver';
 import { ContextAssembler, MANIFEST_SECTIONS } from '../primitives/framework/ContextAssembler';
 import { KcdContext } from '../core/html/KcdContext';
+import type { Command } from '../core/Command';
 import type { SlotRow } from '../core/html/KcdContext';
 import { InstallManifest } from '../core/InstallManifest';
 import { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
@@ -60,7 +61,7 @@ export interface HabitSlotView {
 	candidates: HabitSlotCandidate[];
 }
 import { DEFAULT_MODEL_KEY } from './Model';
-import type { ToolMode } from './ToolMode';
+import type { Policy, Surface } from '../primitives/ToolAccess';
 import type { ToolDef } from './ToolDef';
 
 /*
@@ -108,8 +109,12 @@ export interface SerializedAgent {
 	 * surface, stored as dumb strings (paths for artifacts, ids/names for tools). They are
 	 * the declarative source of truth; the proper objects are fetched at composition. This
 	 * is what makes the agent the enforced/composable unit a free-form lens file can't be.
+	 *
+	 * THERE IS NO `baseTools` HERE ANY MORE. It was the tool half of this inventory and it never had a
+	 * consumer — `toolPolicies` answers both "does this agent hold it" and "may it run", because those were
+	 * always the same question. Two fields meant two answers that could disagree, on the axis where a
+	 * disagreement is silent permission.
 	 */
-	baseTools: string[];
 	baseHabits: string[];
 	baseReferences: string[];
 	basePlans: string[];
@@ -125,12 +130,22 @@ export interface SerializedAgent {
 	 *  `baseHabitNodes`, identical shape and identical reason ( main reads disk; the renderer can't ). */
 	baseReferenceNodes?: SerializedArtifact[];
 	/**
-	 * Per-TOOL three-state inclusion, keyed by tool name ( the wire's currency ): `off` ( absent =
-	 * off ), `on` ( advertised as a one-liner in the system-prompt manifest, server stays lazy ), or
-	 * `suggested` ( full tool surface injected into context ). This is the AUTHORED tool composition —
-	 * the renderer's per-tool control writes it; the turn assembly reads it to split the manifest from
-	 * the injected surface. Distinct from `baseTools` ( the dumb inventory ), which stays untouched. */
-	toolModes: Record<string, ToolMode>;
+	 * MAY IT RUN — this agent's contribution to the run's passport, keyed by tool IDENTITY ( `group.tool` ).
+	 *
+	 * PRESENCE IS THE ALLOWANCE. A tool absent from here and from every lens is denied, because absence and
+	 * deny are one fact rather than two — which is what makes a denial unable to leak: it is not there. There
+	 * is deliberately no second field saying which tools this agent HOLDS, since inclusion and permission
+	 * terminate on the same state and writing both was one concept spelled twice.
+	 *
+	 * `allow` is what an add writes, in the same gesture — there is no state a tool sits in waiting to be
+	 * switched on. `ask` is a later, deliberate tightening. `off` is a SUBTRACTION of something a lens
+	 * supplied, and it is spent at assembly rather than carried; see `toolAllowances`. */
+	toolPolicies: Record<string, Policy>;
+
+	/** HOW MUCH OF EACH HELD TOOL RIDES IN THE PROMPT — `manifest` ( a name and a line ) or `preload` ( the
+	 *  whole schema, before the agent asks ). Absent = `manifest`, the cheap answer. Read only for tools that
+	 *  survived assembly: a thing that is not there has no cost to answer for. */
+	toolSurfaces: Record<string, Surface>;
 	/**
 	 * On/off EXCLUSION sets for the agent's own `baseReferences` / `baseHabits` — presence in here means
 	 * OFF ( absent = on, the default ), so a fresh agent's whole base inventory starts fully live with no
@@ -154,13 +169,13 @@ export interface SerializedAgent {
 	 * exact same three-state composition every other component ( tools, habits ) already carries. */
 	referenceModes?: Record<string, SlotMode>;
 	/**
-	 * Per-HABIT three-state OVERRIDE, keyed by the habit's path — the exact `toolModes` idiom for habits:
+	 * Per-HABIT three-state OVERRIDE, keyed by the habit's path — the exact `toolPolicies` idiom for habits:
 	 * an agent-level override of a LENS-contributed habit's slot mode. ABSENT for a path = inherit the
 	 * lens's own mode ( the agent screen greys the row to say "not overridden" ); PRESENT = the agent forces
 	 * that habit to `off` ( excluded, its manifest row dropped ), `on` ( routing row only ), or `suggested`
 	 * ( full four-field body rides ), regardless of what the lens said. Distinct from `habitOff` ( the binary
 	 * exclusion of the agent's OWN `baseHabits` ) — this overrides INHERITED habits, and carries the on↔suggested
-	 * tier `habitOff` can't express. The composability of behaviour, same shape as `effectiveToolModes()`. */
+	 * tier `habitOff` can't express. The composability of behaviour, same shape as `toolAllowances()`. */
 	habitModes?: Record<string, SlotMode>;
 	/** Open typed-field bag — composable config, kept LOOSE at the SDK seam (widget SettingFields). */
 	fields: Record<string, unknown>[];
@@ -186,11 +201,11 @@ export interface AgentOptions {
 	model?: string | null;
 	systemPrompt?: string | null;
 	lenses?: LensObject[];
-	baseTools?: string[];
 	baseHabits?: string[];
 	baseReferences?: string[];
 	basePlans?: string[];
-	toolModes?: Record<string, ToolMode>;
+	toolPolicies?: Record<string, Policy>;
+	toolSurfaces?: Record<string, Surface>;
 	referenceOff?: string[];
 	referenceModes?: Record<string, SlotMode>;
 	habitOff?: string[];
@@ -209,6 +224,27 @@ function _pathsOfType( nodes: KCDPrimitive[], type: ArtifactType ): string[] {
 /** Union of two string inventories, de-duplicated, base first. */
 function _union( base: string[], composed: string[] ): string[] {
 	return [ ...new Set( [ ...base, ...composed ] ) ];
+}
+
+/**
+ * THE KEY ONE TOOL'S MODE IS FILED UNDER — its wire identity, and the bare name only when it has none.
+ *
+ * ONE READING, so the surfaces that WRITE a mode and the projections that READ one cannot disagree. They
+ * did: the agent panel wrote a bare name and the capability deck wrote a qualified one into the same map,
+ * while the manifest read bare and the harness cut read qualified — so each reader was blind to one writer
+ * and a tool switched off on the wrong surface stayed on the wire. The identity rides on the def now ( see
+ * `ToolDef.id` ), and this is the only place a reader decides what to look up.
+ *
+ * The bare fallback is for a def that never crossed the priced serve seam — a test double, which has no
+ * server and therefore no identity to be filed under.
+ */
+/** The tool identities this agent holds, as a set — every reader below asks the same question of the same
+ *  list, and none of them re-derives it. A def with no identity cannot be held: policy keys on `group.tool`,
+ *  so a def that never crossed the priced serve seam has no name the allowances could have been written
+ *  under. That used to fall back to the bare name, which is precisely how one map came to be written under
+ *  two spellings and read under two more. */
+function _heldIds( defs: readonly ToolDef[] ): ToolDef[] {
+	return defs.filter( ( d ) => !!d.id );
 }
 
 /**
@@ -249,13 +285,14 @@ export class Agent {
 	lenses: LensObject[];
 
 	// ── base{X}: bolted directly here; dumb strings; the user's add/subtract surface ──
-	baseTools: string[];
 	baseHabits: string[];
 	baseReferences: string[];
 	basePlans: string[];
 
-	/** Per-tool three-state inclusion, keyed by tool name (see SerializedAgent.toolModes). */
-	toolModes: Record<string, ToolMode>;
+	/** MAY IT RUN, by tool identity — presence IS the allowance (see SerializedAgent.toolPolicies). */
+	toolPolicies: Record<string, Policy>;
+	/** What each held tool costs in prompt (see SerializedAgent.toolSurfaces). */
+	toolSurfaces: Record<string, Surface>;
 
 	/** On/off exclusion sets for the agent's own base references/habits (see SerializedAgent.referenceOff). */
 	referenceOff: string[];
@@ -277,14 +314,15 @@ export class Agent {
 	notes: string | null;
 
 	// ── composed{X}: MATERIALIZED by compose(); never persisted, never crosses the wire ──
-	composedTools: string[] = [];
 	composedHabits: string[] = [];
 	composedReferences: string[] = [];
 	composedPlans: string[] = [];
-	/** Per-tool modes CONTRIBUTED by the lenses ( tool name → mode ), materialized in compose() from each
-	 *  lens's `getToolModes()`. The composition baseline; `effectiveToolModes()` overlays this agent's own
-	 *  authored `toolModes` on top, agent-wins-per-tool. Never persisted — rebuilt from the lenses. */
-	composedToolModes: Record<string, ToolMode> = {};
+	/** The tool allowances CONTRIBUTED by the lenses, materialized in compose(). The baseline this agent's
+	 *  own `toolPolicies` overlays, agent-wins-per-tool. Never persisted — rebuilt from the lenses. */
+	composedToolPolicies: Record<string, Policy> = {};
+	/** The lenses' contribution on the COST axis, overlaid the same way and INDEPENDENTLY: an agent that
+	 *  tightens a lens's tool has said nothing about what that tool costs. */
+	composedToolSurfaces: Record<string, Surface> = {};
 
 	/**
 	 * The agent's OWN base habits as LOADED objects ( the `agent` source layer at composition ). Disk is
@@ -347,6 +385,38 @@ export class Agent {
 	 *  in the transcript, and a manifest row beside it would state one fact twice; promotion waits for the
 	 *  compaction that removed the line. Empty until something has been canonized, which is most sessions. */
 	grantRows: SlotRow[] = [];
+	/** THE COMMANDS THIS RUN MAY RUN — the objects, not a rendering of them. Bound with the denied ones
+	 *  ALREADY REMOVED: a command a person switched off is ABSENT here rather than present-and-refused, which
+	 *  is the only shape in which "the agent has not heard of it" can be true. `[]` until bound, and `[]` is a
+	 *  legitimate answer — holding no commands is not a failure to bind. */
+	commandRows: readonly Command[] = [];
+	/**
+	 * THE MANIFEST BANDS this run's tools author for themselves — each a `##` section under `# Manifest`,
+	 * composed by the HOST and bound here already rendered.
+	 *
+	 * A TOOL MAY BE A DOOR ONTO MORE THAN ITSELF. Every tool earns an ordinary manifest row saying what it
+	 * is; a few also OWN a band, which is what turns one tool into the entry point to a body of
+	 * functionality no schema could express — and what lets a person extend an agent's reach by authoring
+	 * content rather than by touching architecture. The command roster is the first: somebody writes a
+	 * command, and this grows a section describing it.
+	 *
+	 * ALREADY NARROWED, AND ALREADY SORTED, both by the host. Narrowed because a band describing something
+	 * the gate would refuse is the same defect as a manifest naming a tool the wire omits, and the passport
+	 * is the only thing entitled to answer that. Sorted because the ORDER is a prefix-cache contract: the
+	 * same holdings must compose the same context every turn, and nothing here is entitled to decide which
+	 * band matters more.
+	 *
+	 * `[]` is a legitimate answer — holding no bands is not a failure to bind.
+	 */
+	manifestGroups: readonly { heading: string; body: string }[] = [];
+	/** WHAT THIS RUN HOLDS, said to the agent itself — composed by the HOST from the run's passport and bound
+	 *  here as opaque text.
+	 *
+	 *  DELIBERATELY NOT DERIVED BY THIS OBJECT, and the reason is the same one `hostPrompt` carries: an agent
+	 *  describing its own permissions would be a second author on a question the permission authority already
+	 *  answers, and the failure mode of two authors on that question is a description that is reassuring and
+	 *  wrong. This holds the sentence; it does not write it. '' when nothing governs the run. */
+	capability: string = '';
 	/** The CALLER's layer above the lens — a room frame, a Constellation step frame, whatever framed this
 	 *  particular turn. Bound per ROUND like the rest of the environment; '' when nothing framed it.
 	 *
@@ -367,11 +437,11 @@ export class Agent {
 		model: string | null,
 		systemPrompt: string | null,
 		lenses: LensObject[],
-		baseTools: string[],
 		baseHabits: string[],
 		baseReferences: string[],
 		basePlans: string[],
-		toolModes: Record<string, ToolMode>,
+		toolPolicies: Record<string, Policy>,
+		toolSurfaces: Record<string, Surface>,
 		referenceOff: string[],
 		referenceModes: Record<string, SlotMode>,
 		habitOff: string[],
@@ -390,11 +460,11 @@ export class Agent {
 		this.model          = model;
 		this.systemPrompt   = systemPrompt;
 		this.lenses         = lenses;
-		this.baseTools      = baseTools;
 		this.baseHabits     = baseHabits;
 		this.baseReferences = baseReferences;
 		this.basePlans      = basePlans;
-		this.toolModes      = toolModes;
+		this.toolPolicies   = toolPolicies;
+		this.toolSurfaces   = toolSurfaces;
 		this.referenceOff   = referenceOff;
 		this.referenceModes = referenceModes;
 		this.habitOff       = habitOff;
@@ -429,11 +499,11 @@ export class Agent {
 			opts.model === undefined ? DEFAULT_MODEL_KEY : opts.model,
 			opts.systemPrompt ?? null,
 			lenses,
-			opts.baseTools ?? [],
 			opts.baseHabits ?? [],
 			opts.baseReferences ?? [],
 			opts.basePlans ?? [],
-			opts.toolModes ?? {},
+			opts.toolPolicies ?? {},
+			opts.toolSurfaces ?? {},
 			opts.referenceOff ?? [],
 			opts.referenceModes ?? {},
 			opts.habitOff ?? [],
@@ -459,11 +529,11 @@ export class Agent {
 			json.model === undefined ? DEFAULT_MODEL_KEY : json.model,   // absent → default; null → stays null ( see create )
 			json.systemPrompt ?? null,
 			lenses,
-			json.baseTools ?? [],
 			json.baseHabits ?? [],
 			json.baseReferences ?? [],
 			json.basePlans ?? [],
-			json.toolModes ?? {},
+			json.toolPolicies ?? {},
+			json.toolSurfaces ?? {},
 			json.referenceOff ?? [],
 			json.referenceModes ?? {},
 			json.habitOff ?? [],
@@ -494,11 +564,11 @@ export class Agent {
 			model:          this.model,
 			systemPrompt:   this.systemPrompt,
 			lenses:         this.lenses.map( ( l ) => l.serializeForWire() ),
-			baseTools:      [ ...this.baseTools ],
 			baseHabits:     [ ...this.baseHabits ],
 			baseReferences: [ ...this.baseReferences ],
 			basePlans:      [ ...this.basePlans ],
-			toolModes:      { ...this.toolModes },
+			toolPolicies:   { ...this.toolPolicies },
+			toolSurfaces:   { ...this.toolSurfaces },
 			referenceOff:   [ ...this.referenceOff ],
 			referenceModes: { ...this.referenceModes },
 			habitOff:       [ ...this.habitOff ],
@@ -521,19 +591,21 @@ export class Agent {
 	 * expensive dredge already happened when the lens was loaded), so call it freely: at
 	 * construction, and whenever a base string or a lens changes.
 	 *
-	 * `composedTools` ( the dumb inventory of tool NAMES ) stays empty — a tool is not a dredged node, so
-	 * the lens's tool contribution is a per-tool MODE map ( `composedToolModes` ), materialized from each
-	 * lens's `getToolModes()`. Later lenses override earlier per-tool; the agent's own `toolModes` then
-	 * overrides all of them ( `effectiveToolModes()` ).
+	 * A TOOL IS NOT A DREDGED NODE, so a lens contributes tools as two per-tool maps rather than as paths —
+	 * an ALLOWANCE map and a COST map, read off each lens and overlaid in order. Later lenses override
+	 * earlier ones per tool; this agent's own maps then override all of them ( `toolAllowances()` ).
 	 */
 	compose(): void {
 		const nodes = this.lenses.flatMap( ( l ) => l.getNodes() );
 		this.composedReferences = _pathsOfType( nodes, 'reference' );
 		this.composedPlans      = _pathsOfType( nodes, 'plan' );
 		this.composedHabits     = _pathsOfType( nodes, 'habit' );
-		this.composedTools      = [];
-		this.composedToolModes  = {};
-		for ( const l of this.lenses ) Object.assign( this.composedToolModes, l.getToolModes() as Record<string, ToolMode> );
+		this.composedToolPolicies = {};
+		this.composedToolSurfaces = {};
+		for ( const l of this.lenses ) {
+			Object.assign( this.composedToolPolicies, l.getToolPolicies() );
+			Object.assign( this.composedToolSurfaces, l.getToolSurfaces() );
+		}
 	}
 
 	/**
@@ -544,7 +616,7 @@ export class Agent {
 	 * defs / model root context / baseline memory change ( then `triggerRef` ); the orchestrator calls it per
 	 * round on the canonical agent. Never persisted — this is live environment, not agent identity.
 	 */
-	bindEnv( env: { hostPrompt?: string; rootContext?: string; toolDefs?: ToolDef[]; memory?: string; memoryTags?: string[]; attachments?: string; grants?: SlotRow[]; frame?: string; modeLine?: string } ): void {
+	bindEnv( env: { hostPrompt?: string; rootContext?: string; toolDefs?: ToolDef[]; memory?: string; memoryTags?: string[]; attachments?: string; grants?: SlotRow[]; commands?: readonly Command[]; manifestGroups?: readonly { heading: string; body: string }[]; capability?: string; frame?: string; modeLine?: string } ): void {
 		if ( env.hostPrompt  !== undefined ) this.hostPrompt  = env.hostPrompt;
 		if ( env.rootContext !== undefined ) this.rootContext = env.rootContext;
 		if ( env.toolDefs    !== undefined ) this.toolDefs    = env.toolDefs;
@@ -552,6 +624,9 @@ export class Agent {
 		if ( env.memoryTags  !== undefined ) this.memoryTags  = env.memoryTags;
 		if ( env.attachments !== undefined ) this.attachments = env.attachments;
 		if ( env.grants      !== undefined ) this.grantRows   = env.grants;
+		if ( env.commands    !== undefined ) this.commandRows = env.commands;
+		if ( env.manifestGroups !== undefined ) this.manifestGroups = env.manifestGroups;
+		if ( env.capability  !== undefined ) this.capability  = env.capability;
 		if ( env.frame       !== undefined ) this.frame       = env.frame;
 		if ( env.modeLine    !== undefined ) this.modeLine    = env.modeLine;
 	}
@@ -559,18 +634,34 @@ export class Agent {
 	/** What this agent actually carries = bolted-on ∪ inherited-from-lenses. The permissions
 	 *  gate reads `effectiveTools`; the composer reads each pair to show base (editable here)
 	 *  vs composed (edit at the lens). */
-	effectiveTools():      string[] { return _union( this.baseTools,      this.composedTools ); }
 	effectiveHabits():     string[] { return _union( this.baseHabits,     this.composedHabits ); }
 	effectiveReferences(): string[] { return _union( this.baseReferences, this.composedReferences ); }
 	effectivePlans():      string[] { return _union( this.basePlans,      this.composedPlans ); }
 
-	/** The per-tool modes actually in force: the lenses' contribution ( `composedToolModes` ) with this
-	 *  agent's OWN authored `toolModes` overlaid on top — agent wins per-tool, so an agent can promote,
-	 *  demote, or `off`-out any tool a lens set. THE surface every tool-wire reader should consult ( the
-	 *  turn manifest + suggested-injection ), so the composability of tools mirrors habits' lens→agent
-	 *  override. A draft with no lens just returns its own `toolModes`. */
-	effectiveToolModes(): Record<string, ToolMode> {
-		return { ...this.composedToolModes, ...this.toolModes };
+	/**
+	 * THE ALLOWANCES this agent contributes — the lenses' baseline with this agent's own layered over it,
+	 * agent-wins-per-tool, and every subtraction spent on the way out.
+	 *
+	 * NOTHING DENIED SURVIVES. A tool an agent turned off is ABSENT here rather than present with an `off`
+	 * beside it, and that is the whole guarantee rather than a tidiness: every later reader — the gate, the
+	 * manifest, the preloaded schema, the harness cut — works from a list that cannot express a denial, so
+	 * none of them can be the one that forgets to check for one. It cannot leak because it is not there.
+	 *
+	 * A draft with no lens just returns its own map, which for a fresh agent is empty — and an agent that
+	 * holds nothing reaches nothing. That is the model rather than a gap in it.
+	 */
+	toolAllowances(): Record<string, Policy> {
+		const merged: Record<string, Policy> = { ...this.composedToolPolicies, ...this.toolPolicies };
+		for ( const [ id, policy ] of Object.entries( merged ) ) if ( policy === 'off' ) delete merged[ id ];
+		return merged;
+	}
+
+	/** What one held tool COSTS — the same lens-then-agent overlay on the other axis, resolved per tool
+	 *  because that is how every reader asks. INDEPENDENT of the allowance overlay, deliberately: an agent
+	 *  that tightens a lens's tool to `ask` has said nothing about what that tool costs, and an override is
+	 *  only ever a difference. `manifest` is the answer when nobody has said otherwise. */
+	toolSurfaceFor( id: string ): Surface {
+		return this.toolSurfaces[ id ] ?? this.composedToolSurfaces[ id ] ?? 'manifest';
 	}
 
 	/**
@@ -618,7 +709,7 @@ export class Agent {
 	}
 
 	/** The effective slot mode of one habit ( keyed by path ) — this agent's override if it authored one,
-	 *  else the natural mode. The habit sibling of `effectiveToolModes`: the ONE read the compile and the
+	 *  else the natural mode. The habit sibling of `toolAllowances`: the ONE read the compile and the
 	 *  agent screen share, so a row's colour and what actually compiles can't drift. */
 	effectiveHabitMode( path: string ): SlotMode | null {
 		return this.habitModes[ path ] ?? this.naturalHabitMode( path );
@@ -1040,7 +1131,8 @@ export class Agent {
 	 */
 	compiledContext(): TaggedBlock[] {
 		const manifest  = this.toolManifest();
-		const suggested = this.suggestedToolDefs();
+		const suggested = this.preloadedToolDefs();
+		const bands     = this.manifestBands();
 		// The band, not the bare prose — the tag vocabulary heads it ( `memoryVocabulary` ). Both halves sit
 		// behind the SAME `memoryEnabled` gate: an agent with memory switched off carries no memories and no
 		// vocabulary either, since the vocabulary exists only to make `learn`/`recall` calls land.
@@ -1076,6 +1168,23 @@ export class Agent {
 			after: Agent.joinSegments( [
 				manifest  ? [ Agent.extraBlock( 'tool-manifest', manifest ) ] : [],
 				suggested ? [ Agent.extraBlock( 'suggested-tools', suggested ) ] : [],
+				// THE AUTHORED BANDS CLOSE THE MANIFEST — second categories beside the tool manifest, never
+				// subsections inside it. The command roster is the one that made the argument and it generalizes
+				// unchanged: a command is not a tool from a different source, it has no tier, no deferred schema
+				// and its own call convention, and the same is true of whatever a later tool authors for itself.
+				// Sat with the manifests rather than with the volatile trailers below because a roster is STABLE
+				// across a conversation, and the prefix cache wants the settled things above the churning ones.
+				//
+				// ONE BLOCK FOR ALL OF THEM, not one block each. The tag names the CATEGORY, and a per-band tag
+				// would let the set of blocks change shape with a person's authoring — which is a compiled-context
+				// surface moving for a reason no reader of it could see.
+				bands     ? [ Agent.extraBlock( 'manifest-groups', bands ) ] : [],
+				// WHAT IT MAY DO closes the band that said what it HOLDS. Last of the three because it is the
+				// most run-specific: tools and commands are configuration, while this is one run's resolved
+				// policy and moves the moment a person touches the deck. The prefix cache wants the churning
+				// layer below the settled ones — and when it does churn, invalidating from here is correct
+				// rather than unfortunate: the agent's capability actually changed.
+				this.capability ? [ Agent.extraBlock( 'capability', this.capability ) ] : [],
 				// Attachments TRAIL the whole system half, deliberately. They are its most volatile part — a
 				// user attaches and detaches mid-conversation while root context and lens identity sit still —
 				// and prefix caching invalidates from the earliest edit forward, so the churning thing belongs
@@ -1188,12 +1297,15 @@ export class Agent {
 	}
 
 	/** The system-prompt tool MANIFEST — grouped by SERVER ( folder ): each server heads its block with its
-	 *  own description, then one `- name — description` line per `on`-mode tool, so the agent knows the tool
-	 *  exists and can request it while its server stays lazy. Off the bound `toolDefs` + `effectiveToolModes()`;
-	 *  '' when nothing is `on`. The `###` server headings let the fold view + drawer reproduce the folders. */
+	 *  own description, then one `- name — description` line per manifest-surface tool, so the agent knows
+	 *  the tool exists and can request it while its server stays lazy. The `###` server headings let the fold
+	 *  view + drawer reproduce the folders.
+	 *
+	 *  NO POLICY IS READ HERE, and that is the point. `toolDefs` is bound to the tools this run may actually
+	 *  call, so a denied tool was never in the list — the compiler cannot advertise one because it is not
+	 *  holding one. This asks the only question left: what does each of them cost. */
 	toolManifest(): string {
-		const modes = this.effectiveToolModes();
-		const on = this.toolDefs.filter( t => modes[ t.name ] === 'on' );
+		const on = _heldIds( this.toolDefs ).filter( t => this.toolSurfaceFor( t.id! ) === 'manifest' );
 		if ( !on.length ) return '';
 		const sections = Agent.groupByServer( on ).map( g => {
 			const head = g.doc ? `### ${ g.name }\n${ g.doc }` : `### ${ g.name }`;
@@ -1202,12 +1314,11 @@ export class Agent {
 		return '## Available tools\n\n' + sections.join( '\n\n' );
 	}
 
-	/** Every `suggested`-mode tool's FULL definition ( name + description + input schema — the real wire
+	/** Every PRELOAD-surface tool's FULL definition ( name + description + input schema — the real wire
 	 *  weight of the injected surface ), grouped by SERVER the same way the manifest is: a `###` server band
-	 *  ( name + description ) over its tools' `####` full defs. '' when nothing is `suggested`. */
-	suggestedToolDefs(): string {
-		const modes = this.effectiveToolModes();
-		const suggested = this.toolDefs.filter( t => modes[ t.name ] === 'suggested' );
+	 *  ( name + description ) over its tools' `####` full defs. '' when nothing is preloaded. */
+	preloadedToolDefs(): string {
+		const suggested = _heldIds( this.toolDefs ).filter( t => this.toolSurfaceFor( t.id! ) === 'preload' );
 		if ( !suggested.length ) return '';
 		const sections = Agent.groupByServer( suggested ).map( g => {
 			const head = g.doc ? `### ${ g.name }\n${ g.doc }` : `### ${ g.name }`;
@@ -1217,11 +1328,35 @@ export class Agent {
 		return '## Suggested tools\n\n' + sections.join( '\n\n' );
 	}
 
-	/** The tool names this agent injects as `suggested` — the set that rides the wire as structured `tools`,
-	 *  distinct from the `on` manifest. */
-	suggestedToolNames(): string[] {
-		const modes = this.effectiveToolModes();
-		return Object.entries( modes ).filter( ( [ , m ] ) => m === 'suggested' ).map( ( [ n ] ) => n );
+	/**
+	 * THE AUTHORED BANDS, rendered — each `##` heading with its body under it.
+	 *
+	 * IT RENDERS AND NOTHING ELSE. What the bands say, which ones exist, and what order they come in were
+	 * all decided by the host before they were bound; this method cannot narrow, sort or edit them, and that
+	 * is the point of it being this short. The composer does not reach the passport, so anything it could
+	 * decide here it would be deciding blind.
+	 *
+	 * WHAT STOOD HERE was `commandManifest()`, which hard-coded ONE band for ONE tool — the heading, the
+	 * calling convention, and the roster's rendering, all in the composer, for a capability that belongs to
+	 * `sm_core.command_run`. It reads its own section now, and every other tool may author one too. The
+	 * text is unchanged; only its author moved.
+	 *
+	 * EMPTY IS ABSENT. No bands means no block at all rather than a `# Manifest` band with nothing under it.
+	 */
+	manifestBands(): string {
+		if ( !this.manifestGroups.length ) return '';
+		return this.manifestGroups.map( g => `## ${ g.heading }\n\n${ g.body }` ).join( '\n\n' );
+	}
+
+	/** The tool IDENTITIES this agent PRELOADS — the set that rides the wire as structured `tools`, distinct
+	 *  from the manifest's one-liners.
+	 *
+	 *  IDENTITIES RATHER THAN BARE NAMES, because everything about a tool is keyed by identity and a resolver
+	 *  matching on the bare half would admit a same-named tool belonging to another server — the exact
+	 *  collision the group segment exists to make impossible. Read off the DEFS rather than off any map's
+	 *  keys, so a setting left behind for a tool no longer served cannot name a tool that is not there. */
+	preloadedToolIds(): string[] {
+		return _heldIds( this.toolDefs ).filter( t => this.toolSurfaceFor( t.id! ) === 'preload' ).map( t => t.id! );
 	}
 
 	/** A plain string wrapped as a synthetic wire-order `TaggedBlock` — root context / tool manifest /

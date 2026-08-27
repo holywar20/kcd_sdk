@@ -21,6 +21,23 @@ const DONT_STYLE = `<article data-kcd="habit">
 	<section data-kcd-section="rules"><h3>Rules</h3><ul><li>announce it before building</li><li>silence is approval</li></ul></section>
 </article>`;
 
+const ROWS = `<div data-kcd-slot="table-data"><span data-kcd-field="what" data-kcd-type="text">npm run typecheck</span><span data-kcd-field="why" data-kcd-type="text">reads types, writes nothing</span></div>
+		<div data-kcd-slot="table-data"><span data-kcd-field="what" data-kcd-type="text">netstat -ano</span><span data-kcd-field="why" data-kcd-type="text">a read-only listing of sockets</span></div>`;
+
+const WITH_PARAMS = `<article data-kcd="habit">
+	<section data-kcd-section="why"><h3>Why</h3><p>about to run any shell command</p></section>
+	<section data-kcd-section="action"><h3>Action</h3><p>match it against the whitelist</p></section>
+	<section data-kcd-section="private-habit-params"><h3>Private habit params</h3>
+		<p>Human-authored prose that is NOT a row, and must not leak into the block.</p>
+		<div data-kcd-table>
+		<div data-kcd-head><span>Command</span><span>Why it qualifies</span></div>
+		${ ROWS }
+		</div>
+	</section>
+	<section data-kcd-section="explanation"><h3>Explanation</h3><p>a list goes stale where a judgement drifts.</p></section>
+	<section data-kcd-section="rules"><h3>Rules</h3><ul><li>literal form is literal</li></ul></section>
+</article>`;
+
 describe( 'KcdContext.projectHabit — the dense four-field directive', () => {
 	it( 'do-style: line one is "{name} — when {when}, execute {action}."; line two is "↳ {explanation} · {rules}"', () => {
 		const out = KcdContext.projectHabit( habit( 'log-session-liberal', DO_STYLE ) );
@@ -41,6 +58,45 @@ describe( 'KcdContext.projectHabit — the dense four-field directive', () => {
 	it( 'the human-only scaffold-note never rides the dense form', () => {
 		const out = KcdContext.projectHabit( habit( 'x', DO_STYLE ) );
 		expect( out ).not.toContain( 'human-only noise' );
+	} );
+
+	// Params were a document convention with no consumer from 2026-08-17 to 2026-08-18: `run-command-list`
+	// told the agent to match against a whitelist that no projection carried, so the pole behaved as
+	// `run-command-ask` while reading as populated on disk. These cases pin the injection that closed it.
+	it( 'params rows ride the dense form as a labelled third block', () => {
+		const out = KcdContext.projectHabit( habit( 'run-command-list', WITH_PARAMS ) );
+
+		expect( out.split( '\n' ) ).toEqual( [
+			'run-command-list — when about to run any shell command, execute match it against the whitelist.',
+			'↳ a list goes stale where a judgement drifts. · literal form is literal',
+			'↳ private-habit-params:',
+			'- npm run typecheck — reads types, writes nothing',
+			'- netstat -ano — a read-only listing of sockets',
+		] );
+	} );
+
+	// PRIVATE is an edit boundary, not a read one — a whitelist the agent cannot see is not a whitelist.
+	// The one real way to withhold rows is the audience marker, which every other section already honours.
+	it( 'a params section marked human-only is withheld, like any other human-only section', () => {
+		const out = KcdContext.projectHabit( habit( 'x', WITH_PARAMS.replace( 'data-kcd-section="private-habit-params"', 'data-kcd-section="private-habit-params" data-kcd-audience="human"' ) ) );
+
+		expect( out ).not.toContain( 'private-habit-params:' );
+		expect( out ).not.toContain( 'netstat' );
+	} );
+
+	// An empty list is a declared valid state ( the pole then behaves exactly as `run-command-ask` ), so
+	// a params section with no rows must contribute no block rather than an empty labelled one.
+	it( 'a params section with no rows contributes nothing', () => {
+		const out = KcdContext.projectHabit( habit( 'x', WITH_PARAMS.replace( ROWS, '' ) ) );
+
+		expect( out.split( '\n' ) ).toHaveLength( 2 );
+		expect( out ).not.toContain( 'private-habit-params:' );
+	} );
+
+	it( 'a habit with no params section is unchanged — two lines, exactly as before', () => {
+		const out = KcdContext.projectHabit( habit( 'log-session-liberal', DO_STYLE ) );
+
+		expect( out.split( '\n' ) ).toHaveLength( 2 );
 	} );
 
 	it( 'projectBlocks routes a habit to ONE dense block ( region do, section "habit" ), not section-by-section', () => {

@@ -23,4 +23,15 @@ export interface ToolDef {
 	 *  can GROUP its manifest by server ( folder ) with the server's own description. Absent on a test
 	 *  double or a def that never crossed the seam ( grouped under a fallback bucket then ). */
 	server?: { id: string; name: string; doc: string };
+	/**
+	 * THE WIRE IDENTITY, `group.tool` — stamped beside `server` at the same seam.
+	 *
+	 * IT RIDES RATHER THAN BEING SPELLED HERE. The separator belongs to the app's tool vocabulary and this
+	 * package must not import an app type, so an SDK that built the string would be a second speller of a
+	 * format it cannot see change — and a mode map keyed by one speller and read by another is exactly the
+	 * split this field exists to end.
+	 *
+	 * Absent on a def that never crossed the seam, where a reader falls back to the bare name.
+	 */
+	id?: string;
 }

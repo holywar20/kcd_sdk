@@ -50,8 +50,11 @@ const LENS_HTML = `<!DOCTYPE html>
 /** Two tools from one server, so the manifest's per-server grouping renders rather than falling into
  *  the unnamed fallback bucket. One rides `on` ( a manifest line ), one `suggested` ( a full schema ). */
 const TOOLS: ToolDef[] = [
-	{ name: 'probe',  description: 'Look at a thing.',   inputSchema: { type: 'object' }, server: { id: 'srv', name: 'Fixture server', doc: 'A fixture server.' } },
-	{ name: 'commit', description: 'Change a thing.',    inputSchema: { type: 'object' }, server: { id: 'srv', name: 'Fixture server', doc: 'A fixture server.' } }
+	// IDENTITIES ARE REQUIRED NOW. A def with no `group.tool` is not held — allowances key on it, and
+	// admitting one because it lacks the field everything else is keyed by would make missing metadata a
+	// way in. The fixture stamps them the way the priced serve seam does.
+	{ id: 'srv.probe',  name: 'probe',  description: 'Look at a thing.', inputSchema: { type: 'object' }, server: { id: 'srv', name: 'Fixture server', doc: 'A fixture server.' } },
+	{ id: 'srv.commit', name: 'commit', description: 'Change a thing.',  inputSchema: { type: 'object' }, server: { id: 'srv', name: 'Fixture server', doc: 'A fixture server.' } }
 ];
 
 /**
@@ -68,7 +71,10 @@ function fullAgent(): Agent {
 		lenses:       [ lens ],
 		model:        'test.lorem',
 		systemPrompt: 'The agent own authored instruction.',
-		toolModes:    { probe: 'on', commit: 'suggested' }
+		// ONE OF EACH SURFACE, so the snapshot carries both a manifest line and a preloaded schema — the two
+		// layers this test exists to hold in order. Both are equally permitted; only the cost differs.
+		toolPolicies: { 'srv.probe': 'allow', 'srv.commit': 'allow' },
+		toolSurfaces: { 'srv.commit': 'preload' }
 	} );
 	agent.bindEnv( {
 		hostPrompt:  'The host environment preamble.',

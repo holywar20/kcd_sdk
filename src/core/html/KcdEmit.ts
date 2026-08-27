@@ -108,6 +108,62 @@ export const KcdEmit = new class KcdEmit {
 		return depth > 0 ? '../'.repeat( depth ) + target : target;
 	}
 
+	/**
+	 * FIND the tier-2 stylesheet link in a document — the one matcher both readers of it share.
+	 *
+	 * THE ONE COPY OF THIS MATCH, for the same reason `cssHrefFor` is the one copy of the depth math.
+	 * Two callers used to declare the identical regex privately —
+	 * `VaultUtilities.fixStylesheetLinks` and `Vault.restampStylesheet` — and it was
+	 * `/<link\s+rel="stylesheet"\s+href="([^"]+)"\s*\/?>/`: FIRST MATCH ONLY, EXACT ATTRIBUTE ORDER.
+	 * A tag putting `href` before `rel`, or carrying any third attribute, matched nothing and was
+	 * skipped **without a report** — indistinguishable from a document that has no link at all.
+	 *
+	 * The gap survived because the emitter writes the attributes in exactly the order the old pattern
+	 * expected, so every document this system AUTHORED matched. What did not was a HAND-EDITED head,
+	 * which is precisely the document a person cared enough to touch. It also widened silently: when
+	 * `Vault.restampStylesheet` shipped, a documented gap in one tidiness command became a gap on every
+	 * MOVE, behind a best-effort `catch` that reports the move as a success either way.
+	 *
+	 * ATTRIBUTE ORDER IS IRRELEVANT HERE and treating it as significant was the defect. Returns the tag,
+	 * its offset, and its `href` — `null` for a stylesheet link whose href cannot be read, which is a
+	 * DIFFERENT answer from no link at all and must stay distinguishable: a caller that cannot tell
+	 * them apart is the failure this whole comment is about.
+	 */
+	stylesheetLink( raw: string ): { tag: string; href: string | null; index: number } | null {
+		for ( const m of raw.matchAll( /<link\b[^>]*>/gi ) ) {
+			const tag = m[ 0 ];
+			if ( !/\brel\s*=\s*["']stylesheet["']/i.test( tag ) ) continue;
+			const href = /\bhref\s*=\s*"([^"]*)"/i.exec( tag );
+			return { tag, href: href ? href[ 1 ] : null, index: m.index ?? 0 };
+		}
+		return null;
+	}
+
+	/**
+	 * The INVERSE of `cssHrefFor` — recover the vault-relative stylesheet target from an emitted href.
+	 *
+	 * Kept beside its inverse for the reason the forward direction is here at all: these are one piece
+	 * of math and separating them is how the two drift. A caller that has a document's existing link
+	 * and needs to re-express it somewhere else ( a MOVE, which changes depth ) must not re-derive the
+	 * target from configuration — the document already says what it points at, and reading it back is
+	 * both cheaper and correct for a vault whose stylesheet does not sit at the root.
+	 *
+	 * The leading `../` run is pure depth padding, so stripping ALL of it recovers the target whatever
+	 * depth it was written for. That is deliberate rather than incidental: an href that was already
+	 * WRONG for its location still names the right target, so re-expressing it self-heals instead of
+	 * faithfully carrying the error to the new path.
+	 *
+	 * Null for anything that is not a plain relative reference — a protocol URL ( `file:///…`, `http://` )
+	 * or a root-absolute path. Those are a different repair with a different ruling behind them, and a
+	 * mover silently rewriting one would be making that decision on its own authority.
+	 */
+	cssTargetFrom( href: string ): string | null {
+		const clean = href.replace( /\\/g, '/' ).trim();
+		if ( !clean || clean.includes( ':' ) || clean.startsWith( '/' ) ) return null;
+		const target = clean.replace( /^(?:\.\.\/)+/, '' );
+		return target && !target.startsWith( '../' ) ? target : null;
+	}
+
 	/** frontmatter → `<dl data-kcd-frontmatter>…</dl>`, the inverse of `KcdParse.frontmatter()`.
 	 *  Keys are emitted in the record's own iteration order; an absent / empty-string value is
 	 *  skipped ( never mint a key the source didn't carry — mirrors the parser's own skip rule ). */

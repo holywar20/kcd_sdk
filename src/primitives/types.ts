@@ -136,10 +136,13 @@ export interface AddressEntry {
 
 /**
  * A slot's wire mode — the SAME idiom for every artifact a slot can point at (reference, habit,
- * contract, plan, MCP tool, anything else routable). No per-artifact-type special casing. Mirrors
- * `ToolMode` (kcd_sdk/src/agent/ToolMode.ts) — same three values, same off→on→suggested framing;
- * kept as its own type rather than importing ToolMode here since `agent` depends on `primitives`,
- * not the other way around, but the UI layer is free to treat them interchangeably.
+ * contract, plan, MCP tool, anything else routable). No per-artifact-type special casing.
+ *
+ * FOR TOOLS THIS IS NOW A SOURCE VOCABULARY, NOT THE ONE IN FORCE. An agent carries the two axes an
+ * allowance really has ( `Policy` and `Surface`, in `ToolAccess` ); a LENS still authors this single
+ * three-state, because a slot's mode is a `data-kcd-mode` attribute and splitting it is a document-format
+ * break across every lens on disk. `LensObject.getToolPolicies` / `getToolSurfaces` spend the diagonal at
+ * that one seam. References and habits still run on this natively.
  *   off       — excluded entirely; not dredged, not even shown as a routing row.
  *   on        — the default. Routing row only (what/where/why) — the agent looks it up when its
  *               When/trigger fires. Cheap: never fetched into the context-assembly graph.
@@ -196,8 +199,8 @@ export interface SerializedLens extends SerializedArtifact {
 	injected?: SerializedArtifact[];
 	/** Per-tool three-state inclusion the LENS itself contributes ( tool name → mode ), parsed from
 	 *  the lens's Tools table ( `data-kcd-section="tools"` — where-less slots, MCP tool names, not
-	 *  path artifacts ). The composition BASELINE an agent's own `toolModes` overrides per-tool
-	 *  ( Agent.effectiveToolModes ). Absent on a lens with no Tools table. Unlike references/habits,
+	 *  path artifacts ). The composition BASELINE, read through the lens's two axis getters and overridden
+	 *  per-tool by the agent's own maps. Absent on a lens with no Tools table. Unlike references/habits,
 	 *  a tool is not a dredged node, so it rides here rather than in `nodes`. */
 	toolModes?: Record<string, SlotMode>;
 }

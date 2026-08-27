@@ -14,6 +14,8 @@ export * from '../agent';
 export * from '../session';
 export * from '../constellation';
 export * from './Assert';
+export * from './Keystone';
+export * from './Command';
 export * from './AccessPolicy';
 export * from './VaultLayout';
 export * from './InstallManifest';

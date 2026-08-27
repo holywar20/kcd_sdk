@@ -339,7 +339,64 @@ export const KcdValidate = new class KcdValidate {
 			warn( 'habit-no-behavior', 'section', 'a habit has neither an `action` nor a `rules` section — nothing to do' );
 		if ( !names.has( 'explanation' ) )
 			warn( 'habit-no-explanation', 'section:explanation', 'a habit has no `explanation` — the dense suggested form will carry no rationale' );
+	
+		this.checkHabitProjection( article, names, err, warn );
 	}
+	
+	/**
+	 * The projection pass — content authored into a habit that the dense form silently drops.
+	 *
+	 * `KcdContext.projectHabit` is the ONLY renderer of a habit ( both the preview and the wire route
+	 * through it ), and it reads exactly four sections. Extra sections are legal and deliberate — they
+	 * are the on-demand-read tier — so their mere presence is never an error. What IS an error is
+	 * content that LOOKS projected and is not, because nothing downstream reports the loss: the habit
+	 * still fires, still reads complete on disk, and the agent simply never receives the dropped part.
+	 * Two shapes of that, both found in the deployed corpus 2026-08-18:
+	 *
+	 *  1. RULES THAT ARE NOT A LIST. `projectHabit` takes `rules` from `readSection().items`, which
+	 *     collects `<li>` only — a faux-table collapses whole into `text` and is discarded. An author
+	 *     following the house table idiom therefore writes rules that reach no one. ERROR: total,
+	 *     silent loss of a section the four-field contract says is projected.
+	 *
+	 *  2. A PROJECTED FIELD THAT DEFERS OFFSTAGE. When `action` says "see the Output/Format sections
+	 *     below", the pointer survives projection and its target does not, so the agent is handed an
+	 *     instruction to consult something it cannot see. WARNING rather than error: the naming may be
+	 *     incidental ( a section called `header` and the English word "header" ), and the fix is an
+	 *     editorial judgement — inline the content, or drop the pointer — not a mechanical rewrite.
+	 */
+	// The four narrative fields plus the two params sections, whose ROWS ride as data ( `paramBlocks` ).
+	// Params joined this set on 2026-08-18, when the compiler was taught to inject them — before that a
+	// habit could point at its own whitelist and the pointer was dead. Keep this in step with
+	// `KcdContext.PARAM_SECTIONS`: a section that projects must never be reported as dropped.
+	PROJECTED_SECTIONS = new Set( [ 'why', 'action', 'explanation', 'rules', 'private-habit-params', 'public-habit-params' ] );
+	
+	checkHabitProjection( article: HtmlEl, names: Set<string>, err: Emit, warn: Emit ): void {
+		const sections = HtmlTree.collect( article, el => KcdAddress.isSection( el ) );
+		const named    = ( key: string ): HtmlEl | undefined =>
+			sections.find( el => HtmlTree.get( el, 'data-kcd-section' ) === key );
+	
+		// 1 — rules must be a list, because that is the only shape the projection reads.
+		const rules = named( 'rules' );
+		if ( rules && !HtmlTree.collect( rules, el => el.tag === 'li' ).length )
+			err( 'habit-rules-not-projecting', 'section:rules',
+				'a habit\'s `rules` section carries no `<li>` — `projectHabit` reads rules from list items only, so a faux-table or prose here reaches no agent. Author rules as a `<ul>`' );
+	
+		// 2 — a projected field that names one of this habit's own non-projected sections.
+		const offstage = [ ...names ].filter( n => !this.PROJECTED_SECTIONS.has( n ) );
+		if ( !offstage.length ) return;
+	
+		for ( const key of this.PROJECTED_SECTIONS ) {
+			const el = named( key );
+			if ( !el ) continue;
+			const text = HtmlTree.textOf( el ).toLowerCase();
+			for ( const target of offstage ) {
+				if ( !text.includes( target.toLowerCase() ) ) continue;
+				warn( 'habit-nonprojecting-ref', `section:${ key }`,
+					`\`${ key }\` refers to \`${ target }\`, a section the dense projection drops — the agent receives the pointer but never its target. Inline what it needs, or remove the reference` );
+			}
+		}
+	}
+
 
 	// ── Helpers ───────────────────────────────────────────────────────────────────
 	// ── Addressing pass ( protocol §1.1 ) ─────────────────────────────────────────

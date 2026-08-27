@@ -2,6 +2,7 @@ import * as path from 'path';
 import { KCDPrimitive, clampDepth, classifyRelPath } from './KCDPrimitive';
 import { SlotResolver } from './SlotResolver';
 import type { ArtifactType, KCDRole, PolicyEntry, ReaderFn, SerializedArtifact, SerializedLens, SlotMode, TaggedBlock } from '../types';
+import type { Policy, Surface } from '../ToolAccess';
 
 const LENS_DEFAULT_DEPTH = 2;
 
@@ -68,7 +69,8 @@ export class LensObject extends KCDPrimitive {
 	protected injected: KCDPrimitive[] = [];
 	/** Per-tool three-state inclusion the lens CONTRIBUTES ( tool name → mode ), parsed from the lens's
 	 *  Tools table. Unlike references/habits a tool is not a dredged node, so it lives here, not in `nodes`.
-	 *  The composition baseline an agent's own `toolModes` overrides per-tool ( Agent.effectiveToolModes ). */
+	 *  Read through `getToolPolicies` / `getToolSurfaces`, which spend the three-state on the agent's two
+	 *  axes at that one seam — the lens keeps the single control because its mode is a document attribute. */
 	protected toolModes: Record<string, SlotMode> = {};
 	protected projectRoot?: string;
 	protected dredgeDepth = LENS_DEFAULT_DEPTH;
@@ -234,9 +236,35 @@ export class LensObject extends KCDPrimitive {
 		this.injected.push( node );
 	}
 
-	/** The per-tool modes this lens contributes ( tool name → mode ) — the composition baseline the agent
-	 *  layers its own `toolModes` over. A tool is not a node, so this is its own read, not `getNodes()`. */
+	/** The per-tool modes this lens contributes ( tool name → mode ) — the raw authored table. A tool is not
+	 *  a node, so this is its own read, not `getNodes()`. Prefer the two axis readers below; this survives
+	 *  for the authoring surfaces, which still edit the lens's own three-state control. */
 	getToolModes(): Record<string, SlotMode> { return { ...this.toolModes }; }
+
+	/**
+	 * THE LENS'S CONTRIBUTION ON EACH AXIS, derived from the one mode it stores.
+	 *
+	 * ── WHY THIS IS A DERIVATION AND NOT A SECOND PAIR OF FIELDS ──
+	 * The agent carries the two axes natively; a LENS still authors the single three-state, because the mode
+	 * is a `data-kcd-mode` attribute on the lens's Tools table and changing that is a document-format break
+	 * across every lens on disk — deliberately deferred, and not worth buying twice. So the diagonal is
+	 * spent HERE, at the one seam between the two shapes, rather than leaving every downstream reader to
+	 * work out which vocabulary it is holding.
+	 *
+	 * `off` → a subtraction. `on` → allowed, one manifest line. `suggested` → allowed, full schema preloaded.
+	 * The cost half is only meaningful for a tool the lens actually supplies, so a subtracted tool
+	 * contributes no surface at all rather than a surface nothing will read.
+	 */
+	getToolPolicies(): Record<string, Policy> {
+		return Object.fromEntries( Object.entries( this.toolModes )
+			.map( ( [ id, mode ] ) => [ id, mode === 'off' ? 'off' : 'allow' ] ) );
+	}
+
+	getToolSurfaces(): Record<string, Surface> {
+		return Object.fromEntries( Object.entries( this.toolModes )
+			.filter( ( [ , mode ] ) => mode !== 'off' )
+			.map( ( [ id, mode ] ) => [ id, mode === 'suggested' ? 'preload' : 'manifest' ] ) );
+	}
 
 	getRole(): KCDRole { return 'lens'; }
 
