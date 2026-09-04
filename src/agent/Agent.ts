@@ -823,6 +823,11 @@ export class Agent {
 		const root = this.primaryLens;
 		const rel  = ( abs: string ): string => norm( ( root ?? this.lenses[ 0 ] )?.vaultRelative( abs ) ?? abs );
 
+		// A habit a more specific layer displaced puts nothing on the wire, so the chart must not price
+		// it as though it did — chart and compile are two projections of one plan, and the whole reason the
+		// slot bug read as correct behaviour was that they disagreed.
+		const displaced = this.displacedHabitPaths();
+
 		// A file's slot is its own `habit-class` frontmatter ( protocol §6 ) — the mutual-exclusion class
 		// `SlotResolver` groups contenders by. Null for anything that contends nothing.
 		const slotOf = ( n: KCDPrimitive | null ): string | null =>
@@ -852,7 +857,8 @@ export class Agent {
 				if ( seen.has( p ) ) continue;
 				seen.add( p );
 
-				const mode = ( this.habitModes[ p ] ?? this.referenceModes[ p ] ?? entry.mode ) as SlotMode;
+				const declared = ( this.habitModes[ p ] ?? this.referenceModes[ p ] ?? entry.mode ) as SlotMode;
+				const mode     = ( node && displaced.has( rel( node.getPath() ) ) ) ? 'off' as SlotMode : declared;
 				out.push( {
 					path:   p,
 					name:   entry.what || node?.getName() || p.split( '/' ).pop() || href,
@@ -871,7 +877,8 @@ export class Agent {
 			const p = norm( node.getPath() );
 			if ( seen.has( p ) ) continue;
 			seen.add( p );
-			const mode = ( this.habitModes[ p ] ?? this.referenceModes[ p ] ?? 'suggested' ) as SlotMode;
+			const declared = ( this.habitModes[ p ] ?? this.referenceModes[ p ] ?? 'suggested' ) as SlotMode;
+			const mode     = displaced.has( rel( node.getPath() ) ) ? 'off' as SlotMode : declared;
 			out.push( {
 				path: p, name: node.getName(), kind: node.getType(), source: 'agent', slot: slotOf( node ),
 				mode, tokens: mode === 'off' ? 0 : ( core.get( p ) ?? rowWeight.get( rel( node.getPath() ) ) ?? 0 ),
@@ -1103,7 +1110,9 @@ export class Agent {
 		// only fires per NON-EMPTY tier, so an agent with no core content never gets a bare "## Knowledge"
 		// heading over nothing, and the reserved `memory` tier emits nothing on the wire while empty.
 		const bodyBlocks  = ContextAssembler.withBandHeadings( ContextAssembler.assembleBlocks( [ ...careBands, ...rest ] ) );
-		const rawManifest = this.manifestBlocks( blocks.filter( inIndex ) );
+		// Habit-class contention has to be settled over the NODE inventory, not the blocks: an `on`-mode
+		// habit emits no blocks at all, so `SlotResolver` never sees it contend ( see `displacedHabitPaths` ).
+		const rawManifest = this.manifestBlocks( Agent.withoutRows( blocks.filter( inIndex ), this.displacedHabitPaths() ) );
 		const manifestBlocks = rawManifest.length
 			? [ ContextAssembler.headingBlock( ContextAssembler.bandHeading( ContextAssembler.TIER.manifest )! ), ...rawManifest ]
 			: [];
@@ -1547,6 +1556,63 @@ export class Agent {
 	 * `ContextAssembler.title` so no caller hardcodes a `###` string. Paths are vault-relative — the
 	 * primary lens's `vaultRelative`, so a stack sharing a vault root all resolve against it.
 	 */
+	/**
+	 * Vault-relative hrefs of habits that LOST their habit-class contest — the rows a manifest must not
+	 * advertise.
+	 *
+	 * `SlotResolver` already drops a losing habit's own blocks, and for a `suggested` habit that is the
+	 * whole story. But an `on`-mode habit ( ~90% of them ) emits NO blocks — a routing ROW in its
+	 * declaring lens's habits table is its entire contribution, and that table is the LENS's block:
+	 * classless, therefore never a contender, therefore surviving the cascade with the loser's row still
+	 * inside it. The compiled manifest then advertised two occupants of one mutually-exclusive slot
+	 * ( `write-memory-never` beside `write-memory-sparing` ), which is the exact contradiction §6 exists
+	 * to prevent, and it failed SILENTLY — nothing errors, the agent simply reads both.
+	 *
+	 * So the contest is settled here over the node INVENTORY, which knows every habit regardless of mode.
+	 * Specificity, most specific first: the agent's own bolted-on habits, then each lens in load order,
+	 * then the inheritance floor — which is last by definition, not by accident. `withFloor` appends it,
+	 * and a floor a lens cannot correct is not a floor, it is a ceiling. Ties inside one rank keep the
+	 * incumbent, so a habit two lenses both declare is one artifact, not a rival of itself.
+	 */
+	displacedHabitPaths(): Set<string> {
+		const norm = ( s: string ): string => s.replace( /\\/g, '/' );
+		const root = this.primaryLens ?? this.lenses[ 0 ] ?? null;
+		const href = ( abs: string ): string => norm( root?.vaultRelative( abs ) ?? abs );
+
+		const best = new Map<string, { path: string; rank: number }>();
+		const all: { cls: string; path: string }[] = [];
+		const consider = ( node: KCDPrimitive, rank: number ): void => {
+			if ( node.getType() !== 'habit' ) return;
+			const cls = node.getFrontmatter()[ 'habit-class' ];
+			if ( typeof cls !== 'string' || !cls ) return;
+			const path = href( node.getPath() ?? '' );
+			all.push( { cls, path } );
+			const cur = best.get( cls );
+			if ( !cur || rank < cur.rank ) best.set( cls, { path, rank } );
+		};
+
+		for ( const n of this.baseHabitNodes ) consider( n, 0 );
+		// Stable sort: domain lenses keep their load order, the floor sinks to the end.
+		const ordered = [ ...this.lenses ].sort( ( a, b ) =>
+			Number( InstallManifest.isBaseLens( a.getPath() ) ) - Number( InstallManifest.isBaseLens( b.getPath() ) ) );
+		ordered.forEach( ( lens, i ) => { for ( const n of lens.getNodes() ) consider( n, 1 + i ); } );
+
+		const out = new Set<string>();
+		for ( const c of all ) if ( best.get( c.cls )!.path !== c.path ) out.add( c.path );
+		return out;
+	}
+
+	/** Manifest index blocks with the named rows removed — the projection `displacedHabitPaths` feeds.
+	 *  Copies rather than mutates: the same blocks are read again by `composition()`, and a compile that
+	 *  edited them in place would make the chart depend on whether anyone had compiled first. */
+	static withoutRows( index: TaggedBlock[], drop: Set<string> ): TaggedBlock[] {
+		if ( !drop.size ) return index;
+		const norm = ( s: string ): string => s.replace( /\\/g, '/' );
+		return index.map( b => b.rows?.length
+			? { ...b, rows: b.rows.filter( r => !drop.has( norm( r.where ?? '' ) ) ) }
+			: b );
+	}
+
 	manifestBlocks( index: TaggedBlock[] ): TaggedBlock[] {
 		const root = this.primaryLens;
 		const out: TaggedBlock[] = [];
