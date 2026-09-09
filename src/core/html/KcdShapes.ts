@@ -224,7 +224,7 @@ export const SHAPES: Record<string, TypeShape> = {
 
 	framework:         { purpose: 'Orientation for the substrate itself.',            open: true, sections: [] },
 	'prompt-partial':  { purpose: 'A reusable fragment composed into a prompt.',      open: true, sections: [] },
-	audit:             { purpose: 'Raw generator output, kept as a record.',          open: true, sections: [] },
+	audit:             { purpose: 'What a generator or analyzer emitted, kept as a record.', open: true, sections: [] },
 };
 
 export const KcdShapes = new class KcdShapes {

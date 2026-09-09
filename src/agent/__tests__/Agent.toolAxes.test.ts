@@ -76,16 +76,33 @@ describe( 'Agent — the two tool axes', () => {
 		expect( agentWith( { 'srv.probe': 'allow' } ).toolSurfaceFor( 'srv.probe' ) ).toBe( 'manifest' );
 	} );
 
-	it( 'splits the manifest from the preloaded surface on COST alone', () => {
+	it( 'names BOTH tools in the manifest and marks only the deferred one', () => {
 		// Both tools are equally permitted; what differs is what each spends. Under the diagonal this pair
 		// of states was unreachable — there was no way to say "allowed, but do not spend a schema on it"
 		// while another tool rode in whole.
+		//
+		// THIS PINNED THE OPPOSITE UNTIL 2026-09-05, and the inversion is the fix rather than a loosened
+		// assertion. It asserted the manifest did NOT name a preloaded tool — and that omission was the
+		// defect: the wire carries name, description and schema with no SERVER, so a preloaded tool named
+		// nowhere else reached the model as a bare verb it could not place. An agent holding `learn` and
+		// `recall` reported having no memory tool, correctly, because nothing in its context said Memory.
+		//
+		// So the manifest names everything and the MARK carries the axis. What the surface decides is what a
+		// tool COSTS, never whether it is identifiable.
 		const agent = agentWith(
 			{ 'srv.probe': 'allow', 'srv.commit': 'allow' },
 			{ 'srv.commit': 'preload' }
 		);
-		expect( agent.toolManifest() ).toContain( 'probe' );
-		expect( agent.toolManifest() ).not.toContain( 'commit' );
+		const lines     = agent.toolManifest().split( '\n' );
+		const probeRow  = lines.find( l => l.startsWith( '- probe' ) );
+		const commitRow = lines.find( l => l.startsWith( '- commit' ) );
+
+		expect( probeRow ).toBeDefined();
+		expect( commitRow ).toBeDefined();
+		// Read off the ROW rather than the whole string: a substring check would pass on a manifest that
+		// marked the wrong tool, which is the only way this can actually break.
+		expect( probeRow ).toContain( '[schema on request]' );
+		expect( commitRow ).not.toContain( '[schema on request]' );
 		expect( agent.preloadedToolIds() ).toEqual( [ 'srv.commit' ] );
 	} );
 

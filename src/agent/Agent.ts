@@ -269,6 +269,41 @@ function _heldIds( defs: readonly ToolDef[] ): ToolDef[] {
  * A draft is simply an agent with no lenses (`isDraft()`); "deploy" is a state transition on
  * this one object, not a different class.
  */
+/**
+ * The wire's EXTERNAL layers — everything a compiled context needs that is not the agent's own object
+ * graph. Every key OPTIONAL and applied only when present, which is what lets a caller bind one layer
+ * without restating the other eleven.
+ */
+/** One package's injection. `id` is the key a toggle, a deck row and a trace line all read; there is no
+ *  tier because a package makes no ranking decision — see `ContextContribution`. */
+export type Contribution = {
+	id:      string;
+	heading: string;
+	text:    string;
+};
+
+/** What ONE agent overrides about ONE package's injection, stored in its `system.contributions` bag under
+ *  the package id. Absent means the package rides on its own declared defaults — enabled is default ON,
+ *  because an installed contributor the user never touched is one they asked for by installing it. */
+export type ContributionSettings = {
+	enabled?: boolean;
+	params?:  Record<string, unknown>;
+};
+
+export type AgentEnvironment = {
+	hostPrompt?:     string;
+	rootContext?:    string;
+	toolDefs?:       ToolDef[];
+	contributions?:  Contribution[];
+	attachments?:    string;
+	grants?:         SlotRow[];
+	commands?:       readonly Command[];
+	manifestGroups?: readonly { heading: string; body: string }[];
+	capability?:     string;
+	frame?:          string;
+	modeLine?:       string;
+};
+
 export class Agent {
 
 	readonly id: string;
@@ -358,14 +393,10 @@ export class Agent {
 	/** The live tool defs available to this agent — the flat set the manifest + suggested surface read,
 	 *  each carrying its BAKED per-mode counts. Bound from the MCP store; `[]` until bound. */
 	toolDefs: ToolDef[] = [];
-	/** The baseline PRELOAD memory prose ( the system-fired top-N selection ). Rides only when the agent's
-	 *  own `system.memoryEnabled` gate is on. '' until bound / when the query came back dry. */
-	memory: string = '';
-	/** The memory store's WHOLE tag vocabulary — one list every agent shares ( no params, never varies by
-	 *  agent, changes only when we seed a new tag ). Bound like `memory`; `[]` when no memory store is
-	 *  wired at all, which is what lets `memoryVocabulary()` fall silent instead of rendering an empty
-	 *  header. Read by that one method — see it for why this rides the band instead of a tool. */
-	memoryTags: string[] = [];
+	/** What the installed CONTRIBUTORS returned for this run — each carrying the band it declared. `[]`
+	 *  until bound, when nothing is installed that contributes, and when every contributor came back dry;
+	 *  all three mean the same thing to the compile, which is that those bands emit nothing. */
+	contributions: Contribution[] = [];
 	/** The bound session's PREFILL attachments, already composed ( `Session.attachmentManifest()` ). A
 	 *  STRING like rootContext and memory, not the entry array: the array lives on the session, which owns
 	 *  it and composes it, and an agent reaching into `session/` would invert the layering — a session is a
@@ -616,12 +647,11 @@ export class Agent {
 	 * defs / model root context / baseline memory change ( then `triggerRef` ); the orchestrator calls it per
 	 * round on the canonical agent. Never persisted — this is live environment, not agent identity.
 	 */
-	bindEnv( env: { hostPrompt?: string; rootContext?: string; toolDefs?: ToolDef[]; memory?: string; memoryTags?: string[]; attachments?: string; grants?: SlotRow[]; commands?: readonly Command[]; manifestGroups?: readonly { heading: string; body: string }[]; capability?: string; frame?: string; modeLine?: string } ): void {
+	bindEnv( env: AgentEnvironment ): void {
 		if ( env.hostPrompt  !== undefined ) this.hostPrompt  = env.hostPrompt;
 		if ( env.rootContext !== undefined ) this.rootContext = env.rootContext;
 		if ( env.toolDefs    !== undefined ) this.toolDefs    = env.toolDefs;
-		if ( env.memory      !== undefined ) this.memory      = env.memory;
-		if ( env.memoryTags  !== undefined ) this.memoryTags  = env.memoryTags;
+		if ( env.contributions !== undefined ) this.contributions = env.contributions;
 		if ( env.attachments !== undefined ) this.attachments = env.attachments;
 		if ( env.grants      !== undefined ) this.grantRows   = env.grants;
 		if ( env.commands    !== undefined ) this.commandRows = env.commands;
@@ -631,9 +661,12 @@ export class Agent {
 		if ( env.modeLine    !== undefined ) this.modeLine    = env.modeLine;
 	}
 
-	/** What this agent actually carries = bolted-on ∪ inherited-from-lenses. The permissions
-	 *  gate reads `effectiveTools`; the composer reads each pair to show base (editable here)
-	 *  vs composed (edit at the lens). */
+	/** What this agent actually carries = bolted-on ∪ inherited-from-lenses. The composer reads each
+	 *  pair to show base (editable here) vs composed (edit at the lens).
+	 *
+	 *  THE TOOL AXIS IS NOT ONE OF THESE. There is no `effectiveTools`: tools resolve through
+	 *  `toolAllowances()` below, which is a policy OVERLAY rather than a union, because a union cannot
+	 *  express a denial and the tool axis is the one where a forgotten denial is silent permission. */
 	effectiveHabits():     string[] { return _union( this.baseHabits,     this.composedHabits ); }
 	effectiveReferences(): string[] { return _union( this.baseReferences, this.composedReferences ); }
 	effectivePlans():      string[] { return _union( this.basePlans,      this.composedPlans ); }
@@ -798,7 +831,7 @@ export class Agent {
 		const norm      = ( s: string ): string => s.replace( /\\/g, '/' );
 		const weigh     = ( t: string ): number => t ? KCDPrimitive._estimateTokens( t ) : 0;
 		const survivors = SlotResolver.compilePlan( this.getContextBlocks() ).survivors;
-		const isIndex   = ( b: TaggedBlock ): boolean => b.section !== null && Agent.INDEX_SECTIONS.has( b.section );
+		const isIndex   = ( b: TaggedBlock ): boolean => b.sourceLayer !== 'injected' && b.section !== null && Agent.INDEX_SECTIONS.has( b.section );
 
 		const body       = survivors.filter( b => !isIndex( b ) && b.section !== 'stub' );
 		const careBlocks = body.filter( b => b.region === 'care' );
@@ -1072,27 +1105,25 @@ export class Agent {
 	 * `Session.wireSystemFor` ). A flat trailing array couldn't express "some extras lead, some trail";
 	 * this is the real positioning the Phase 1 doc comment deferred to Phase 2.
 	 *
-	 * `memory` ( memory-system plan, 2026-07-13 ) — the Memory band ( `Agent.memoryBlock` over
-	 * `memoryBand()`: the tag-vocabulary constant, then the system-fired PRELOAD baseline the orchestrator
-	 * bound from `database.baseline_memories` ). Unlike `before`/`after` it does NOT
-	 * bracket the join: it joins the BODY block list and sorts into the `memory` tier ( now BETWEEN the
-	 * Lenses band and Knowledge — `ContextAssembler.tierOf` ), because its position is a property of the
-	 * merged sort, not a fixed lead/trail slot. Its `## Memory` band heading is spliced by
-	 * `withBandHeadings` like any other body tier; while no memory rides ( the reserved-but-empty case ),
-	 * `withBandHeadings` emits nothing for the tier, so the wire carries no bare `## Memory`.
+	 * `contributed` — what the installed CONTRIBUTORS returned, each block already tagged with the band its
+	 * server declared. Unlike `before`/`after` it does NOT bracket the join: it joins the BODY block list
+	 * and sorts by declared tier ( `ContextAssembler.tierOf` ), because a contribution's position is a
+	 * property of the merged sort rather than a fixed lead/trail slot. Band headings are spliced by
+	 * `withBandHeadings` like any other body tier, and a tier with no members contributes nothing to splice
+	 * around — so a band nobody filled emits no bare heading.
 	 */
-	compiledBlocks( extras: { before?: TaggedBlock[]; after?: TaggedBlock[]; memory?: TaggedBlock[]; sections?: TaggedBlock[] } = {} ): TaggedBlock[] {
+	compiledBlocks( extras: { before?: TaggedBlock[]; after?: TaggedBlock[]; contributed?: TaggedBlock[]; sections?: TaggedBlock[] } = {} ): TaggedBlock[] {
 		const before = extras.before ?? [];
 		const after  = extras.after ?? [];
-		const memory = extras.memory ?? [];
-		// `sections` joins the BLOCK LIST rather than bracketing the join, for the reason `memory` does: its
+		const contributed = extras.contributed ?? [];
+		// `sections` joins the BLOCK LIST rather than bracketing the join, for the reason `contributed` does: its
 		// position is a property of the merged sort, not a fixed lead/trail slot. A manifest-tagged block
 		// sinks to the manifest tier and fuses with the lens graph's own rows for that section — which is
 		// how a SESSION-sourced table ( grants ) lands in the same place an artifact-sourced one does.
 		const sections = extras.sections ?? [];
-		if ( !this.lenses.length ) return Agent.joinSegments( [ before, memory, sections, after ] );
-		const blocks  = [ ...SlotResolver.compilePlan( this.getContextBlocks() ).survivors, ...memory, ...sections ];
-		const inIndex = ( b: TaggedBlock ): boolean => b.section !== null && Agent.INDEX_SECTIONS.has( b.section );
+		if ( !this.lenses.length ) return Agent.joinSegments( [ before, contributed, sections, after ] );
+		const blocks  = [ ...SlotResolver.compilePlan( this.getContextBlocks() ).survivors, ...contributed, ...sections ];
+		const inIndex = ( b: TaggedBlock ): boolean => b.sourceLayer !== 'injected' && b.section !== null && Agent.INDEX_SECTIONS.has( b.section );
 		// The body is everything that ISN'T an index table and isn't the legacy Available-on-request stub.
 		const body = blocks.filter( b => !inIndex( b ) && b.section !== 'stub' );
 
@@ -1105,10 +1136,9 @@ export class Agent {
 		const rest       = body.filter( b => b.region !== 'care' );
 		const careBands  = this.buildCareBands( careBlocks );
 
-		// Band headings ( Lenses / Memory / Knowledge over the body's care/memory/core tiers; Manifest over
-		// the manifest ) — real headings on the real wire text, not a view-only re-skin. `withBandHeadings`
-		// only fires per NON-EMPTY tier, so an agent with no core content never gets a bare "## Knowledge"
-		// heading over nothing, and the reserved `memory` tier emits nothing on the wire while empty.
+		// Band headings over the body's tiers — real headings on the real wire text, not a view-only re-skin.
+		// Fires per NON-EMPTY tier only, so an agent with no core content never carries a bare "# Knowledge"
+		// over nothing. Injections bring their own heading and so get none from here.
 		const bodyBlocks  = ContextAssembler.withBandHeadings( ContextAssembler.assembleBlocks( [ ...careBands, ...rest ] ) );
 		// Habit-class contention has to be settled over the NODE inventory, not the blocks: an `on`-mode
 		// habit emits no blocks at all, so `SlotResolver` never sees it contend ( see `displacedHabitPaths` ).
@@ -1126,11 +1156,21 @@ export class Agent {
 
 	/**
 	 * THE compiled context for this agent's live wire — `compiledBlocks()` with the bound environment folded
-	 * in as real blocks: the model root context LEADS ( `before` ), the baseline memory sorts into its tier,
-	 * and the `on`-mode tool manifest, every `suggested` tool's full schema, the attachments and the two
-	 * caller layers TRAIL ( `after` ). Memory rides only when the agent's own `system.memoryEnabled` gate is
-	 * on. Zero-arg: the extras that used to be hand-gathered in `Session.compiledBlocksFor` are the agent's
-	 * own bound env now.
+	 * in as real blocks: the model root context LEADS ( `before` ), each package's injection sorts into its band,
+	 * and the TOOL MANIFEST, the attachments and the two caller layers TRAIL ( `after` ).
+	 * An injection rides only while this agent's own per-package gate is on. Zero-arg: the extras that
+	 * used to be hand-gathered in `Session.compiledBlocksFor` are the agent's own bound env now.
+	 *
+	 * WHAT IS DELIBERATELY NOT HERE: a preload-surface tool's SCHEMA. It rides the request's own `tools`
+	 * array, which is where a schema belongs — the field the provider parses, caches and validates calls
+	 * against. Prose beside it bought nothing and cost the schema twice on every single turn, which on a
+	 * dozen preloaded tools is the largest duplicate in the context.
+	 *
+	 * THE TOOL ITSELF IS VERY MUCH HERE, and that distinction cost a real defect to learn ( 2026-09-05 ).
+	 * Cutting the duplicated schema also cut the only place a preloaded tool was named beside its SERVER,
+	 * and the wire carries no server at all — so those tools stayed callable and stopped being
+	 * identifiable. The manifest names every tool the run holds; the surface axis decides what one COSTS,
+	 * never whether it is named. The schema is what still divides them, and only the schema.
 	 *
 	 * This list is TOTAL — every layer that reaches the system wire is a block in it, including the caller's
 	 * frame and the turn's shaping line, which the dispatcher used to join onto the projected text from
@@ -1140,12 +1180,10 @@ export class Agent {
 	 */
 	compiledContext(): TaggedBlock[] {
 		const manifest  = this.toolManifest();
-		const suggested = this.preloadedToolDefs();
 		const bands     = this.manifestBands();
-		// The band, not the bare prose — the tag vocabulary heads it ( `memoryVocabulary` ). Both halves sit
-		// behind the SAME `memoryEnabled` gate: an agent with memory switched off carries no memories and no
-		// vocabulary either, since the vocabulary exists only to make `learn`/`recall` calls land.
-		const memory    = ( this.system[ 'memoryEnabled' ] !== false ) ? this.memoryBand() : '';
+		// The host narrows before it CALLS a contributor, so a disabled one costs nothing. This is the same
+		// answer read a second time, on the object that owns it — a bound env from anywhere still obeys.
+		const contributed = this.contributions.filter( ( c ) => this.injectionEnabled( c.id ) );
 		// Canonized grants ride as a real MANIFEST section, not as a trailing extra — they are a what/where/why
 		// lookup table exactly like References and Habits, and tagging them as one is what puts them under the
 		// `# Manifest` band with its read-on-demand directive rather than inside required reading. Being a
@@ -1173,10 +1211,9 @@ export class Agent {
 				this.systemPrompt ? [ Agent.extraBlock( 'system-prompt', this.systemPrompt ) ] : [],
 				this.rootContext  ? [ Agent.extraBlock( 'root-context',  this.rootContext  ) ] : []
 			] ),
-			memory: memory ? [ Agent.memoryBlock( memory ) ] : [],
+			contributed: contributed.map( ( c ) => Agent.contributionBlock( c ) ),
 			after: Agent.joinSegments( [
-				manifest  ? [ Agent.extraBlock( 'tool-manifest', manifest ) ] : [],
-				suggested ? [ Agent.extraBlock( 'suggested-tools', suggested ) ] : [],
+				manifest ? [ Agent.extraBlock( 'tool-manifest', manifest ) ] : [],
 				// THE AUTHORED BANDS CLOSE THE MANIFEST — second categories beside the tool manifest, never
 				// subsections inside it. The command roster is the one that made the argument and it generalizes
 				// unchanged: a command is not a tool from a different source, it has no tier, no deferred schema
@@ -1280,10 +1317,19 @@ export class Agent {
 		return KCDPrimitive._estimateTokens( this.wireSystem() );
 	}
 
-	/** The compiled currency summed by coarse budget bucket — System ( root context ) / Lenses ( the agent's
-	 *  own identity + routing ) / Tools ( manifest + suggested ). Read per-block off `compiledContext()`'s own
-	 *  `section` tags, the same split the ring + legend group by. Attached files + conversation turns aren't
-	 *  compiled blocks, so they stay their own reads wherever this is summed. */
+	/**
+	 * The compiled currency summed by coarse budget bucket — System ( root context ) / Lenses ( the agent's
+	 * own identity + routing ) / Tools ( the manifest lines ). Read per-block off `compiledContext()`'s own
+	 * `section` tags, the same split the ring + legend group by. Attached files + conversation turns aren't
+	 * compiled blocks, so they stay their own reads wherever this is summed.
+	 *
+	 * IT SUMS BLOCKS, AND ONLY BLOCKS, which is what lets a band header equal the list underneath it. So the
+	 * preload schemas on the request's `tools` array are NOT in `tools` here: they are real spend with no block
+	 * to sum. That gap is not new — this never saw the `tools` array, and while the schemas ALSO sat in the
+	 * prompt it was counting the duplicate copy and landing on the right number by accident. Removing the
+	 * duplicate leaves the estimate exactly as far off as it was and the real spend one copy lower. Closing
+	 * it wants a bucket the atlas can render, not a number added here where no band could show it.
+	 */
 	compiledBudget(): { system: number; lenses: number; tools: number } {
 		const out = { system: 0, lenses: 0, tools: 0 };
 		for ( const b of this.compiledContext() ) out[ Agent.bucketOf( b ) ] += ( b.text ? KCDPrimitive._estimateTokens( b.text ) : 0 );
@@ -1305,36 +1351,57 @@ export class Agent {
 		return order.map( k => groups.get( k )! );
 	}
 
-	/** The system-prompt tool MANIFEST — grouped by SERVER ( folder ): each server heads its block with its
-	 *  own description, then one `- name — description` line per manifest-surface tool, so the agent knows
-	 *  the tool exists and can request it while its server stays lazy. The `###` server headings let the fold
-	 *  view + drawer reproduce the folders.
+	/**
+	 * THE TOOL MANIFEST — every tool this run holds, grouped by SERVER ( folder ): each server heads its
+	 * block with its own description, then one `- name — description` line per tool. The `###` server
+	 * headings let the fold view + drawer reproduce the folders.
 	 *
-	 *  NO POLICY IS READ HERE, and that is the point. `toolDefs` is bound to the tools this run may actually
-	 *  call, so a denied tool was never in the list — the compiler cannot advertise one because it is not
-	 *  holding one. This asks the only question left: what does each of them cost. */
+	 * ── EVERY TOOL, NOT ONLY THE DEFERRED ONES ( Bryan, 2026-09-05 ) ──
+	 * This listed ONLY manifest-surface tools, on the reasoning that a preloaded tool is already on the wire
+	 * and needs no advertisement. That was wrong, and HOW it was wrong is worth keeping: the wire carries
+	 * `{ name, description, input_schema }` and nothing else — no server, no group, no server doc. So a
+	 * preloaded tool arrived as a bare verb with nothing to place it. An agent holding `learn` and `recall`
+	 * was asked for its memory tool and answered, correctly by its own lights, that it had none: the word
+	 * "Memory" and the sentence saying what that server is FOR existed nowhere in its context.
+	 *
+	 * SO THIS IS WHERE A TOOL GETS ITS IDENTITY. The surface axis decides what a tool COSTS, never whether
+	 * it is named — and one section listing everything in server order is also the accurate reading of the
+	 * heading this has always carried.
+	 *
+	 * WHAT STILL DIVIDES THE TWO is the schema, and only the schema: a preloaded tool carries its own on the
+	 * request, a deferred one is marked here and fetched on demand. The description does repeat between this
+	 * list and the wire entry for a preloaded tool, and that is a deliberate few tokens — a name and a blurb,
+	 * against the full JSON schema this still refuses to restate.
+	 *
+	 * NO POLICY IS READ HERE, and that is the point. `toolDefs` is bound to the tools this run may actually
+	 * call, so a denied tool was never in the list — the compiler cannot advertise one because it is not
+	 * holding one.
+	 *
+	 * IT IS LOAD-BEARING, not a legacy convenience: a search searches nothing an agent has not read here
+	 * first. Deleting it would not save the prompt a line, it would blind the search.
+	 */
 	toolManifest(): string {
-		const on = _heldIds( this.toolDefs ).filter( t => this.toolSurfaceFor( t.id! ) === 'manifest' );
-		if ( !on.length ) return '';
-		const sections = Agent.groupByServer( on ).map( g => {
-			const head = g.doc ? `### ${ g.name }\n${ g.doc }` : `### ${ g.name }`;
-			return head + '\n' + g.tools.map( t => `- ${ t.name } — ${ t.description }` ).join( '\n' );
-		} );
-		return '## Available tools\n\n' + sections.join( '\n\n' );
-	}
+		const held = _heldIds( this.toolDefs );
+		if ( !held.length ) return '';
 
-	/** Every PRELOAD-surface tool's FULL definition ( name + description + input schema — the real wire
-	 *  weight of the injected surface ), grouped by SERVER the same way the manifest is: a `###` server band
-	 *  ( name + description ) over its tools' `####` full defs. '' when nothing is preloaded. */
-	preloadedToolDefs(): string {
-		const suggested = _heldIds( this.toolDefs ).filter( t => this.toolSurfaceFor( t.id! ) === 'preload' );
-		if ( !suggested.length ) return '';
-		const sections = Agent.groupByServer( suggested ).map( g => {
+		// The mark rides the ROWS and the sentence explains it ONCE, so saying it costs per manifest rather
+		// than per tool. It names no mechanism on purpose: the tool that fetches a schema describes itself on
+		// the wire, and spelling its name here too would be a second copy to keep in step.
+		const MARK = '[schema on request]';
+		const NOTE = `Everything you hold is listed here. A tool marked ${ MARK } is not in your callable set yet — ask for its schema, then call it.`;
+
+		const deferred = ( t: ToolDef ): boolean => this.toolSurfaceFor( t.id! ) === 'manifest';
+		const sections = Agent.groupByServer( held ).map( g => {
 			const head = g.doc ? `### ${ g.name }\n${ g.doc }` : `### ${ g.name }`;
-			const defs = g.tools.map( t => `#### ${ t.name }\n\n${ t.description }\n\n\`\`\`json\n${ JSON.stringify( t.inputSchema, null, 2 ) }\n\`\`\`` ).join( '\n\n' );
-			return head + '\n\n' + defs;
+			return head + '\n' + g.tools.map( t => `- ${ t.name } — ${ t.description }${ deferred( t ) ? ' ' + MARK : '' }` ).join( '\n' );
 		} );
-		return '## Suggested tools\n\n' + sections.join( '\n\n' );
+
+		// EMPTY IS ABSENT, on the note as much as on the section: an agent whose tools are all loaded is told
+		// nothing about fetching schemas, because for that run there is nothing to fetch.
+		const parts = [ '## Available tools' ];
+		if ( held.some( deferred ) ) parts.push( NOTE );
+		parts.push( sections.join( '\n\n' ) );
+		return parts.join( '\n\n' );
 	}
 
 	/**
@@ -1387,7 +1454,7 @@ export class Agent {
 	 *  reservation. */
 	private static readonly SYSTEM_SECTIONS = new Set<string>( [ 'host-prompt', 'system-prompt', 'root-context', 'attachments', 'frame', 'mode-line' ] );
 	/** The compiled sections that price as TOOLS — the surface, not the identity that may reach for it. */
-	private static readonly TOOL_SECTIONS = new Set<string>( [ 'tool-manifest', 'suggested-tools' ] );
+	private static readonly TOOL_SECTIONS = new Set<string>( [ 'tool-manifest' ] );
 	/** Every section the bottom-of-context manifest emits — the routing tables a reader finds filed together.
 	 *
 	 *  `files` is deliberately NOT a `MANIFEST_SECTIONS` entry: no lens slots into it, the agent synthesizes
@@ -1419,8 +1486,7 @@ export class Agent {
 		'attachments':     'attachments',
 		'frame':           'caller frame',
 		'mode-line':       'shaping line',
-		'tool-manifest':   'available tools',
-		'suggested-tools': 'suggested tools'
+		'tool-manifest':   'available tools'
 	};
 
 	/** This section's canonical name, or `null` for one that has none — a lens section, a routing table, or
@@ -1441,8 +1507,9 @@ export class Agent {
 	 */
 	static segmentKey( b: TaggedBlock ): SegmentKey | null {
 		if ( !b.section ) return null;
+		// FIRST, so a package whose id happens to match a section name cannot misfile itself.
+		if ( b.sourceLayer === 'injected' )           return { source: 'injection', label: b.section };
 		if ( Agent.SYSTEM_SECTIONS.has( b.section ) ) return { source: 'system', label: Agent.SECTION_LABELS[ b.section ] ?? b.section };
-		if ( b.section === 'memory' )                 return { source: 'memory', label: 'memory' };
 		if ( Agent.TOOL_SECTIONS.has( b.section ) )   return { source: 'tools',  label: Agent.SECTION_LABELS[ b.section ] ?? b.section };
 		if ( Agent.ROUTING_SECTIONS.has( b.section ) ) return { source: 'index', label: b.section };
 		if ( b.region === 'care' )                    return { source: 'lens',   label: b.section };
@@ -1639,16 +1706,31 @@ export class Agent {
 		return { region: 'know', section, mergeKey: null, text, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
 	}
 
-	/** One PRELOAD-memory block — the system-fired baseline selection ( memory-system plan, 2026-07-13 ),
-	 *  passed to `compiledBlocks({ memory })`. `section: 'memory'` is the single marker that ( a ) sorts it
-	 *  into the `memory` tier ( `ContextAssembler.tierOf` — after the lens body, before the routing
-	 *  manifest ) and ( b ) keeps it OUT of the manifest hoist ( 'memory' is not a `MANIFEST_SECTIONS`
-	 *  name, so `INDEX_SECTIONS` never claims it ). Synthetic ( no source artifact ), so tagged neutrally
-	 *  like the manifest/divider blocks. The `## Memory` heading is a band heading spliced at render, so
-	 *  `text` is the bare prose dump — the ONE factory both the live wire ( Orchestrator ) and the
-	 *  renderer preview ( Session ) build from, so injection parity holds by construction. */
-	static memoryBlock( text: string ): TaggedBlock {
-		return { region: 'know', section: 'memory', mergeKey: null, text, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
+	/** This agent's overrides for one package's injection — the toggle and the declared-param values in ONE
+	 *  bag, keyed by package id, so the host that resolves the call and the compile that gates it read the
+	 *  same entry rather than two flags that can disagree. */
+	contributionSettings( id: string ): ContributionSettings {
+		const bag = ( this.system[ 'contributions' ] ?? {} ) as Record<string, ContributionSettings>;
+		return bag[ id ] ?? {};
+	}
+
+	/** Whether this agent takes package `id`'s injection. Default ON, and stated once here because both the
+	 *  host ( which skips the call ) and `compiledContext` ( which drops the block ) ask it. */
+	injectionEnabled( id: string ): boolean {
+		return this.contributionSettings( id ).enabled !== false;
+	}
+
+	/** One injected block. `sourceLayer: 'injected'` IS the ranking — `tierOf` already sinks injected
+	 *  content last, so this needed no new rule. The heading rides in the TEXT rather than being spliced by
+	 *  `withBandHeadings`, which splices one heading per tier: several packages share this tier and would
+	 *  otherwise collapse under a single heading. `section` carries the PACKAGE so `segmentKey` can name the
+	 *  injection in the breakdown — a null section reads as structural there and silently folds the text into
+	 *  a neighbouring segment. */
+	static contributionBlock( c: Contribution ): TaggedBlock {
+		return { region: 'know', section: c.id, mergeKey: null, text: `## ${ c.heading }
+
+${ c.text }`,
+			sourceLayer: 'injected', path: '', artifactType: 'unknown', habitClass: null };
 	}
 
 	/** A block tagged as one of the MANIFEST sections — the door for a manifest table sourced from OUTSIDE
@@ -1663,37 +1745,6 @@ export class Agent {
 	 */
 	static sectionBlock( section: string, text: string, rows: SlotRow[] = [] ): TaggedBlock {
 		return { region: 'know', section, mergeKey: null, text, rows, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
-	}
-
-	/**
-	 * The Memory band's standing header — the tag vocabulary, as a CONSTANT rather than a tool.
-	 *
-	 * This replaces the retired `known_tags` tool ( Bryan, 2026-07-31 ). The list is ~20 short strings
-	 * that cannot change mid-turn, so a tool round-trip to fetch it was always pure overhead — and worse,
-	 * agents were LOOPING on it, spending turns rediscovering something cheap enough to simply carry. A
-	 * standing line in the cached system half costs a few tokens once; the tool cost a full schema in
-	 * every context ( it rode at mode `suggested` ) plus a round-trip whenever an agent reached for it.
-	 *
-	 * `lens:*` tags are filtered OUT deliberately: they are system-authoritative — `insertMemory`
-	 * find-or-creates `lens:{slug}` on every save — so an agent never passes one, and listing them would
-	 * be the bulk of the line for no gain. What remains is the open vocabulary an agent actually selects
-	 * from. Empty `memoryTags` ( no memory store wired ) yields '' and the header simply doesn't ride.
-	 */
-	memoryVocabulary(): string {
-		const open = this.memoryTags.filter( t => !t.startsWith( 'lens:' ) );
-		if ( !open.length ) return '';
-		return `Tags: ${ open.join( ', ' ) }\n`
-			+ 'These are the only tags that exist — an unlisted tag is dropped on save, and you cannot mint '
-			+ 'new ones. Your lens tag is applied automatically; never pass one.';
-	}
-
-	/** The whole Memory band text — the vocabulary constant, then the baseline prose. Either half may be
-	 *  empty ( no store wired, a dry query ), and both empty means no band rides at all — `compiledContext`
-	 *  gates on this being truthy, so the reserved-but-empty tier still emits nothing on the wire. THE one
-	 *  composer: the live wire, the renderer preview, and the turn's context breakdown all read it, so the
-	 *  band can't differ between what is sent, what is previewed, and what is counted. */
-	memoryBand(): string {
-		return [ this.memoryVocabulary(), this.memory ].filter( Boolean ).join( '\n\n' );
 	}
 
 	/**

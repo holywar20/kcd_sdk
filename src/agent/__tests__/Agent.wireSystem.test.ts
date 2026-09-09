@@ -80,8 +80,10 @@ function fullAgent(): Agent {
 		hostPrompt:  'The host environment preamble.',
 		rootContext: 'The model standing root context.',
 		toolDefs:    TOOLS,
-		memory:      'A remembered thing.',
-		memoryTags:  [ 'alpha', 'beta' ],
+		// ONE CONTRIBUTOR, declaring the memory band for itself. The fixture used to bind `memory` +
+		// `memoryTags` — a contributor compiled in by name — and the tag-vocabulary constant that headed the
+		// band went with the memory module. A contributor composes its own text now.
+		contributions: [ { id: 'semantic_memory', heading: 'Memory', text: 'A remembered thing.' } ],
 		attachments: 'Attached: notes.md',
 		// STRUCTURED, like every other manifest section's rows. This fixture passed a composed string, and
 		// the expected wire below therefore showed `## Grants` with nothing under it — the bug, pinned as
@@ -119,10 +121,7 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 
 			What this lens defends.
 
-			# Memory
-
-			Tags: alpha, beta
-			These are the only tags that exist — an unlisted tag is dropped on save, and you cannot mint new ones. Your lens tag is applied automatically; never pass one.
+			## Memory
 
 			A remembered thing.
 
@@ -144,26 +143,12 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 
 			## Available tools
 
-			### Fixture server
-			A fixture server.
-			- probe — Look at a thing.
-
-			---
-
-			## Suggested tools
+			Everything you hold is listed here. A tool marked [schema on request] is not in your callable set yet — ask for its schema, then call it.
 
 			### Fixture server
 			A fixture server.
-
-			#### commit
-
-			Change a thing.
-
-			\`\`\`json
-			{
-			  "type": "object"
-			}
-			\`\`\`
+			- probe — Look at a thing. [schema on request]
+			- commit — Change a thing.
 
 			---
 
@@ -182,8 +167,7 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 			  null,
 			  "purpose",
 			  "philosophy",
-			  null,
-			  "memory",
+			  "semantic_memory",
 			  null,
 			  null,
 			  "files",
@@ -191,8 +175,6 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 			  "grants",
 			  null,
 			  "tool-manifest",
-			  null,
-			  "suggested-tools",
 			  null,
 			  "attachments",
 			]
@@ -202,9 +184,9 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 	it( 'pins the budget split, so a block that changes BUCKET is caught as well as one that moves', () => {
 		expect( fullAgent().compiledBudget() ).toMatchInlineSnapshot(`
 			{
-			  "lenses": 171,
+			  "lenses": 127,
 			  "system": 30,
-			  "tools": 52,
+			  "tools": 67,
 			}
 		`);
 	} );
@@ -262,12 +244,11 @@ describe( 'Agent.contextSegments — the breakdown is the wire, decomposed', () 
 			  "system / root context",
 			  "lens / purpose",
 			  "lens / philosophy",
-			  "memory / memory",
+			  "injection / semantic_memory",
 			  "index / files",
 			  "index / references",
 			  "index / grants",
 			  "tools / available tools",
-			  "tools / suggested tools",
 			  "system / attachments",
 			  "system / caller frame",
 			  "system / shaping line",

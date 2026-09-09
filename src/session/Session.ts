@@ -12,8 +12,9 @@
  * bridge whole via serialize / fromSerialized, the same trinity as Agent.
  */
 
-import { Transcript, type Turn, type WireMessage, type WireOptions, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type SessionPolicies, type SessionCompaction, type Grant, isGrant, grantSubject, grantKind, grantLevel, frameToolResultStub, KEEP_TOOL_RESULT_TURNS } from './TurnEntry';
+import { Transcript, type Turn, type TurnEntry, type WireMessage, type WireOptions, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type ReasoningPolicy, type ToolsPolicy, type LimitsPolicy, type SessionPolicies, type SessionCompaction, type Grant, isGrant, grantSubject, grantKind, grantLevel, frameToolResultStub, KEEP_TOOL_RESULT_TURNS } from './TurnEntry';
 import { type GrantRef } from './InjectedItem';
+import type { Agent } from '../agent/Agent';
 import type { SlotRow } from '../core/html/KcdContext';
 
 /**
@@ -112,6 +113,11 @@ export interface SessionOptions {
 const DEFAULT_POLICIES: SessionPolicies = {
 	retention:  { kind: 'all' },
 	compaction: { enabled: false, threshold: 120_000 },
+	reasoning:  { effort: 'medium', mode: 'chain' },
+	tools:      { enabled: true },
+	// Generous for real agentic work and decisively finite. A turn that genuinely needs more rounds than
+	// this is a job for a governor across several turns, not one turn that will not end.
+	limits:     { maxRounds: 24 },
 };
 
 /**
@@ -176,12 +182,31 @@ export class Session {
 	 *  ( Claude Code ) records no results here at all, which is why it needs no exception. */
 	resultLogPath: string = '';
 
-	/** Attachments made but NOT yet carried by a turn. The same species as `transcript`: non-persisted
-	 *  object state, never in SerializedSession. They drain onto the turn the orchestrator opens, ahead of
-	 *  the user's prompt — which is what makes them persist for free ( the turn's `entries` column is
-	 *  written when it ends ) and keeps a Turn atomic: a prompt plus everything that answered it. Before
-	 *  the first send there is no turn to hold them, which is the whole reason this list exists. */
-	pendingAttachments: Grant[] = [];
+	/** Entries made but NOT yet carried by a turn. The same species as `transcript`: non-persisted object
+	 *  state, never in SerializedSession. They drain onto the turn the orchestrator opens, ahead of the
+	 *  user's prompt — which is what makes them persist for free ( the turn's `entries` column is written
+	 *  when it ends ) and keeps a Turn atomic: a prompt plus everything that answered it. Between sends
+	 *  there IS no turn to hold them, which is the whole reason this list exists.
+	 *
+	 *  `TurnEntry[]` RATHER THAN `Grant[]`, since 3.c. Grants were the first thing a person could do to a
+	 *  conversation between turns and for a while the only one, so the list was named and typed for them.
+	 *  A policy change is the second, and it is not a grant — it hands over nothing. Widening the one list
+	 *  beat adding a second one that would mean the identical thing ( "waiting for the next turn" ) and
+	 *  drift from it; the grant-shaped readers below narrow with `isGrant`, which is the guard the
+	 *  transcript-side loop beside them already uses for exactly this reason. */
+	pendingEntries: TurnEntry[] = [];
+
+	/** The caller's own frame — the layer that rides ABOVE the agent's compile: a room's, a constellation
+	 *  node's identity, an evaluator's standard. Empty for a chat. RUNTIME ONLY: set by whoever spawns the
+	 *  session, never serialized, never a row column. */
+	frame: string = '';
+
+	/** WHO THIS SESSION RUNS AS — bound, not held. A RESOLVER rather than an Agent, deliberately: one Agent
+	 *  serves many sessions and is rebuilt on reload or reassign, so a held instance goes stale while a
+	 *  resolver is answered fresh at every call. Bound at the seam that makes the session ( the store binds
+	 *  the live registry; a test binds its own ), which is why nothing has to push an agent down a call
+	 *  stack to run a turn. Runtime only: never serialized, never a row column. */
+	private _resolveAgent: ( () => Agent | null ) | null = null;
 
 	private constructor(
 		id: string,
@@ -265,11 +290,14 @@ export class Session {
 		if ( !v || typeof v !== 'object' ) return { ...DEFAULT_POLICIES };
 		// the bare legacy shape — a retention policy stored before there was a bag to put it in
 		if ( typeof v[ 'kind' ] === 'string' ) {
-			return { retention: v as RetentionPolicy, compaction: { ...DEFAULT_POLICIES.compaction } };
+			return { retention: v as RetentionPolicy, compaction: { ...DEFAULT_POLICIES.compaction }, reasoning: { ...DEFAULT_POLICIES.reasoning }, tools: { ...DEFAULT_POLICIES.tools }, limits: { ...DEFAULT_POLICIES.limits } };
 		}
 		return {
 			retention:  ( v[ 'retention' ]  as RetentionPolicy  ) ?? { ...DEFAULT_POLICIES.retention  },
 			compaction: ( v[ 'compaction' ] as CompactionPolicy ) ?? { ...DEFAULT_POLICIES.compaction },
+			reasoning:  ( v[ 'reasoning' ]  as ReasoningPolicy  ) ?? { ...DEFAULT_POLICIES.reasoning  },
+			tools:      ( v[ 'tools' ]      as ToolsPolicy      ) ?? { ...DEFAULT_POLICIES.tools      },
+			limits:     ( v[ 'limits' ]     as LimitsPolicy     ) ?? { ...DEFAULT_POLICIES.limits     },
 		};
 	}
 
@@ -331,6 +359,22 @@ export class Session {
 
 	// ── Transcript ( the dynamic half of the wire ) ─────────────────────────────
 
+	/**
+	 * OPEN this turn and put into it everything said before the model answers: the attachments that
+	 * accumulated between sends, then the prompt itself.
+	 *
+	 * The session owns this because every part of it is session state — the pending list exists precisely
+	 * because between sends there is no turn to hold them. Grant CONTENTS are NOT filled here: reading a
+	 * file off disk is a main-side capability, so the caller hydrates the entries this returns.
+	 */
+	openTurn( prompt: { id: string; text: string } ): Turn {
+		const turn = this.transcript.openTurn( prompt.id, Date.now() );
+		for ( const attachment of this.pendingEntries ) this.transcript.append( attachment, turn );
+		this.pendingEntries = [];
+		this.transcript.append( { at: Date.now(), kind: 'user', text: prompt.text }, turn );
+		return turn;
+	}
+
 	/** Rebuild the transcript wholesale from a turn list — the flush-and-fill mirror of agent.bindEnv().
 	 *  Aggressive rebuild is cheap and always correct; the source is the DB `entries` rows on load, or the
 	 *  live turn list the renderer projects. Non-persisted: it is never written by serializeForWire. */
@@ -350,6 +394,17 @@ export class Session {
 	 *  rather than per-read, so the readers that consult it cannot be handed different paths. */
 	bindResultLog( path: string ): void {
 		this.resultLogPath = path;
+	}
+
+	/** Bind the agent resolver — see `_resolveAgent`. */
+	bindAgent( resolve: () => Agent | null ): void {
+		this._resolveAgent = resolve;
+	}
+
+	/** This session's live Agent, or null when it has none: an unbound session ( nobody said how to answer )
+	 *  or a DRAFT one ( no agent assigned yet ). Absence, not failure — the caller decides what that means. */
+	agent(): Agent | null {
+		return this._resolveAgent?.() ?? null;
 	}
 
 	/** Set ONE named policy, leaving its siblings alone. Pure configuration: no policy touches the
@@ -424,7 +479,7 @@ export class Session {
 	 * `Transcript.attachments()` draws that line, and draws it once.
 	 */
 	attachments(): Grant[] {
-		return [ ...this.transcript.attachments(), ...this.pendingAttachments ];
+		return [ ...this.transcript.attachments(), ...this.pendingEntries.filter( isGrant ) ];
 	}
 
 	/**
@@ -452,7 +507,8 @@ export class Session {
 				out.set( grantSubject( entry ), _ref( entry ) );
 			}
 		}
-		for ( const entry of this.pendingAttachments ) {
+		for ( const entry of this.pendingEntries ) {
+			if ( !isGrant( entry ) ) continue;
 			out.set( grantSubject( entry ), _ref( entry ) );
 		}
 		// …plus everything already CANONIZED. A compacted grant left the transcript but not the session: that
@@ -559,6 +615,37 @@ export class Session {
 	 *  the log's path — and the Session supplies what only it can. */
 	wireMessages( opts?: WireOptions ): WireMessage[] {
 		return this._projected().wireMessages( this._wireOpts( opts ) );
+	}
+
+	/**
+	 * ONE TURN, projected exactly as the whole window is — the twin of `wireMessages()`.
+	 *
+	 * TWO PROJECTIONS OF ONE TRANSCRIPT, never two formats. A tier that reconstructs history every round
+	 * wants the window; a tier that keeps its OWN history wants only what is new, and asking that one to
+	 * replay stacks duplicates inside its own cached prefix — measured, not theorised. Both go through
+	 * `Transcript.wireMessages`, so an entry kind added there reaches both by construction and neither can
+	 * grow its own idea of what an attachment or an image looks like.
+	 *
+	 * NOT windowed: a retention policy decides what to REPLAY, and this projects a turn that is happening
+	 * now. Compaction is likewise not applied — there is nothing to summarise in a single turn.
+	 */
+	wireTurn( turn: Turn, opts?: WireOptions ): WireMessage[] {
+		return new Transcript( [ turn ] ).wireMessages( this._wireOpts( opts ) );
+	}
+
+	/**
+	 * EVERYTHING BEFORE this turn — the windowed conversation as it stood when the turn opened.
+	 *
+	 * The third of the three, and it exists because the turn is opened BEFORE the request is built: a
+	 * caller asking "what was already said" would otherwise be handed the thing it is about to say. Used
+	 * to seed a transport that keeps its own history and has just lost it ( a re-seed after compaction ),
+	 * where sending the live turn twice is exactly the failure.
+	 *
+	 * Empty on a session whose only turn is this one, which is the common case and the correct answer.
+	 */
+	wireBefore( turn: Turn, opts?: WireOptions ): WireMessage[] {
+		const before = this._projected().allTurns().filter( ( t ) => t !== turn );
+		return before.length ? new Transcript( before ).wireMessages( this._wireOpts( opts ) ) : [];
 	}
 
 	/**

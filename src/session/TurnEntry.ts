@@ -2,6 +2,7 @@ import { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
 import { Assert } from '../core/Assert';
 import { type SlotMode } from '../primitives/types';
 import { type AccessLevel, type InjectedKind } from './InjectedItem';
+import { type ReasoningEffort } from '../agent/Model';
 
 /**
  * TurnEntry / Turn / Transcript — the typed, sequential account of what happened in a session,
@@ -35,28 +36,97 @@ import { type AccessLevel, type InjectedKind } from './InjectedItem';
  */
 
 /**
- * How a turn ENDED — the REASON, deliberately distinct from `Turn.failed`, which is the GUARD.
+ * HOW A TURN ENDED — the REASON, deliberately distinct from `Turn.failed`, which is the GUARD.
  *
- * Two questions, not two names for one answer. `failed` decides whether a turn rides the wire and
- * whether it may be re-included; this says why it ended that way. A cancelled turn is `failed: true`
- * with `outcome: 'cancelled'` — both true, neither redundant, and collapsing them would force a
- * cancellation to be reported as a failure or a second boolean to contradict the first.
+ * Two questions, not two names for one answer. `failed` decides whether a turn rides the wire and whether
+ * it may be re-included; this says WHY it ended that way. A cancelled turn is `failed: true` with
+ * `terminal: 'cancelled'` — both true, neither redundant, and collapsing them would force a cancellation
+ * to be reported as a failure or a second boolean to contradict the first. The guard is DERIVED from the
+ * reason wherever both are written, so the two cannot disagree about one turn.
  *
- * The open half of the pair on purpose. `failed` can never grow past two states, but the reasons a
- * turn stops are open-ended and already visible on the roadmap: a user cancellation, a policy refusal
- * from gate middleware, a budget ceiling. Each arrives as one more member here and is carried,
- * persisted, and displayed by machinery that needs no further teaching.
+ * ONE FACT, THREE NAMES, and they are the same fact in three places: `Turn.terminal` in memory,
+ * `TranscriptTurn.terminal` on the way to a display, and the `outcome` COLUMN on disk — which keeps its own
+ * name because `outcome` reads well on a row and renaming a column is a migration that buys nothing.
  *
- * Called OUTCOME, not status, because this codebase already asks two other things by that name and a
- * third would make every read ambiguous: `SessionStatus` is active/archived ( is this filed away ) and
- * `TurnStatus` is idle/thinking ( is a turn running right now ). Three different clocks — filed,
- * running, ended — and this is the last of them.
+ * The OPEN half of that pair, on purpose. `failed` can never grow past two states, but the reasons a turn
+ * stops are open-ended: a user cancellation, a policy refusal from gate middleware, a budget ceiling. Each
+ * arrives as one more member here and is carried, persisted and displayed by machinery that needs no
+ * further teaching — provided every reader asks the TABLE rather than naming a member.
  *
- * NEVER enforced by storage — the column is TEXT and nothing constrains it — so every read is
- * `!== 'ok'` rather than `=== 'failed'`. That points the failure direction at "this turn completed",
- * which is what an unrecognized value honestly is; the reverse would mark real history as broken.
+ * THAT PROVISO IS NOW LOAD-BEARING RATHER THAN ASPIRATIONAL ( 2026-09-05 ). Both display surfaces ask this
+ * table two questions and nothing else: `note` decides whether there is anything to say, and `answered`
+ * decides the tone. Neither names a member, so a terminal added below draws correctly in both the day it
+ * lands — and one added with an empty `note` stays deliberately silent.
  */
-export type TurnOutcome = 'ok' | 'failed';
+export const TERMINALS = {
+	answered:  { answered: true,  note: '' },
+	truncated: { answered: true,  note: 'hit the output ceiling — this reply is cut off, not finished' },
+	refused:   { answered: true,  note: 'the model declined to answer' },
+	/** The provider paused the turn and expects to be called again. Starmind does not resume yet, so what is
+	 *  in hand is a fragment — named rather than silently treated as an answer. */
+	paused:    { answered: true,  note: 'the provider paused this turn and expects to be resumed — the reply is partial' },
+	failed:    { answered: false, note: 'the dispatch failed' },
+	cancelled: { answered: false, note: 'stopped before it finished' }
+} as const;
+
+/**
+ * HOW A TURN ENDED — the whole vocabulary, and the only place a terminal is named.
+ *
+ * `answered` is the question a CALLER asks ( is there a message to show ) and stays the boolean every
+ * result discriminates on. The KEY is the question a DIAGNOSIS asks, and it is the one a boolean could
+ * never carry: a cut-off reply and a finished one are both messages, and reading them the same way is how
+ * a truncated answer reaches a person looking complete. Not hypothetical — it is what the dispatch path
+ * did until 2026-09-04.
+ *
+ * `note` is what a surface SAYS about a terminal that is not a clean finish. Empty means there is nothing
+ * worth saying, which is the common case.
+ */
+export type TerminalKind = keyof typeof TERMINALS;
+
+/** The two halves, DERIVED from the table rather than restated beside it — so `ok` and the terminal are
+ *  incapable of disagreeing, and a terminal added above lands on the correct arm by construction. */
+export type Answered   = { [ K in TerminalKind ]: ( typeof TERMINALS )[ K ][ 'answered' ] extends true ? K : never }[ TerminalKind ];
+export type Unanswered = Exclude<TerminalKind, Answered>;
+
+/**
+ * A STORED outcome read back as a terminal — the one place an unrecognized value is decided.
+ *
+ * The column is TEXT and nothing constrains it, so a row's `TerminalKind` type is a CLAIM rather than a
+ * guarantee. Three real ways a string arrives here naming nothing: a row written before this vocabulary
+ * existed, a hand-edited database, and a terminal removed from the table above while rows still carry it.
+ *
+ * UNKNOWN READS AS ANSWERED — the same safe direction `include` takes on a row that predates its column.
+ * The reverse is worse than it looks: it would mark every unrecognized turn as a problem, and a surface
+ * that cries truncation over healthy history teaches its reader to ignore it, which costs the warning
+ * exactly when there is a real one to give. A terminal is a claim about a reply, so the honest default is
+ * the one that claims nothing.
+ */
+export function asTerminal( value: string | null | undefined ): TerminalKind {
+	return value && Object.hasOwn( TERMINALS, value ) ? value as TerminalKind : 'answered';
+}
+
+
+/**
+ * WHAT THE `outcome` COLUMN HOLDS — the terminal, and nothing else.
+ *
+ * It was `'ok' | 'failed'` until 2026-09-04, which is the SAME question this table's `answered` flag
+ * answers, asked in a second vocabulary. Two currencies for one fact is how a truncated reply came to be
+ * persisted as a clean one: the fine-grained terminal existed on the wire and had nowhere to land, so the
+ * row flattened it on the way to disk and a reload lost it.
+ *
+ * `ok` is now `answered` and the type is gone — a legacy row is migrated rather than tolerated, because a
+ * column holding two vocabularies is a column every reader has to know the history of.
+ *
+ * Still NEVER enforced by storage — the column is TEXT and nothing constrains it — so a read tests the
+ * table ( `TERMINALS[ o ]?.answered !== false` ) rather than equality with one member. That points an
+ * unrecognized value at "this turn completed", which is what it honestly is; the reverse would mark real
+ * history as broken.
+ *
+ * Called OUTCOME on the row, not status, because this codebase already asks two other things by that name
+ * and a third would make every read ambiguous: `SessionStatus` is active/archived ( is this filed away )
+ * and `TurnStatus` is idle/thinking ( is a turn running right now ). Three different clocks — filed,
+ * running, ended — and this is the last of them.
+ */
 
 /** The stable envelope every entry carries — a stamp for the time-ordered itinerary. Ordering within
  *  a turn is array order; `at` is the display timestamp ( and the persisted-row field Phase 4 hydrates ). */
@@ -145,6 +215,20 @@ export type TurnEntry = EntryBase & (
 	| { kind: 'image';         path: string; name: string; mediaType: string; width?: number; height?: number; removed?: boolean; level?: AccessLevel }
 	| { kind: 'injected-folder'; path: string; name: string; removed?: boolean; level?: AccessLevel }
 	| { kind: 'injected-tool';   server: string; name: string; removed?: boolean }
+	/**
+	 * A PERSON CHANGED WHAT THIS RUN MAY DO, at the point in the conversation where they changed it.
+	 *
+	 * It is not a report of current state and must never become one — the capability preamble is rebuilt
+	 * from the passport on every turn, so what the agent HOLDS is never stale and saying it twice would
+	 * charge for the same fact forever. This says the one thing the preamble structurally cannot: that a
+	 * capability MOVED, and when. It is what answers "why did this work at turn 4 and get refused at
+	 * turn 9" — a question no refusal can answer, because a refusal describes now.
+	 *
+	 * `from` and `to` are the EFFECTIVE answers either side of the change rather than the stamp that
+	 * caused it. A stamp that lands on a row already reading `off` changed nothing a run can observe, and
+	 * an entry for it would be noise on the one lane that must stay worth reading.
+	 */
+	| { kind: 'policy-delta';  label: string; from: string; to: string }
 	| { kind: 'thinking';      text: string; signature?: string }
 	| { kind: 'error';         code: string; message: string; status: number | null; body: string | null; detail?: Record<string, unknown> }
 	| { kind: 'unreadable';    originalKind: string | null; reason: string; payload: string }
@@ -215,7 +299,7 @@ export function grantLevel( entry: Grant ): AccessLevel {
  *  now ride: the provider strips thinking from history, so a thinking entry is never part of what the
  *  NEXT turn pays for. It rides once, inside its own turn's tool loop, and then stops. Do not "fix" this
  *  by adding 'thinking' here — that would charge the session forever for a block it sent once. */
-const WIRE_KINDS: ReadonlySet<TurnEntry[ 'kind' ]> = new Set( [ 'user', 'assistant', 'tool-call', 'tool-result', 'injected-file', 'image', 'injected-folder', 'injected-tool' ] );
+const WIRE_KINDS: ReadonlySet<TurnEntry[ 'kind' ]> = new Set( [ 'user', 'assistant', 'tool-call', 'tool-result', 'injected-file', 'image', 'injected-folder', 'injected-tool', 'policy-delta' ] );
 
 /**
  * What a stored payload must CARRY to mean anything, per kind — the seam `parseEntry` validates against.
@@ -246,6 +330,10 @@ const ENTRY_SPECS: Record<TurnEntry[ 'kind' ], Record<string, 'string' | 'number
 	// No `subject` field: a tool's subject is DERIVED from the pair ( see `grantSubject` ). Storing it too
 	// would be a second copy of an answer these two already give, and the copy is what goes stale.
 	'injected-tool':   { server: 'string', name: 'string' },
+	// All three REQUIRED, and `from` is the load-bearing one: an entry that lost it would say a capability
+	// moved without saying what it moved from, which is the only part a reader cannot recover — `to` is
+	// visible in the preamble and `label` names a row that still exists.
+	'policy-delta':    { label: 'string', from: 'string', to: 'string' },
 	'error':         { code: 'string', message: 'string' },
 	'unreadable':    {}
 };
@@ -289,6 +377,24 @@ export interface Turn {
 	 * and that failure direction is a failed turn quietly riding the wire — the one outcome this prevents.
 	 */
 	failed: boolean;
+	/**
+	 * HOW this turn ended — the REASON, beside `failed`, which is the GUARD. See `TERMINALS`.
+	 *
+	 * The guard is DERIVED from this and never set apart from it, so the two cannot disagree. What earns
+	 * the second field is that they answer different questions and only one of them can grow: `failed` will
+	 * always have two states because the wire only ever asks "does this ride", while the reasons a turn
+	 * stops are open-ended.
+	 *
+	 * IT IS THE HALF A BOOLEAN CANNOT CARRY, and the reason this exists at all: `truncated`, `refused` and
+	 * `paused` are every one of them `failed: false` — there IS a message, so the turn rides — and every one
+	 * of them means the text in hand is not the whole reply. A surface reading only the guard shows all
+	 * three as finished answers, which is how a reply cut off at the output ceiling reaches a person looking
+	 * complete.
+	 *
+	 * Required, for the reason `failed` is: a construction site that omitted it would be claiming a clean
+	 * finish by silence.
+	 */
+	terminal: TerminalKind;
 }
 
 /**
@@ -339,9 +445,31 @@ export type CompactionPolicy = { enabled: boolean; threshold: number };
  * and fourth are additive: a new policy is an entry here plus the code that reads it, never a reshape
  * of the session record.
  */
+/** How the model reasons on this session's turns. `effort` is the five-stop declaration vocabulary ( each
+ *  connector maps it to its own wire form ). `mode` is prompt shaping only: 'show' asks for the reasoning in
+ *  the reply, 'chain' leaves it in the private channel. A SESSION dial — it used to ride every send. */
+export type ReasoningPolicy = { effort: ReasoningEffort; mode: 'chain' | 'show' };
+
+/** Whether this session's turns carry tools at all. Off binds no manifest and offers no wire tool — the
+ *  posture a house seat takes for a task that must not act, and a control any session can set. */
+export type ToolsPolicy = { enabled: boolean };
+
+/**
+ * WHAT BOUNDS ONE TURN. `maxRounds` caps the tool loop: a turn may dispatch that many times before it
+ * is stopped, whatever the model asks for next.
+ *
+ * A ceiling, not a budget. It exists because termination otherwise depends on exactly one condition —
+ * the model's own stop reason — and a model that keeps asking for tools without answering runs until
+ * something outside it intervenes. Nothing outside it did.
+ */
+export type LimitsPolicy = { maxRounds: number };
+
 export type SessionPolicies = {
 	retention:  RetentionPolicy;
 	compaction: CompactionPolicy;
+	reasoning:  ReasoningPolicy;
+	tools:      ToolsPolicy;
+	limits:     LimitsPolicy;
 };
 
 /**
@@ -528,6 +656,11 @@ export interface TranscriptTurn {
 	 *  display reads this to draw the block as a failure; without it a failed turn simply stops, which is
 	 *  indistinguishable from one still in flight. */
 	failed: boolean;
+	/** WHY it ended that way — the open half of the pair above, carried so a display can say `cancelled`
+	 *  rather than the generic failure, and can mark a turn that DID answer but not completely. A row is
+	 *  drawn off the table ( `TERMINALS[ terminal ].note` ), never off a list of members here, so a terminal
+	 *  added later draws correctly with no change to any surface. */
+	terminal: TerminalKind;
 }
 
 /* `AttachmentView` — the file-only gutter view — became the `file` variant of `InjectedItem`
@@ -540,6 +673,82 @@ export interface TranscriptTurn {
  *  as pinned reference material, not as the user's own words. */
 export function frameFile( name: string, text: string ): string {
 	return `[injected file — ${ name }]\n${ text }`;
+}
+
+/** The one schema this projection understands. A `.sig` declaring anything else keeps its raw body — see
+ *  `frameSig`, which explains why that is the safe direction. */
+const SIG_SCHEMA = 'insight/1';
+
+/**
+ * A `.sig` insight graph, projected for the agent: geometry stripped, nodes and edges flattened to a typed
+ * edge list. The studio stores rich JSON so the canvas can paint it; this is the lean view the model reads,
+ * from the same one file.
+ *
+ * WHY IT EARNS ITS PLACE: over half of a real `.sig` is `x` / `y` / `w` / `h` / `shape` / `color`, and an
+ * edge carries seven pure-rendering fields ( `style`, `dashed`, `color`, `headFrom`, `headTo`, and both
+ * anchors ) beside the four that mean anything. Attaching one un-projected ships a picture's pixel
+ * coordinates to the model as if they were content. Measured on the two real documents in this vault:
+ * 52% and 64% smaller, and everything removed is something the model could not have used.
+ *
+ * NO SHARED DOCUMENT TYPE, DELIBERATELY. This reads six fields out of a file that is foreign input — hand
+ * edited, possibly an older revision, possibly written by another tool. Importing the studio's `SigDoc`
+ * would assert a shape the file cannot promise, and drag an editor's undo model into the context path to
+ * save six field names. The loose local shape below is the honest amount of type for a glue seam; the
+ * shared currency here is the FILE FORMAT, which both sides already speak.
+ *
+ * AN UNKNOWN SCHEMA FALLS BACK TO THE RAW BODY rather than projecting on a guess. If the field names move,
+ * a projection built on the old ones returns a confidently empty graph — the worst outcome, because it
+ * looks like a document that says nothing. Falling back is bigger and correct, and the frame says why, so
+ * a version bump makes this visibly stop instead of quietly emptying.
+ */
+export function frameSig( name: string, text: string ): string {
+	let doc: { schema?: unknown; nodes?: unknown; edges?: unknown };
+	try { doc = JSON.parse( text ) as typeof doc; }
+	catch { return frameFile( name, text ); }   // not JSON at all — it is just a file
+
+	if( doc?.schema !== SIG_SCHEMA )
+		return `[injected file — ${ name } — insight schema ${ String( doc?.schema ?? 'absent' ) } is not ${ SIG_SCHEMA }, so it is not projected]\n${ text }`;
+
+	const nodes = Array.isArray( doc.nodes ) ? doc.nodes as Record<string, unknown>[] : [];
+	const edges = Array.isArray( doc.edges ) ? doc.edges as Record<string, unknown>[] : [];
+	if( !nodes.length && !edges.length ) return `[injected insight graph — ${ name } — empty: no nodes, no edges]`;
+
+	const str  = ( v: unknown ): string => typeof v === 'string' ? v : '';
+	const flat = ( v: unknown ): string => str( v ).replace( /\s*\n\s*/g, ' · ' ).trim();
+
+	// A node is named by what a person would call it. Ids are the document's plumbing and mean nothing to a
+	// reader — but two nodes may share a title, so a COLLIDING label keeps its id and a unique one does not.
+	// Paying that cost everywhere would put an id on every line to disambiguate the few that need it.
+	const label: Record<string, string> = {};
+	const seen:  Record<string, number> = {};
+	for( const n of nodes ) {
+		const id = str( n.id );
+		const l  = flat( n.title ) || flat( n.body ).split( ' · ' )[ 0 ] || id;
+		label[ id ] = l;
+		seen[ l ] = ( seen[ l ] ?? 0 ) + 1;
+	}
+	for( const n of nodes ) {
+		const id = str( n.id );
+		if( ( seen[ label[ id ] ?? '' ] ?? 0 ) > 1 ) label[ id ] = `${ label[ id ] } (${ id })`;
+	}
+	const name_ = ( id: string ): string => label[ id ] ?? id;
+
+	const lines: string[] = [];
+	for( const n of nodes ) {
+		const body = flat( n.body );
+		const type = str( n.type ) || 'node';
+		const as   = name_( str( n.id ) );
+		// A titleless node ( the `band` headers are all body, no title ) was named FROM its body above, so
+		// appending the body again printed the same sentence twice on one line. Only add it when it says
+		// something the name did not.
+		lines.push( `- (${ type }) ${ as }${ body && body !== as ? ` — ${ body }` : '' }` );
+	}
+	for( const e of edges ) {
+		const rel = flat( e.label ) || flat( e.rel ) || 'relates to';
+		lines.push( `- ${ name_( str( e.from ) ) } --[${ rel }]--> ${ name_( str( e.to ) ) }` );
+	}
+
+	return `[injected insight graph — ${ name } — ${ nodes.length } nodes, ${ edges.length } edges; layout stripped]\n${ lines.join( '\n' ) }`;
 }
 
 /**
@@ -601,6 +810,22 @@ export function frameFolder( path: string ): string {
  */
 export function frameTool( server: string, name: string ): string {
 	return `[available tool — ${ server }.${ name } — granted to you; call it when you need it]`;
+}
+
+/**
+ * A capability moving, said once at the point it moved.
+ *
+ * WORDED AS THE PERSON'S ACT, not as your state. What you hold is in the capability section of every
+ * prompt and does not need repeating here; what that section structurally cannot say is that something
+ * CHANGED, because it is rebuilt each turn and has no memory of what it said last time. So this reads as
+ * an event in the conversation, which is what it is.
+ *
+ * NO INSTRUCTION RIDES WITH IT. The preamble already tells an agent what to do at a boundary ( say so,
+ * name the act, do not route around it ), and repeating that per change would spend the words again on
+ * every delta forever while teaching nothing the first one did not.
+ */
+export function framePolicyDelta( label: string, from: string, to: string ): string {
+	return `[capability changed — a person set "${ label }" from ${ from } to ${ to }]`;
 }
 
 /** How many files a folder listing carries before it stops enumerating and starts counting. The cap keeps
@@ -846,6 +1071,9 @@ export class Transcript {
 			include:   true,
 			compacted: false,
 			failed:    false,
+			// A compaction summary is an artifact this app WROTE, not a model reply that stopped somewhere.
+			// It is complete by construction, and there is no other terminal it could honestly claim.
+			terminal:  'answered',
 		};
 		return new Transcript( [ summary, ...this.turns ] );
 	}
@@ -854,9 +1082,14 @@ export class Transcript {
 
 	/** Open a fresh turn and return it — the in-flight appender pushes entries onto it as rounds resolve.
 	 *  Born INCLUDED and uncompacted, which is what makes the turn being dispatched right now ride without
-	 *  anyone having to say so: whether the current turn is in the window was never a policy question. */
+	 *  anyone having to say so: whether the current turn is in the window was never a policy question.
+	 *
+	 *  Born ANSWERED for the same reason, and it is the safe direction rather than an optimistic one: a turn
+	 *  still running has not been cut off, and every path that ends one badly names its terminal on the way
+	 *  out ( `failTurn` ). The wrong default would be one that made an in-flight turn advertise a problem it
+	 *  has not had. */
 	openTurn( id: string, startedAt: number ): Turn {
-		const turn: Turn = { id, startedAt, entries: [], include: true, compacted: false, failed: false };
+		const turn: Turn = { id, startedAt, entries: [], include: true, compacted: false, failed: false, terminal: 'answered' };
 		this.turns.push( turn );
 		return turn;
 	}
@@ -919,12 +1152,23 @@ export class Transcript {
 	 *
 	 * ONE-WAY, like compaction: nothing re-includes a failed turn. The model never saw it land, and
 	 * replaying a tool-call whose result never arrived is an invalid request by construction.
+	 *
+	 * IT TAKES THE REASON, and the guard is derived from it rather than asserted beside it. The caller
+	 * already knows WHY it is rolling the turn back — a user pressed stop, a socket died — and that was the
+	 * one place the fact existed. Dropping it here is what made a cancellation indistinguishable from a
+	 * dead connection in the itinerary, since both arrived as the same lone boolean.
+	 *
+	 * `Unanswered` rather than `TerminalKind`: this method exists to roll a turn OFF the wire, and a
+	 * terminal that left a message behind ( `truncated`, `refused` ) must not reach it — such a turn keeps
+	 * its answer and stays included. The type is what enforces that, so the derivation below can never
+	 * quietly write `failed: false` here.
 	 */
-	failTurn( turnId: string ): Turn | null {
+	failTurn( turnId: string, terminal: Unanswered = 'failed' ): Turn | null {
 		const turn = this.turns.find( ( t ) => t.id === turnId );
 		if ( !turn ) return null;
-		turn.failed  = true;
-		turn.include = false;
+		turn.terminal = terminal;
+		turn.failed   = !TERMINALS[ terminal ].answered;
+		turn.include  = false;
 		return turn;
 	}
 
@@ -1092,6 +1336,16 @@ export class Transcript {
 						// would be worse than the gap — it invites the model to reason about content that was
 						// never in the conversation.
 						break;
+					case 'policy-delta': {
+						// PROJECTED ON EVERY TURN IT RIDES, not only the live one, and that is the difference
+						// between this and a grant. A grant decays to a reference line because the thing it
+						// points at can be fetched again; a change has no current form to decay to — it is a
+						// fact about a MOMENT, and the moment is the whole content. Dropping it after one turn
+						// would leave the agent, three turns later, unable to account for a refusal it is
+						// still reasoning about.
+						this._appendBlock( messages, 'user', { type: 'text', text: framePolicyDelta( entry.label, entry.from, entry.to ) } );
+						break;
+					}
 					case 'error':
 						// NEVER projected. A model is not told that a turn failed — the turn carrying this is
 						// rolled back off the wire in its entirety, and the entry survives purely as the account
@@ -1143,7 +1397,8 @@ export class Transcript {
 				startedAt: turn.startedAt,
 				rows,
 				tokens:    rows.reduce( ( sum, r ) => sum + r.tokens, 0 ),
-				failed:    turn.failed
+				failed:    turn.failed,
+				terminal:  turn.terminal
 			};
 		} );
 	}
@@ -1432,6 +1687,10 @@ export class Transcript {
 			// failure, in the order a person reads it, as one selectable block. The provider's own body is
 			// last and VERBATIM — it is the part that names the offending block of a rejected request, and
 			// clipping it here would leave the reader with a summary of the thing they came to read.
+			// THE SAME SENTENCE THE WIRE GETS, deliberately. A person reading the itinerary and the agent
+			// reading the transcript are entitled to the same account of what changed, and a second wording
+			// here would be a second description of one event free to drift from the first.
+			case 'policy-delta':  return framePolicyDelta( entry.label, entry.from, entry.to );
 			case 'error':         return Transcript._errorText( entry );
 			// The REASON, not the payload. This is what the itinerary shows, and a person scanning it needs to
 			// know what broke and that it is fixable — the raw bytes are on the entry for anyone who wants
@@ -1523,6 +1782,10 @@ export class Transcript {
 			// right — they are the same family — but they are not the same event: a tool that errored is
 			// survivable and the turn carried on past it, while this is the row where the turn ENDED. Sharing
 			// one glyph made a hiccup and a death look identical in a scan down the itinerary.
+			// `--care`, the hue a decision waiting on a person already wears, and NOT an alarm colour. A
+			// capability moving is somebody exercising control on purpose; drawing it in the error family
+			// would file a deliberate act beside the crashes in a scan down the itinerary.
+			case 'policy-delta':  return { icon: 'shield',    color: '--care' };
 			case 'error':         return { icon: 'stop',      color: '--error' };
 			// `warning`, not `stop`. A turn that ENDED is a different event from a row we could not read
 			// inside a turn that otherwise completed — and unlike either error case this one is REPAIRABLE,
@@ -1548,6 +1811,9 @@ export class Transcript {
 			case 'injected-tool':   return `tool ${ entry.server }.${ entry.name }`;
 			// Leads with the status because "is this mine, theirs, or the network's" is the question a
 			// failed turn is scanned to answer.
+			// Leads with the ROW NAME because that is what a person scanning for "when did X change" is
+			// looking for; the direction follows it, since the row alone does not say which way it went.
+			case 'policy-delta':  return `${ entry.label } → ${ entry.to }`;
 			case 'error':         return entry.status ? `error ${ entry.status } ${ entry.code }` : `error ${ entry.code }`;
 			// Leads with the ROW, because the row id is the repair path ( `database.set_turn_entry` ) and a
 			// label naming only the problem would send the reader to a database to find out which one.

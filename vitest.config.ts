@@ -1,5 +1,7 @@
 import { defineConfig } from 'vitest/config'
 
+import testResults from '../scripts/test-results/reporter.mjs'
+
 /**
  * The first config this package has ever had.
  *
@@ -23,6 +25,16 @@ import { defineConfig } from 'vitest/config'
  */
 export default defineConfig( {
 	test: {
+		// ── THE STRUCTURED RECORD ( plan 4.a ) ────────────────────────────────────────────────────
+		//
+		// `default` STAYS FIRST and is not optional: naming a reporter REPLACES the set, so dropping it
+		// would trade the terminal output a person reads for the file an agent reads. Both, or this
+		// becomes a worse experience wearing a better one.
+		//
+		// The reporter is shared from the workspace root rather than copied per package, for the same
+		// reason membership in `test-all.mjs` is read off the tree: three copies of one shape drift, and
+		// the one that drifts is the one nobody is looking at.
+		reporters: [ 'default', testResults( 'vitest:kcd_sdk' ) ],
 		name:        'kcd_sdk',
 		// Node-only by construction. @kcd/core is deliberately Node-free so the renderer can import it,
 		// and @kcd/node is the fs layer — neither has ever wanted a DOM, and the suite mounts nothing.
@@ -45,6 +57,27 @@ export default defineConfig( {
 		//
 		// ( That dist ships the test suite at all is a PACKAGING problem, not a test-running one, and is
 		//   tracked on the automation-suite plan rather than fixed here. )
-		exclude:     [ '**/node_modules/**', '**/dist/**' ]
+		exclude:     [ '**/node_modules/**', '**/dist/**' ],
+
+		// ── COVERAGE ──────────────────────────────────────────────────────────────────────────────
+		//
+		// `all: true` is the line that matters: without it v8 counts only files a test imported, so an
+		// untested module is invisible rather than uncovered and the percentage climbs as coverage
+		// falls. This package is a LIBRARY, which makes that failure mode worse than elsewhere — an
+		// unimported export is exactly the thing a library most needs to know about.
+		//
+		// `dist/` is excluded here for the same reason it is excluded above, and the reason is sharper
+		// for coverage: dist holds a complete compiled copy of both the source AND the suite, so
+		// counting it would double every file and report a number that means nothing at all.
+		//
+		// No thresholds until there is a baseline — see the automation-suite plan, item 6.c.
+		coverage: {
+			provider:         'v8',
+			reporter:         [ 'text-summary', 'json-summary' ],
+			reportsDirectory: './coverage',
+			all:              true,
+			include:          [ 'src/**/*.ts' ],
+			exclude:          [ '**/__tests__/**', '**/*.test.ts', '**/dist/**', '**/*.d.ts' ]
+		}
 	}
 } )

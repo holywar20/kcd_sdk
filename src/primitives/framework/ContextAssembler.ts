@@ -45,10 +45,10 @@
  * by-KIND care band — one top-level `# Purpose` / `# Philosophy` block PER care kind, each merging every
  * active lens's contribution as labeled `## {lens}` sub-sections ( `Agent.buildCareBands` builds them,
  * since it knows lens names + primacy; primary leads and is marked, `_lens-base` follows as `Base lens` ).
- * No "## Lenses" wrapper. `memory` is the system-fired PRELOAD baseline ( `section: 'memory'`,
- * injected by the orchestrator, not authored ) — it now sits BETWEEN the Lenses band and Knowledge
- * ( Bryan, 2026-07-13: "add a space for memory... after the lenses but before knowledge" ), reserved
- * even while empty. `core` is everything else that isn't a manifest table — the lens's own non-routing
+ * No "## Lenses" wrapper. `memory` is RESERVED AND CURRENTLY UNREACHED — it held the one named
+ * contributor's band between the Lenses and Knowledge, and package injections land in `injected` now, so
+ * nothing routes here. Kept so that hoisting a band back up stays a routing decision rather than a
+ * renumbering. `core` is everything else that isn't a manifest table — the lens's own non-routing
  * prose plus every ALWAYS-loaded artifact's full text ( references included — Bryan, 2026-07-11: "a
  * reference that's included directly in context is written right at the top" ), load order preserved;
  * it surfaces as the **Knowledge** band, framed as forced-read injected content ( `KNOWLEDGE_HEADING` ).
@@ -245,9 +245,9 @@ export const ContextAssembler = new class ContextAssembler {
 	 *  `withBandHeadings` — and anything else that needs to know a tier boundary rather than just the
 	 *  final order — reads the exact same ranking, never a second derivation of it. */
 	tierOf( b: TaggedBlock ): number {
+		// Covers both kinds: session-dropped text and a package's injection are the same thing to the sort.
 		if ( b.sourceLayer === 'injected' ) return this.TIER.injected;
 		if ( b.region === 'care' ) return this.TIER.care;
-		if ( b.section === 'memory' ) return this.TIER.memory;
 		if ( b.section && MANIFEST_SECTION_SET.has( b.section ) ) return this.TIER.manifest;
 		return this.TIER.core;
 	}

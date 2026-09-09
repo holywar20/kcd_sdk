@@ -9,6 +9,7 @@
     "build": "tsc",
     "build:watch": "tsc --watch",
     "test": "vitest run",
+    "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "scan": "tsx scripts/scan.ts",
     "shape-report": "tsx scripts/shape-report.ts"
@@ -17,10 +18,11 @@
     "js-yaml": "^4.1.0"
   },
   "devDependencies": {
-    "typescript": "^5.4.0",
-    "vitest": "^4.1.8",
-    "@types/node": "^20.0.0",
     "@types/js-yaml": "^4.0.9",
-    "tsx": "^4.0.0"
+    "@types/node": "^20.0.0",
+    "@vitest/coverage-v8": "^4.1.11",
+    "tsx": "^4.0.0",
+    "typescript": "^5.4.0",
+    "vitest": "^4.1.11"
   }
 }

@@ -61,7 +61,7 @@ describe( 'Session.projectedAttachments', () => {
 
 	it( 'includes attachments still pending, so a file rides on the turn it was attached to', () => {
 		const session = sessionWith( fileEntry( 'a.ts' ) );
-		session.pendingAttachments.push( fileEntry( 'b.ts' ) );
+		session.pendingEntries.push( fileEntry( 'b.ts' ) );
 
 		// Pending lives outside the transcript until a turn drains it. The harness drains BEFORE projecting,
 		// so this asserts the pre-drain state is not silently counted twice — `projectedAttachments` reads

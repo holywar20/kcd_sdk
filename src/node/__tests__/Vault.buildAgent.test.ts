@@ -71,11 +71,11 @@ describe( 'Vault.buildAgent — the dumb-agent factory', () => {
 		expect( built.name ).not.toBe( '_lens-base' )
 	} )
 
-	it( 'binds no environment — a vault cannot source live tools or memory', () => {
+	it( 'binds no environment — a vault cannot source live tools or injections', () => {
 		const built = vault().buildAgent( [ LENS ] )
 
 		expect( built.toolDefs ).toHaveLength( 0 )
-		expect( built.memory ).toBe( '' )
+		expect( built.contributions ).toHaveLength( 0 )
 		expect( built.rootContext ).toBe( '' )
 	} )
 

@@ -6,8 +6,10 @@ import { promisify } from 'util'
 import { TextTypes } from '../core/TextTypes'
 import { Glob } from '../core/Glob'
 import { NameMatch } from '../core/NameMatch'
+import { Noise } from '../core/Noise'
+import { Blacklist } from '../core/Blacklist'
 import { EsCsv } from '../core/EsCsv'
-import type { FileEntry, FileStat, FileRoots } from '../core/FileTypes'
+import type { FileEntry, FileStat, FileRoots, GrepRow, GrepScan } from '../core/FileTypes'
 import { higherLevel, operationsFor, verbFor, type AccessEntry } from '../core/AccessPolicy'
 import { accessRank, type AccessLevel } from '../session/InjectedItem'
 import type { GrantRef } from '../session/InjectedItem'
@@ -64,6 +66,52 @@ export const SEARCH_YIELD_EVERY = 500
 // miss) still falls through to the walk rather than hanging the caller.
 export const SEARCH_ES_TIMEOUT_MS = 5000
 
+// grepText()'s own caps — a CONTENT search, sized for a person reading a result list rather than for an
+// agent's context window, and deliberately tighter than READ_CAP_BYTES above on the one axis that
+// matters most. GREP_READ_BYTES is 256 KiB because hand-written source is never that big: a text file
+// over it is a log, a trace, a data dump or a vendored bundle, which is exactly the class Bryan's
+// "exclude large logs and trace files" names and the class a person is never searching for.
+//
+// GREP_YIELD_BUDGET is WEIGHTED WORK, not an entry count — see grepText, where a file read costs
+// GREP_READ_COST against a directory entry's 1. Without the weighting the walk yields on schedule and
+// then blocks for seconds at a time once it starts opening files.
+export const GREP_ROW_CAP       = 500       // matching lines, total
+export const GREP_FILE_CAP      = 20        // matching lines from any ONE file
+export const GREP_LINE_CHARS    = 400       // a reported line is truncated past this
+export const GREP_READ_BYTES    = 262_144   // 256 KiB
+export const GREP_WALK_CAP      = 200_000
+export const GREP_YIELD_BUDGET  = 200
+export const GREP_READ_COST     = 10
+
+/** How to search file contents. The reach axes are NOT here: `grepText` is the core walk and imposes no
+ *  authorization of its own, exactly as the rest of this class does not — the caller admits the root
+ *  before calling and passes its own `deny` patterns down. */
+export type GrepScanOptions = {
+	caseInsensitive?: boolean
+	/** Match only where the query is bounded by non-word characters. */
+	wholeWord?:       boolean
+	/** The caller's deny-list ( see `Blacklist` ) — subtree semantics, applied to directories BEFORE
+	 *  they are descended into and to files before they are opened. */
+	deny?:            readonly string[]
+	/** Skip build output, dependency trees, and generated files ( see `Noise` ). Default TRUE, because a
+	 *  content search that does not is a content search that returns the wrong answer — see grepText. */
+	skipNoise?:       boolean
+	/** Only search files whose path, relative to the root, matches this glob. Omitted searches every text
+	 *  file under it. Narrows WHICH FILES ARE OPENED, never which directories are walked — an extension
+	 *  filter cannot be turned into a prune, because the directory holding a match is unknown until the
+	 *  walk reaches it. */
+	glob?:            string
+	/** Largest file to open, in bytes. Default GREP_READ_BYTES. */
+	maxBytes?:        number
+	/** Matching lines to collect before the walk stops. Default GREP_ROW_CAP. */
+	maxRows?:         number
+	/** Matching lines to take from any ONE file. Default GREP_FILE_CAP. It exists so a single generated
+	 *  file cannot eat the whole row budget, NOT to summarize a file — set it well above the agent's
+	 *  floor for a surface where a person is navigating, since twenty of a file's forty hits is a list
+	 *  that silently omits the one they wanted. */
+	maxPerFile?:      number
+}
+
 /** Cooperative-cancel handle for `search()` — the caller flips `cancelled` from elsewhere (a new
  *  query, an explicit Cancel click) and the walk notices it at its next yield point. Plain mutable
  *  data, not an AbortController: this needs to cross the IPC pull lane, which AbortController can't. */
@@ -73,6 +121,23 @@ export type SearchToken = { cancelled: boolean }
  *  seam. `setImmediate` (not a Promise microtask) so pending IPC/UI work actually gets a turn. */
 function _tick(): Promise<void> {
 	return new Promise( ( resolve ) => setImmediate( resolve ) )
+}
+
+/** Does one line carry the needle? Split out because `wholeWord` is a SCAN rather than a test — it has to
+ *  keep looking past a hit that is bounded on only one side — and burying that loop inside the line loop
+ *  would read as if the search had two nested concerns instead of one. `needle` arrives already folded
+ *  when it should be; folding it once at the top beats folding it per line. */
+function _lineHas( line: string, needle: string, fold: boolean, wholeWord: boolean ): boolean {
+	const hay = fold ? line.toLowerCase() : line
+	if( !wholeWord ) return hay.includes( needle )
+
+	const word = /\w/
+	for( let at = hay.indexOf( needle ); at !== -1; at = hay.indexOf( needle, at + 1 ) ) {
+		const before = at === 0 ? '' : hay[ at - 1 ] ?? ''
+		const after  = hay[ at + needle.length ] ?? ''
+		if( !word.test( before ) && !word.test( after ) ) return true
+	}
+	return false
 }
 
 /** A degrade observer — the consumer's tracer, INJECTED, never imported. This copies the SDK's
@@ -295,6 +360,130 @@ export class SdkFileAccess {
 		}
 
 		return out
+	}
+
+	/**
+	 * LITERAL content search under one root — walk, open, match, one row per matching LINE.
+	 *
+	 * ── WHY THIS IS NOT `glob` + READ ──
+	 * It was, and on a real project it silently returned the wrong answer. `glob` descends into every
+	 * directory unconditionally and stops at GLOB_CAP matches; pointed at a project root, it spends its
+	 * entire budget inside `node_modules` and returns before reaching a line of source. Measured here:
+	 * 83,491 entries, 57,943 of them dependencies, against a cap of 1,000. A search that reports "no
+	 * matches" for a string that is plainly there is the worst answer a search can give, so the noise
+	 * pruning is a correctness property of this method rather than an optimization on it.
+	 *
+	 * ── WHY IT IS ASYNC WHEN `glob` IS NOT ──
+	 * For the reason `search()` above is: a synchronous walk freezes the ENTIRE Electron main process,
+	 * not just this feature, and a cancel could never be noticed mid-walk. The number that settles it is
+	 * the cold filesystem cache — the same 12,351-file pass measured 66 SECONDS cold against 1 second
+	 * warm. A user's first search after a boot is the cold case, every time.
+	 *
+	 * Pass a `SearchToken` and flip `.cancelled` from elsewhere to stop it at its next yield point; it
+	 * returns what it has, flagged `cancelled`, and never throws. Degrade-never-throw throughout: an
+	 * unreadable directory, an unstattable entry and an undecodable file are each a skip and a warn.
+	 */
+	async grepText( root: string, query: string, opts: GrepScanOptions = {}, token: SearchToken = { cancelled: false } ): Promise<GrepScan> {
+		const rows: GrepRow[] = []
+		if( !query || token.cancelled ) return { rows, searched: 0, capped: false, cancelled: token.cancelled }
+
+		// Fold the needle ONCE here rather than per line. Every comparison below is against this value,
+		// so a caller passing `caseInsensitive` never pays for the fold in the inner loop.
+		const fold     = opts.caseInsensitive === true
+		const needle   = fold ? query.toLowerCase() : query
+		const deny     = opts.deny ?? []
+		const noise    = opts.skipNoise !== false
+		const filter   = opts.glob ?? ''
+		const maxBytes = opts.maxBytes ?? GREP_READ_BYTES
+		const maxRows  = opts.maxRows  ?? GREP_ROW_CAP
+		const maxFile  = opts.maxPerFile ?? GREP_FILE_CAP
+
+		const stack: string[] = [ root ]
+		let   visited  = 0
+		let   searched = 0
+		let   capped   = false
+
+		// THE YIELD BUDGET, weighted, because the two axes cost wildly different amounts. Visiting a
+		// directory entry is one readdir hit already in hand; opening a file is a syscall, a decode and
+		// a full scan, and on a cold cache the reads are where essentially all of the wall clock goes.
+		// A single unweighted counter tuned for the walk yields far too rarely once the reads begin.
+		let budget = 0
+
+		while( stack.length > 0 ) {
+			const dir = stack.pop() as string
+
+			let dirents: { name: string; isDir: boolean }[]
+			try {
+				dirents = readdirSync( dir, { withFileTypes: true } ).map( ( d ) => ( { name: d.name, isDir: d.isDirectory() } ) )
+			} catch( err ) {
+				this._warn( 'grep_walk_failed', { dir, message: this._msg( err ) } )
+				continue
+			}
+
+			for( const d of dirents ) {
+				visited += 1
+				budget  += 1
+				if( visited > GREP_WALK_CAP ) {
+					this._warn( 'grep_walk_capped', { root, query, cap: GREP_WALK_CAP } )
+					return { rows, searched, capped: true, cancelled: false }
+				}
+
+				const full = join( dir, d.name )
+
+				if( d.isDir ) {
+					// PRUNED, NOT FILTERED — the subtree is never entered. See the header.
+					if( noise && Noise.skipsDir( d.name ) ) continue
+					if( Blacklist.excludes( full, deny ) ) continue
+					stack.push( full )
+					continue
+				}
+
+				// Every cheap refusal runs BEFORE the stat, and the stat before the read. A protected
+				// file is dropped from the candidate list rather than read and then withheld.
+				if( noise && Noise.skipsFile( d.name ) ) continue
+				if( !TextTypes.isText( full ) ) continue
+				if( filter && !Glob.matches( relative( root, full ).split( sep ).join( '/' ), filter ) ) continue
+				if( Blacklist.excludes( full, deny ) ) continue
+
+				let size: number
+				try { size = statSync( full ).size }
+				catch( err ) { this._warn( 'grep_stat_failed', { path: full, message: this._msg( err ) } ); continue }
+				if( size === 0 || size > maxBytes ) continue
+
+				let body: string
+				try { body = String( readFileSync( full, 'utf-8' ) ) }
+				catch( err ) { this._warn( 'grep_read_failed', { path: full, message: this._msg( err ) } ); continue }
+				searched += 1
+				budget   += GREP_READ_COST
+
+				let hits = 0
+				const lines = body.split( /\r?\n/ )
+				for( let i = 0; i < lines.length; i++ ) {
+					if( hits >= maxFile || rows.length >= maxRows ) { capped = true; break }
+					const line = lines[ i ] ?? ''
+					if( !_lineHas( line, needle, fold, opts.wholeWord === true ) ) continue
+					hits += 1
+					// THE LINE IS TRUNCATED, NOT THE MATCH DROPPED. A generated file that slipped past
+					// every filter above would otherwise ship one 400 KB "line" and eat the whole result.
+					rows.push( { path: full, line: i + 1, text: line.length > GREP_LINE_CHARS ? line.slice( 0, GREP_LINE_CHARS ) + ' …' : line } )
+				}
+
+				// The row cap ends the WALK, not just this file — there is no point opening more once
+				// the answer is already known to be partial.
+				if( rows.length >= maxRows ) {
+					this._warn( 'grep_truncated', { root, query, cap: maxRows } )
+					return { rows, searched, capped: true, cancelled: false }
+				}
+
+				if( budget >= GREP_YIELD_BUDGET ) {
+					budget = 0
+					await _tick()
+					if( token.cancelled ) return { rows, searched, capped, cancelled: true }
+				}
+			}
+		}
+
+		return { rows, searched, capped, cancelled: false }
 	}
 
 	/** The fast path: ask a real, already-live Everything instance instead of walking disk. Returns

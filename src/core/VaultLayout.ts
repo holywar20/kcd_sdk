@@ -78,7 +78,7 @@ const LAYOUT: readonly LayoutEntry[] = [
 	},
 	{
 		dir: 'habits', type: 'habit', layer: 'agent', indexed: true,
-		purpose: 'Atomic behavior fragments. Flat files, no subfolders.'
+		purpose: 'Atomic behavior fragments. One folder per habit-class holding its mutually-exclusive poles, plus unslotted/ for habits that fill no slot.'
 	},
 
 	// ── Data / output layer — what a project accumulates as it runs ──
@@ -148,7 +148,7 @@ const LAYOUT: readonly LayoutEntry[] = [
 		purpose: 'Session log plus per-lens completed/, todo/, and agent-status/.'
 	},
 	{
-		dir: 'reports', type: 'unknown', layer: 'data', indexed: false,
+		dir: 'reports', type: 'audit', layer: 'data', indexed: false,
 		purpose: 'Analyzer output.'
 	},
 	{

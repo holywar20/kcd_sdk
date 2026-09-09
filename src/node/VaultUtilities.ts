@@ -312,12 +312,25 @@ export class VaultUtilities {
 	 * right answer for an empty input, which is why every existing assertion passed it and why no
 	 * return-value test could see it. `checked: 0` now says so out loud.
 	 *
-	 * WHAT IT STILL CANNOT SEE, stated so a clean report is not over-read: a document that fails to
-	 * PARSE is counted in `checked` and reported as an error ( good ), but `vault.scan()` is the
-	 * source of the file list, so anything the scan itself drops is invisible here — and reference
-	 * probing only resolves `_Claude/`-rooted hrefs, so a `file://` or off-vault link is neither
-	 * resolved nor reported. The gap between `scanned` and `checked` is the filters; the gap between
-	 * the filesystem and `scanned` is not measured at all.
+	 * AN UNPARSEABLE DOCUMENT IS REPORTED. It is counted in `checked` and raised as an `error` — see
+	 * the raw-walk note at the loop below. This docblock previously said the opposite ( that
+	 * `vault.scan()` sourced the file list, so anything the scan dropped was invisible ), which was
+	 * true of the old behaviour and false from the moment the walk changed. Corrected 2026-09-05.
+	 * **The failure mode is worth naming because this file has now hit it twice**: a docstring that
+	 * admits a gap keeps admitting it long after the code closed it, and the next reader believes the
+	 * prose over the loop. `fixStylesheetLinks` says the same thing about its own history.
+	 *
+	 * WHAT IT STILL CANNOT SEE, stated so a clean report is not over-read: reference probing only
+	 * resolves `_Claude/`-rooted hrefs, so a `file://` or off-vault link is neither resolved nor
+	 * reported. And the gap between the filesystem and `scanned` is not measured at all — `scanned`
+	 * counts what the walk yielded, not what exists.
+	 *
+	 * THE `scanned` − `checked` GAP IS BY DESIGN, not a shortfall. `documentPaths()` walks every
+	 * document; `isLibraryPath` decides which are GRADED. Scratch and output space ( `indexed: false`
+	 * — `work/`, `logs/`, `audits/` ) and archival space ( `archival: true` — `plans_complete` ) are
+	 * scanned and deliberately not graded, for the two different category-error reasons the gate
+	 * documents. So a healthy vault shows a real gap here and that is correct; a reader comparing the
+	 * two numbers is seeing the filter, not a silence.
 	 *
 	 * The pre-flight before a save/move sweep and the observable form of the "internal state always
 	 * viable" invariant.

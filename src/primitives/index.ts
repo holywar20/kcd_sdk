@@ -41,6 +41,7 @@ import { ContractObject } from './procedure/ContractObject';
 import { GeneratorObject } from './procedure/GeneratorObject';
 import { AnalyzerObject } from './procedure/AnalyzerObject';
 import { UtilityObject } from './procedure/UtilityObject';
+import { AuditObject } from './framework/AuditObject';
 
 KCDPrimitive.registerHydrator( 'lens', LensObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'plan', PlanObject.fromSerialized );
@@ -57,3 +58,6 @@ KCDPrimitive.registerHydrator( 'contract', ContractObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'generator', GeneratorObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'analyzer', AnalyzerObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'utility', UtilityObject.fromSerialized );
+// audit is a RECORD, not a procedure — role 'know', free-form shape, hydrated so a report crosses
+// the bridge as a report rather than as a bare primitive wearing the right type string.
+KCDPrimitive.registerHydrator( 'audit', AuditObject.fromSerialized );

@@ -1,3 +1,5 @@
+import { McpServer } from './McpServer';
+
 import type { ToolDefinition, ToolResult } from './McpServer';
 import type { ServerManifest } from './manifest';
 
@@ -87,6 +89,14 @@ async function runCase(
 	def: ToolDefinition,
 	tc:  TestSpec,
 ): Promise<{ label: string; pass: boolean; detail?: string }> {
+	// The same check invoke() runs, judged the same way, so a spec cannot pass here carrying a key the
+	// wire would refuse. An error_expected spec can therefore assert the refusal itself.
+	const badArgs = McpServer.unknownArgs( def, tc.input );
+	if ( badArgs ) {
+		const refused: ToolResult = { content: [ { type: 'text', text: badArgs } ], isError: true };
+		return { label: tc.label, ...judge( tc.assertions, refused ) };
+	}
+
 	let result: ToolResult;
 	try {
 		result = await def.handler( tc.input );

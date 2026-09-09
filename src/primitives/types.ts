@@ -91,6 +91,12 @@ export type ArtifactType =
 	| 'reference'
 	| 'generator'
 	| 'analyzer'
+	// What a generator or an analyzer EMITS, as opposed to the procedure that emits it. Flush-and-fill
+	// by nature — a run destroys and recreates its own output — so this type carries no required
+	// sections on purpose: the shape of a report is the reporting contract's business, not the
+	// substrate's. It was already in KcdAddress.TYPES and already had a KcdShapes entry; only this
+	// union lacked it, so a report validated as `unknown` and went ungoverned.
+	| 'audit'
 	| 'utility'
 	| 'habit'
 	| 'contract'

@@ -1,3 +1,6 @@
 node_modules/
 dist/
 *.tsbuildinfo
+
+# Regenerable byproduct of `vitest --coverage`. Never committed.
+coverage/

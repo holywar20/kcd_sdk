@@ -32,6 +32,25 @@
 export type ServerWorkspace = 'none' | 'cwd' | 'per-call';
 
 /**
+ * AN INJECTION HOOK — text this package contributes to a host's compiled context, declared here for the
+ * same reason `workspace` is: the posture belongs on the thing that has it, so installing a package
+ * teaches the host that it injects and removing it takes the knowledge with it.
+ *
+ * NO TIER, AND THAT IS THE DESIGN. Every contribution lands in the injected band, identified by its
+ * package. Letting a package name its own rank would hand a prefix-cache contract to whoever installed a
+ * plugin — and gets the caching backwards, since text that varies between turns belongs last.
+ *
+ * TWO CONTRACTS THIS TYPE CANNOT STATE, and an author meets both as silence rather than as an error: the
+ * tool must return TEXT content, and the injection rides only for an agent that already holds `tool`.
+ */
+export interface ContextContribution {
+	tool:       string;                   // an ordinary tool on this package's ordinary surface
+	heading?:   string;                   // defaults to the package's display name
+	params?:    ServerConfigField[];      // rendered per agent; passed as the tool's arguments, key for key
+	timeoutMs?: number;                   // this call rides a turn nobody asked for, so its budget is its own
+}
+
+/**
  * The hard wall-clock ceiling on ONE tool call, in ms, for a server that names none. Claude Code's own
  * default is ~27.8 hours ( read off the binary and measured 2026-08-13 ), which is not a ceiling at all:
  * a wedged call is never cut loose and burns the entire harness turn instead, surfacing as a failure that
@@ -43,6 +62,21 @@ export type ServerWorkspace = 'none' | 'cwd' | 'per-call';
  * "server X tool Y timed out" with the turn still live. Those two are ONE budget — if that moves, move this.
  */
 export const DEFAULT_TOOL_TIMEOUT_MS = 180_000;
+
+/**
+ * The default ceiling on a CONTEXT INJECTION, in ms, for a contributor that names none in
+ * `ContextContribution.timeoutMs`.
+ *
+ * A BUDGET, NOT A LIVENESS CEILING, and that is the whole reason it is a separate number. The call above
+ * is one a model asked for and is waiting on, so cutting it early destroys the turn's work; this one rides
+ * a turn nobody asked for, in front of the user's first token, and its failure mode is a band that does not
+ * ride. Cheap to lose, expensive to wait for — the opposite trade, so the opposite number.
+ *
+ * 10s is far above any local answer ( a store query is milliseconds ) and far below what a person will sit
+ * through before a turn starts. It bounds the CALL only: a contributor whose server has to be spawned first
+ * pays that separately, upstream of the gate.
+ */
+export const DEFAULT_INJECTION_TIMEOUT_MS = 10_000;
 
 export interface ServerManifest {
 	// ── Identity (author-declared) ──────────────────────────────────────────────
@@ -56,6 +90,7 @@ export interface ServerManifest {
 	doc?:         string;                 // the server's own doc-block — its account of what it is, the recursive parent of its tools' docs
 	config?:      ServerConfigSurface;    // the server's self-declared config surface — what the app's config screen renders for it (see below)
 	workspace?:   ServerWorkspace;        // how this server relates to a PROJECT — see below. Absent means 'none'.
+	contributes?: ContextContribution;    // an injection hook — text this package adds to the compiled context. See above. Absent means nothing.
 	timeoutMs?:   number;                 // hard ceiling on ONE tool call. Absent means DEFAULT_TOOL_TIMEOUT_MS.
 
 

@@ -362,49 +362,71 @@ describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Ph
 		expect( withExtras.map( b => b.text ).join( '\n\n' ) ).toBe( agent.compile() + '\n\n---\n\n' + 'TOOL MANIFEST' );
 	} );
 
-	it( 'the `memory` extra lands under its own # Memory band, above the Manifest (band model re-ratified 2026-07-13)', () => {
+	it( 'an injection lands in the injected band, under its own package heading', () => {
 		const agent = loadBase();
-		const out = agent.compiledBlocks( { memory: [ Agent.memoryBlock( '- claim — because reason' ) ] } ).map( b => b.text ).join( '\n\n' );
-		const memHeadIdx  = out.indexOf( '# Memory' );
+		const out = agent.compiledBlocks( {
+			contributed: [ Agent.contributionBlock( { id: 'semantic_memory', heading: 'Memory', text: '- claim — because reason' } ) ]
+		} ).map( b => b.text ).join( '\n\n' );
+		const headIdx     = out.indexOf( '## Memory' );
 		const proseIdx    = out.indexOf( '- claim — because reason' );
-		// NOTE: no `# Knowledge` band to index here — a base-only agent has no core content ( its
-		// references/habits/contracts all hoist into the Manifest ), so there is no core tier to order
-		// against. Asserting one existed is exactly what this test used to get wrong. The full
-		// care→memory→core→manifest order is locked by the ContextAssembler.sort unit test above.
-		const manifestIdx  = out.indexOf( '# Manifest' );   // the manifest band — base lens always has one
-		expect( memHeadIdx ).toBeGreaterThan( -1 );
-		expect( proseIdx ).toBeGreaterThan( memHeadIdx );      // prose rides under its heading
-		expect( manifestIdx ).toBeGreaterThan( proseIdx );     // memory precedes the Manifest
+		const manifestIdx = out.indexOf( '# Manifest' );
+		expect( headIdx ).toBeGreaterThan( -1 );
+		expect( proseIdx ).toBeGreaterThan( headIdx );        // prose rides under its own heading
+		// LAST IN THE BODY, not last on the wire: the manifest tables are lifted out of the body and
+		// appended after it regardless of tier, so an injection precedes them.
+		expect( headIdx ).toBeLessThan( manifestIdx );
 	} );
 
-	// ── The Memory band's tag-vocabulary constant ( replaced the `known_tags` tool, 2026-07-31 ) ──
-
-	it( 'the tag vocabulary heads the Memory band, with lens:* tags filtered out', () => {
+	it( 'two packages injecting keep their own headings rather than collapsing into one band', () => {
+		// The reason a contribution carries its heading in the TEXT instead of letting `withBandHeadings`
+		// splice one: that splices ONE heading per tier, and every injection shares a tier. Collapsing two
+		// packages under a single heading would leave a reader unable to tell which package said what.
 		const agent = loadBase();
-		agent.bindEnv( { memory: '- claim — because reason', memoryTags: [ 'lens:main', 'style', 'tooling' ] } );
-		const band = agent.memoryBand();
-		expect( band ).toContain( 'Tags: style, tooling' );
-		expect( band ).not.toContain( 'lens:main' );                                  // system-authoritative, never agent-supplied
-		expect( band.indexOf( 'Tags:' ) ).toBeLessThan( band.indexOf( '- claim' ) );  // constant leads the prose
+		const out = agent.compiledBlocks( { contributed: [
+			Agent.contributionBlock( { id: 'a_pkg', heading: 'Memory',  text: 'FROM A' } ),
+			Agent.contributionBlock( { id: 'b_pkg', heading: 'Nudges',  text: 'FROM B' } )
+		] } ).map( b => b.text ).join( '\n\n' );
+		expect( out ).toContain( '## Memory' );
+		expect( out ).toContain( '## Nudges' );
+		expect( out.indexOf( 'FROM A' ) ).toBeLessThan( out.indexOf( '## Nudges' ) );
 	} );
 
-	it( 'no bound tags ( no memory store wired ) means no vocabulary line at all', () => {
+	it( 'an injection keeps its own identity in the breakdown', () => {
+		// THE DEFECT THIS PINS: `segmentKey` reads a section-less block as STRUCTURAL — a divider or heading
+		// with no identity — and folds its text into a neighbour. Injections sort LAST, so there is no
+		// neighbour after them and the text landed on the previous segment instead. On the wire and
+		// misattributed in the breakdown is worse than absent, because the round drawer reads as correct.
 		const agent = loadBase();
-		agent.bindEnv( { memory: '- claim — because reason', memoryTags: [] } );
-		expect( agent.memoryVocabulary() ).toBe( '' );
-		expect( agent.memoryBand() ).toBe( '- claim — because reason' );
+		agent.bindEnv( { contributions: [ { id: 'semantic_memory', heading: 'Memory', text: 'INJECTED TEXT' } ] } );
+		const seg = agent.contextSegments().find( ( x ) => x.text.includes( 'INJECTED TEXT' ) );
+		expect( seg ).toBeDefined();
+		expect( seg!.source ).toBe( 'injection' );
+		expect( seg!.label ).toBe( 'semantic_memory' );
 	} );
 
-	it( 'a lens-only vocabulary contributes nothing — every tag would be filtered', () => {
+	it( 'a package that injected nothing leaves no heading behind', () => {
 		const agent = loadBase();
-		agent.bindEnv( { memory: '', memoryTags: [ 'lens:main', 'lens:driver' ] } );
-		expect( agent.memoryBand() ).toBe( '' );   // both halves empty → no band rides
+		const out = agent.compiledBlocks( { contributed: [] } ).map( b => b.text ).join( '\n\n' );
+		expect( out ).not.toContain( '## Memory' );
 	} );
 
-	it( 'the vocabulary rides even when the memory query came back dry', () => {
+	it( 'bindEnv carries injections onto the agent', () => {
 		const agent = loadBase();
-		agent.bindEnv( { memory: '', memoryTags: [ 'style' ] } );
-		expect( agent.memoryBand() ).toContain( 'Tags: style' );   // an agent with no memories still needs its vocabulary
+		agent.bindEnv( { contributions: [ { id: 'semantic_memory', heading: 'Memory', text: '- a claim' } ] } );
+		expect( agent.contributions ).toHaveLength( 1 );
+		expect( agent.compiledContext().map( b => b.text ).join( '\n\n' ) ).toContain( '- a claim' );
+	} );
+
+	it( 'the per-package toggle withholds one injection and leaves the others alone', () => {
+		const agent = loadBase();
+		agent.system[ 'contributions' ] = { b_pkg: { enabled: false } };
+		agent.bindEnv( { contributions: [
+			{ id: 'a_pkg', heading: 'Kept',    text: 'KEPT TEXT' },
+			{ id: 'b_pkg', heading: 'Dropped', text: 'DROPPED TEXT' }
+		] } );
+		const out = agent.compiledContext().map( b => b.text ).join( '\n\n' );
+		expect( out ).toContain( 'KEPT TEXT' );
+		expect( out ).not.toContain( 'DROPPED TEXT' );
 	} );
 
 	it( 'care groups by KIND — top-level "# Purpose" / "# Philosophy" bands, lenses as "## {lens}" sub-sections', () => {
@@ -550,41 +572,44 @@ describe( 'ContextAssembler — unit', () => {
 		expect( sorted.indexOf( 'core' ) ).toBeLessThan( sorted.indexOf( 'refs-routing' ) );
 	} );
 
-	// ── memory tier ( band model re-ratified 2026-07-13 ): the system-fired preload now sits BETWEEN the
-	// Lenses band ( care ) and Knowledge ( core ) — "after the lenses but before knowledge" ( Bryan ). ──
+	// ── the injected tier: where every package's contribution lands ( 2026-09-07 ) ──
+	// The `memory` TIER IS NOW UNREACHED. It was where the one named contributor's band sorted, between
+	// care and core — "after the lenses but before knowledge". Contributions are injections now, identified
+	// by package and landing last, so nothing routes to tier 1 any more. The entry survives so that
+	// restoring a high band is a routing decision rather than a renumbering.
 
-	it( 'a memory-section block sorts ABOVE core and BELOW care ( still above manifest and injected )', () => {
+	it( 'an injected block sorts LAST, below care, core and the manifest', () => {
 		const blocks = [
 			block( { text: 'injected', sourceLayer: 'injected', region: 'know' } ),
 			block( { text: 'manifest', region: 'know', section: 'references' } ),
-			block( { text: 'memory', region: 'know', section: 'memory' } ),
 			block( { text: 'core', region: 'know' } ),
 			block( { text: 'care', region: 'care' } ),
 		];
-		expect( ContextAssembler.sort( blocks ).map( b => b.text ) ).toEqual( [ 'care', 'memory', 'core', 'manifest', 'injected' ] );
+		expect( ContextAssembler.sort( blocks ).map( b => b.text ) ).toEqual( [ 'care', 'core', 'manifest', 'injected' ] );
 	} );
 
-	it( 'the band headings track the re-ratified names: care→(no wrapper), memory→Memory, core→Knowledge, manifest→Manifest', () => {
+	it( 'a bare `memory` section is ordinary core content — the name routes nothing', () => {
+		// The point of the contributor seam: `section` carries no ranking authority. A block called 'memory'
+		// is core content, exactly like a block called anything else.
+		const blocks = [
+			block( { text: 'memory', region: 'know', section: 'memory' } ),
+			block( { text: 'care', region: 'care' } ),
+		];
+		expect( ContextAssembler.sort( blocks ).map( b => b.text ) ).toEqual( [ 'care', 'memory' ] );
+		expect( ContextAssembler.tierOf( block( { text: 'm', region: 'know', section: 'memory' } ) ) ).toBe( ContextAssembler.TIER.core );
+	} );
+
+	it( 'the band headings track the re-ratified names: care→(no wrapper), core→Knowledge, manifest→Manifest', () => {
 		// The care tier gets NO wrapper heading — care groups by KIND into top-level `# Purpose` / `# Philosophy`
 		// bands ( built by `Agent.buildCareBands` ), not a "## Lenses" parent.
 		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.care ) ).toBeNull();
-		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.memory ) ).toBe( '# Memory' );
 		// Knowledge / Manifest carry a directive line beneath the heading ( forced-read vs read-on-demand ).
 		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.core )!.split( '\n' )[ 0 ] ).toBe( '# Knowledge' );
 		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.core )! ).toContain( 'Required reading' );
 		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.manifest )!.split( '\n' )[ 0 ] ).toBe( '# Manifest' );
 		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.manifest )! ).toContain( 'Lookup surface' );
+		// NO tier heading for injected: each injection carries its OWN heading, because they share a tier.
 		expect( ContextAssembler.bandHeading( ContextAssembler.TIER.injected ) ).toBeNull();
-	} );
-
-	it( 'withBandHeadings splices "# Memory" ABOVE the Knowledge band ( memory now precedes core )', () => {
-		const sorted = ContextAssembler.assembleBlocks( [
-			block( { text: 'core', region: 'know' } ),
-			block( { text: 'MEM', region: 'know', section: 'memory' } ),
-		] );
-		// Heading blocks can now carry a directive line; compare on the first line of each block.
-		const firstLines = ContextAssembler.withBandHeadings( sorted ).map( b => b.text.split( '\n' )[ 0 ] );
-		expect( firstLines ).toEqual( [ '# Memory', 'MEM', '# Knowledge', 'core' ] );
 	} );
 
 	it( 'two references-section blocks from different sources fuse into ONE routing table via their STRUCTURED rows — one heading, both rows, no repeated boilerplate', () => {

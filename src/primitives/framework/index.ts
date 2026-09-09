@@ -9,5 +9,7 @@ export { FrameworkObject } from './FrameworkObject';
 export { PlanObject } from './PlanObject';
 export { IndexObject } from './IndexObject';
 export { ReferenceObject } from './ReferenceObject';
+export { AuditObject } from './AuditObject';
+export type { AuditEntry } from './AuditObject';
 export { TemplateObject } from './TemplateObject';
 export { PromptPartialObject } from './PromptPartialObject';
