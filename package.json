@@ -12,7 +12,8 @@
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",
     "scan": "tsx scripts/scan.ts",
-    "shape-report": "tsx scripts/shape-report.ts"
+    "shape-report": "tsx scripts/shape-report.ts",
+    "prepublishOnly": "npm run build"
   },
   "dependencies": {
     "js-yaml": "^4.1.0"
@@ -24,5 +25,20 @@
     "tsx": "^4.0.0",
     "typescript": "^5.4.0",
     "vitest": "^4.1.11"
-  }
+  },
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    },
+    "./core": {
+      "types": "./dist/core/index.d.ts",
+      "default": "./dist/core/index.js"
+    },
+    "./package.json": "./package.json"
+  },
+  "files": [
+    "dist/**/*.js",
+    "dist/**/*.d.ts"
+  ]
 }
