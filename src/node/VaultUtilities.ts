@@ -402,17 +402,29 @@ export class VaultUtilities {
 	 * difference between them is the agent's ENVIRONMENT — root context, live MCP tool defs, DB memory —
 	 * which has no vault-side source, so a vault agent never binds it.
 	 *
-	 * THE BASE LENS ALWAYS RIDES, with no flag to suppress it: base is an inheritance mechanism, not an
+	 * A BASE LENS ALWAYS RIDES, with no flag to suppress it: base is an inheritance mechanism, not an
 	 * ingredient, so a compile that drops it is wrong rather than lean. A lens re-declaring part of the
 	 * floor camouflages the missing rest, which is why the rule lives once, in `Agent.withFloor`.
+	 *
+	 * `opts.lane` picks WHICH floor, and is not an exception to that. A lane compile rides `_lane-base`
+	 * instead of `_lens-base` — one floor, still mandatory, still appended last. The two exist because
+	 * they address different readers: the session floor asks its reader to state a path and wait for
+	 * clearance, which is sound advice to somebody sitting with a person and an empty instruction to an
+	 * agent running overnight. A floor whose escalation route does not exist is one an agent learns to
+	 * discount whole, including the parts that did apply.
+	 *
+	 * THE FLAG IS THE CALLER'S, NEVER THE AGENT'S. It is exposed on the CLI, which the harness drives, and
+	 * deliberately NOT on the `kcd_compile` MCP tool, which agents drive — an agent that can ask for the
+	 * lane floor can ask for the other one, and picking your own guardrails is not a capability worth
+	 * having. Keep it out of that tool's `inputSchema`; the omission is the mechanism.
 	 *
 	 * Each name is a bare lens name ( `lenses/{name}/{name}.html` ) or a raw vault-relative path; `[0]` is
 	 * primary. Throws on an empty list or an unresolvable name. The returned `lenses` reports what actually
 	 * COMPILED, base included — reporting only what was asked for is what keeps a missing floor invisible.
 	 * Read off the built agent, so a lens named by raw path reports its artifact NAME.
 	 */
-	static compile( vault: Vault, lensNames: string[] ): CompileResult {
-		const agent    = vault.buildAgent( lensNames );
+	static compile( vault: Vault, lensNames: string[], opts: { lane?: boolean } = {} ): CompileResult {
+		const agent    = vault.buildAgent( lensNames, opts );
 		const compiled = agent.lenses.map( l => l.getName() );
 		const text     = agent.compile();
 

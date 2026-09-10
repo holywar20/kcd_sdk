@@ -361,8 +361,12 @@ export class Vault {
 	 * Throws on an empty list or a name that resolves to nothing — an unresolvable lens is a caller error,
 	 * not a degraded compile. A MISSING BASE LENS is different and is tolerated: a half-installed or
 	 * hand-built vault still compiles, just without a floor.
+	 *
+	 * `opts.lane` swaps WHICH floor rides — the lane base rather than the session base. It never drops
+	 * one: base is inheritance, not an ingredient, and that rule is unchanged. See `loadBaseLens` for why
+	 * a missing lane floor throws where a missing session floor does not.
 	 */
-	buildAgent( lensNames: string[] ): Agent {
+	buildAgent( lensNames: string[], opts: { lane?: boolean } = {} ): Agent {
 		if ( !lensNames.length ) throw new Error( 'buildAgent requires at least one lens' );
 
 		const lenses = lensNames.map( name => {
@@ -382,14 +386,32 @@ export class Vault {
 		return Agent.create( {
 			id:     Agent.VAULT_AGENT_ID,
 			model:  null,
-			lenses: Agent.withFloor( lenses, this.loadBaseLens() ),
+			lenses: Agent.withFloor( lenses, this.loadBaseLens( opts ) ),
 		} );
 	}
 
-	/** The base lens, freshly dredged, or null when this vault has none ( half-installed / hand-built —
-	 *  tolerated, not fatal ). FRESH every call, never cached: a `LensObject` carries mutable dredge state,
-	 *  so a shared floor would leak one agent's toggles into every other agent wearing it. */
-	loadBaseLens(): LensObject | null {
+	/** The inheritance floor, freshly dredged. FRESH every call, never cached: a `LensObject` carries
+	 *  mutable dredge state, so a shared floor would leak one agent's toggles into every other agent
+	 *  wearing it.
+	 *
+	 *  The SESSION floor is null when this vault has none ( half-installed / hand-built — tolerated, not
+	 *  fatal: a session has a person in it who will notice ).
+	 *
+	 *  The LANE floor THROWS when absent, and the asymmetry is the point. Falling back to the session
+	 *  floor would hand an unattended agent an escalation protocol addressed to somebody who is not there;
+	 *  falling back to no floor would hand it no guardrails at all. Both failures compile cleanly and look
+	 *  like a working run, which is what makes them worse than a stopped one. A lane asked for and not
+	 *  found is a broken install, and the caller hears about it. */
+	loadBaseLens( opts: { lane?: boolean } = {} ): LensObject | null {
+		if ( opts.lane ) {
+			if ( !fs.existsSync( this.toAbs( InstallManifest.LANE_LENS ) ) )
+				throw new Error(
+					`no lane floor found ( looked for ${ InstallManifest.LANE_LENS } ). A lane compile will not ` +
+					'fall back to the session floor: that floor tells its reader to ask a person for clearance, ' +
+					'and a lane has no person to ask.'
+				);
+			return this.loadLens( InstallManifest.LANE_LENS, { eager: true } );
+		}
 		if ( !fs.existsSync( this.toAbs( InstallManifest.BASE_LENS ) ) ) return null;
 		return this.loadLens( InstallManifest.BASE_LENS, { eager: true } );
 	}

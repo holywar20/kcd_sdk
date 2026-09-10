@@ -32,6 +32,20 @@ export interface ManifestEntry {
  *  string was being re-spelled at five call sites that all had to agree about the inheritance floor. */
 const BASE_LENS_FILE = '_lens-base.html'
 
+/** The LANE floor — the inheritance base for an agent running with nobody in the session.
+ *
+ *  A SECOND floor rather than a flag on the first, because the two documents address different readers
+ *  and cannot be reconciled by wording. `_lens-base` tells its reader to state a path and wait for
+ *  clearance; an unattended agent has nobody to wait for, and a floor whose escalation route does not
+ *  exist is one an agent learns to discount entire — including the parts that did apply. So the lane
+ *  gets its own floor, authored as prohibitions rather than as a collaboration protocol.
+ *
+ *  OPTIONAL, unlike `BASE_LENS`, and deliberately absent from `MANIFEST`: the bundle installs what every
+ *  vault needs, and a project that never runs an unattended agent needs no lane. A vault without one
+ *  cannot compile a lane at all, which is the correct failure — better than compiling a lane onto the
+ *  session floor and looking like it worked. */
+const LANE_BASE_LENS_FILE = '_lane-base.html'
+
 const MANIFEST: readonly ManifestEntry[] = [
 
 	{
@@ -100,14 +114,26 @@ export class InstallManifest {
 	 *  `Agents.withBase` / `_lensPathsOf`, `VaultUtilities.compile` ) resolves it through here. */
 	static readonly BASE_LENS = `lenses/${ BASE_LENS_FILE }`
 
-	/** Is this path the base lens — the auto-loaded floor rather than an authored domain lens? Matches on
+	/** The LANE floor's vault-relative home — the base a compile rides when it is running for an agent
+	 *  with nobody in the session. Named here for the same reason `BASE_LENS` is: one spelling, so the
+	 *  readers that have to tell a floor from an authored lens cannot drift apart. */
+	static readonly LANE_LENS = `lenses/${ LANE_BASE_LENS_FILE }`
+
+	/** Is this path A base lens — an inheritance floor rather than an authored domain lens? Matches on
 	 *  the trailing SEGMENT, so it is true for a vault-relative path, an OS-absolute one, and either slash
 	 *  flavour, and false for a same-suffixed name that merely ends in the same characters. Null / empty
-	 *  ( an in-memory lens with no path ) is not the base lens. */
+	 *  ( an in-memory lens with no path ) is not a base lens.
+	 *
+	 *  A SET, not one name, since the lane floor joined it. Every caller asks this to mean "is a floor
+	 *  already present / is this thing inherited rather than chosen", and both floors answer yes to that
+	 *  question. Left as a single name, `Agent.withFloor` would fail to see a lane floor in the stack and
+	 *  append the session floor beside it — two floors in one context, contradicting each other, which is
+	 *  the exact failure the lane exists to prevent. */
 	static isBaseLens( path: string | null | undefined ): boolean {
 		if( !path ) return false
 		const segments = path.replace( /\\/g, '/' ).split( '/' )
-		return segments[ segments.length - 1 ] === BASE_LENS_FILE
+		const file = segments[ segments.length - 1 ]
+		return file === BASE_LENS_FILE || file === LANE_BASE_LENS_FILE
 	}
 
 	/** Every row, in table order. */
