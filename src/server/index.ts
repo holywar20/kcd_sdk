@@ -7,7 +7,7 @@ export { McpServer } from './McpServer';
 export type { ToolDefinition, ToolResult, ContentBlock, ServerInfo } from './McpServer';
 
 export { Authorization, GRANT_ENV, ACCESS_ENV } from './Authorization';
-export type { HarnessAuthorization, FloorState } from './Authorization';
+export type { HarnessAuthorization, FloorState, AskerRef } from './Authorization';
 
 export { StarmindServer } from './StarmindServer';
 export { DEFAULT_TOOL_TIMEOUT_MS, DEFAULT_INJECTION_TIMEOUT_MS } from './manifest';

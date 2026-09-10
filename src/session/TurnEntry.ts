@@ -464,11 +464,26 @@ export type ToolsPolicy = { enabled: boolean };
  */
 export type LimitsPolicy = { maxRounds: number };
 
+/** Whether this session's turns are written to a CHAT SURFACE at all. On, the host's chat-affordance block
+ *  rides the system prompt — the roster of forms the renderer honours, and how to write each. Off, the whole
+ *  block leaves the wire.
+ *
+ *  WHOLE BLOCK, NEVER PER-AFFORDANCE, and that is the ruling rather than a simplification ( Bryan,
+ *  2026-09-09 ): "it's a chat affordance, it represents the chat surface." The roster is one capability. A
+ *  session either draws into that surface or it does not, and the case that wants this is a session with no
+ *  surface at all — a house seat compacting a transcript is told about tables and wikilinks it will never
+ *  render, on every turn.
+ *
+ *  NOT A USER CONTROL. There is no toggle to surface: whoever opens a non-chat session says so when it is
+ *  created, exactly as `tools` is set for a seat that must not act. */
+export type ChatPolicy = { enabled: boolean };
+
 export type SessionPolicies = {
 	retention:  RetentionPolicy;
 	compaction: CompactionPolicy;
 	reasoning:  ReasoningPolicy;
 	tools:      ToolsPolicy;
+	chat:       ChatPolicy;
 	limits:     LimitsPolicy;
 };
 

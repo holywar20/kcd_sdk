@@ -91,6 +91,18 @@ export interface HarnessAuthorization {
  */
 export type FloorState = 'absent' | 'unexpanded' | 'published' | 'unreadable';
 
+/**
+ * WHO a call is on behalf of. Attribution only — never read to decide a verdict.
+ *
+ * It rides the in-process lane beside the grants, and so reaches a spawned server exactly as `projectId`
+ * does. Unlike `projectId` it carries a string a PERSON wrote, which is the cost of having one writer.
+ */
+export interface AskerRef {
+	agentId:   string | null;
+	agentName: string | null;
+	traceId:   string;
+}
+
 export const Authorization = {
 
 	/**
@@ -116,14 +128,33 @@ export const Authorization = {
 	assertOnCall(
 		grants:     readonly GrantRef[],
 		projectId?: string,
-		access?:    readonly AccessEntry[]
+		access?:    readonly AccessEntry[],
+		asker?:     AskerRef
 	): Record<string, unknown> | null {
-		if ( grants.length === 0 && !projectId && !access ) return null;
+		// IDENTITY is what makes an asker, not the trace. A block whose every identity field is null names
+		// nobody, and would be a second spelling of the absence the missing key already says. An asker
+		// counts as something to say, so an ungranted call still carries who is behind it — which is what
+		// lets a callee stop and ask a NAMED person rather than refusing flat.
+		const named = !!( asker && ( asker.agentId || asker.agentName ) );
+		if ( grants.length === 0 && !projectId && !access && !named ) return null;
 		const own: Record<string, unknown> = {};
 		if ( grants.length ) own[ 'grants' ] = grants;
 		if ( projectId )     own[ 'projectId' ] = projectId;
 		if ( access )        own[ 'access' ] = access;
+		if ( named )         own[ 'asker' ] = asker;
 		return { starmind: own };
+	},
+
+	/** The receiving end. UNDEFINED when the envelope named nobody — the inspector's Run button, a bare
+	 *  widget call — because an all-null asker would be a second way to spell the same absence. */
+	askerOnCall( meta?: Record<string, unknown> ): AskerRef | undefined {
+		const own = ( meta?.[ 'starmind' ] ?? {} ) as { asker?: unknown };
+		if ( typeof own.asker !== 'object' || own.asker === null ) return undefined;
+		const a = own.asker as Record<string, unknown>;
+		const agentId   = typeof a[ 'agentId' ]   === 'string' ? a[ 'agentId' ]   as string : null;
+		const agentName = typeof a[ 'agentName' ] === 'string' ? a[ 'agentName' ] as string : null;
+		if ( !agentId && !agentName ) return undefined;
+		return { agentId, agentName, traceId: typeof a[ 'traceId' ] === 'string' ? a[ 'traceId' ] as string : '' };
 	},
 
 	/**

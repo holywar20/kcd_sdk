@@ -12,7 +12,7 @@
  * bridge whole via serialize / fromSerialized, the same trinity as Agent.
  */
 
-import { Transcript, type Turn, type TurnEntry, type WireMessage, type WireOptions, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type ReasoningPolicy, type ToolsPolicy, type LimitsPolicy, type SessionPolicies, type SessionCompaction, type Grant, isGrant, grantSubject, grantKind, grantLevel, frameToolResultStub, KEEP_TOOL_RESULT_TURNS } from './TurnEntry';
+import { Transcript, type Turn, type TurnEntry, type WireMessage, type WireOptions, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type ReasoningPolicy, type ToolsPolicy, type ChatPolicy, type LimitsPolicy, type SessionPolicies, type SessionCompaction, type Grant, isGrant, grantSubject, grantKind, grantLevel, frameToolResultStub, KEEP_TOOL_RESULT_TURNS } from './TurnEntry';
 import { type GrantRef } from './InjectedItem';
 import type { Agent } from '../agent/Agent';
 import type { SlotRow } from '../core/html/KcdContext';
@@ -104,7 +104,10 @@ export interface SessionOptions {
 	status?: SessionStatus;
 	zoom?: number | null;
 	fontFamily?: FontFamilyKey | null;
-	policies?: SessionPolicies;
+	/** PARTIAL, and the type says so because `policiesFrom` has always behaved that way: every absent entry
+	 *  is filled from the defaults. An opener that cares about one policy — a house seat setting `chat` or
+	 *  `tools` off — should not have to restate the other four to say it. */
+	policies?: Partial<SessionPolicies>;
 }
 
 /** The policies every session is born on — the whole transcript rides ( nothing narrowed ) and it never
@@ -115,6 +118,9 @@ const DEFAULT_POLICIES: SessionPolicies = {
 	compaction: { enabled: false, threshold: 120_000 },
 	reasoning:  { effort: 'medium', mode: 'chain' },
 	tools:      { enabled: true },
+	// ON unless the opener says otherwise: nearly every session IS a chat surface, and a default that
+	// stripped the roster would silently un-teach every agent the forms the renderer honours.
+	chat:       { enabled: true },
 	// Generous for real agentic work and decisively finite. A turn that genuinely needs more rounds than
 	// this is a job for a governor across several turns, not one turn that will not end.
 	limits:     { maxRounds: 24 },
@@ -290,13 +296,14 @@ export class Session {
 		if ( !v || typeof v !== 'object' ) return { ...DEFAULT_POLICIES };
 		// the bare legacy shape — a retention policy stored before there was a bag to put it in
 		if ( typeof v[ 'kind' ] === 'string' ) {
-			return { retention: v as RetentionPolicy, compaction: { ...DEFAULT_POLICIES.compaction }, reasoning: { ...DEFAULT_POLICIES.reasoning }, tools: { ...DEFAULT_POLICIES.tools }, limits: { ...DEFAULT_POLICIES.limits } };
+			return { retention: v as RetentionPolicy, compaction: { ...DEFAULT_POLICIES.compaction }, reasoning: { ...DEFAULT_POLICIES.reasoning }, tools: { ...DEFAULT_POLICIES.tools }, chat: { ...DEFAULT_POLICIES.chat }, limits: { ...DEFAULT_POLICIES.limits } };
 		}
 		return {
 			retention:  ( v[ 'retention' ]  as RetentionPolicy  ) ?? { ...DEFAULT_POLICIES.retention  },
 			compaction: ( v[ 'compaction' ] as CompactionPolicy ) ?? { ...DEFAULT_POLICIES.compaction },
 			reasoning:  ( v[ 'reasoning' ]  as ReasoningPolicy  ) ?? { ...DEFAULT_POLICIES.reasoning  },
 			tools:      ( v[ 'tools' ]      as ToolsPolicy      ) ?? { ...DEFAULT_POLICIES.tools      },
+			chat:       ( v[ 'chat' ]       as ChatPolicy       ) ?? { ...DEFAULT_POLICIES.chat       },
 			limits:     ( v[ 'limits' ]     as LimitsPolicy     ) ?? { ...DEFAULT_POLICIES.limits     },
 		};
 	}
