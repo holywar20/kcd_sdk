@@ -38,21 +38,21 @@ const FIXTURE = `<!DOCTYPE html>
 
 describe( 'KcdContext — AI-audience projection', () => {
 	it( 'strips all tags and chrome', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const out = KcdContext.project( artifact );
 		expect( out ).not.toContain( '<' );
 		expect( out ).not.toContain( '>' );
 	} );
 
 	it( 'keeps prose but drops data-kcd-audience="human" content entirely', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const out = KcdContext.project( artifact );
 		expect( out ).toContain( 'Prose that must survive as plain text.' );
 		expect( out ).not.toContain( 'human-only' );
 	} );
 
 	it( 'reduces frontmatter to the keep-set — name/description/status survive, author/schema-version do not', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const out = KcdContext.project( artifact );
 		expect( out ).toContain( 'name: context-fixture' );
 		expect( out ).toContain( 'description: A fixture used only by KcdContext' );
@@ -62,27 +62,27 @@ describe( 'KcdContext — AI-audience projection', () => {
 	} );
 
 	it( 'renders a dredge/slot row as one tight "what — why (where)" line, route preserved', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const out = KcdContext.project( artifact );
 		expect( out ).toContain( 'A reference — Because it matters. (_Claude/references/x.html)' );
 	} );
 
 	it( 'renderRow produces the exact same line slotLine embeds — one render path, not two shapes', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const out = KcdContext.project( artifact );
 		const rendered = KcdContext.renderRow( { what: 'A reference', where: '_Claude/references/x.html', why: 'Because it matters.' } );
 		expect( out ).toContain( rendered );
 	} );
 
 	it( 'drops the data-kcd-head table-header row — visual-only chrome, not content', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const out = KcdContext.project( artifact );
 		expect( out ).not.toMatch( /^What$/m );
 		expect( out ).not.toMatch( /^Where$/m );
 	} );
 
 	it( 'leads with a "# [type] path" header', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const out = KcdContext.project( artifact );
 		expect( out.split( '\n' )[ 0 ] ).toBe( '# [lens] fixture.html' );
 	} );
@@ -99,7 +99,7 @@ describe( 'KcdContext — AI-audience projection', () => {
 <p><strong>kcd is canonical:</strong> <code>_Claude/kcd/</code> is the source.</p>
 </article>
 </body></html>`;
-		const out = KcdContext.project( KcdParse.parse( html, 'ws.html' ) );
+		const out = KcdContext.project( KcdParse.parse( html, 'ws.html' , '_Claude') );
 		expect( out ).toContain( 'kcd is canonical: _Claude/kcd/ is the source.' );
 		expect( out ).not.toContain( 'canonical:_Claude' );
 	} );
@@ -165,7 +165,7 @@ const REFERENCE_FIXTURE = `<!DOCTYPE html>
 
 describe( 'KcdContext.projectBlocks — region-block decomposition (Phase 2)', () => {
 	it( 'tags a lens\'s unregioned lede as `care`, and its named sections by their enclosing data-kcd-region', () => {
-		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' , '_Claude');
 		const blocks = KcdContext.projectBlocks( artifact, 'know' );
 
 		const lede = blocks.find( b => b.section === null && b.text.includes( 'identity lede' ) );
@@ -183,14 +183,14 @@ describe( 'KcdContext.projectBlocks — region-block decomposition (Phase 2)', (
 	} );
 
 	it( 'tags a region\'s own intro paragraph ( before its first named section ) with THAT region, not the artifact-level care lede', () => {
-		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' , '_Claude');
 		const blocks = KcdContext.projectBlocks( artifact, 'know' );
 		const intro = blocks.find( b => b.section === null && b.text.includes( 'Know region\'s own intro' ) );
 		expect( intro?.region ).toBe( 'know' );
 	} );
 
 	it( 'never emits the Know/Care/Do region-label heading — the region sorts the build for us, it never names itself to the agent', () => {
-		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' , '_Claude');
 		const knowLabel = /^#+\s+Know\s*$/m;
 		// Both render paths drop it: the flat single-string projection and the block ( wire ) projection.
 		expect( KcdContext.project( artifact ) ).not.toMatch( knowLabel );
@@ -202,7 +202,7 @@ describe( 'KcdContext.projectBlocks — region-block decomposition (Phase 2)', (
 	} );
 
 	it( 'emits NO synthetic head block on the wire — identity ( name/path ) rides once in the compiled manifest, not per artifact', () => {
-		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' , '_Claude');
 		const blocks = KcdContext.projectBlocks( artifact, 'know' );
 		// No block carries the `# [type] path` header or the frontmatter keep-set anymore.
 		expect( blocks.some( b => b.text.includes( '# [lens]' ) ) ).toBe( false );
@@ -213,18 +213,18 @@ describe( 'KcdContext.projectBlocks — region-block decomposition (Phase 2)', (
 	} );
 
 	it( 'the flat project() still leads with the head — that path feeds the Atlas human preview, not the wire', () => {
-		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' , '_Claude');
 		expect( KcdContext.project( artifact ).split( '\n' )[ 0 ] ).toBe( '# [lens] fixture.html' );
 	} );
 
 	it( 'defaults every block of a non-lens artifact to the caller-supplied role — a habit-role artifact defaults to `do`', () => {
-		const artifact = KcdParse.parse( REFERENCE_FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( REFERENCE_FIXTURE, 'fixture.html' , '_Claude');
 		const blocks = KcdContext.projectBlocks( artifact, 'do' );
 		expect( blocks.every( b => b.region === 'do' ) ).toBe( true );
 	} );
 
 	it( 'defaults a reference-role artifact to `know` and carries its data-kcd-merge-key through untouched', () => {
-		const artifact = KcdParse.parse( REFERENCE_FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( REFERENCE_FIXTURE, 'fixture.html' , '_Claude');
 		const blocks = KcdContext.projectBlocks( artifact, 'know' );
 		const overview = blocks.find( b => b.section === 'overview' );
 		expect( overview?.region ).toBe( 'know' );
@@ -235,14 +235,14 @@ describe( 'KcdContext.projectBlocks — region-block decomposition (Phase 2)', (
 	} );
 
 	it( 'a References section carries its rows as STRUCTURED data too — not just rendered into `text`', () => {
-		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' , '_Claude');
 		const blocks = KcdContext.projectBlocks( artifact, 'know' );
 		const refs = blocks.find( b => b.section === 'references' )!;
 		expect( refs.rows ).toEqual( [ { what: 'A ref', where: 'x.html', why: 'reasons' } ] );
 	} );
 
 	it( 'a block with no data-kcd-slot rows carries no `rows` at all — not an empty array, genuinely absent', () => {
-		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' , '_Claude');
 		const blocks = KcdContext.projectBlocks( artifact, 'know' );
 		const purpose = blocks.find( b => b.section === 'purpose' )!;
 		expect( purpose.rows ).toBeUndefined();

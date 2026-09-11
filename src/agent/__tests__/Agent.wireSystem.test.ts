@@ -65,7 +65,7 @@ const TOOLS: ToolDef[] = [
  * that can move has to be present and identifiable for the diff to mean anything.
  */
 function fullAgent(): Agent {
-	const lens  = KCDPrimitive.fromHtml( LENS_HTML, '/vault/_Claude/lenses/baseline/baseline.html' ) as LensObject;
+	const lens  = KCDPrimitive.fromHtml( LENS_HTML, '/vault/_Claude/lenses/baseline/baseline.html' , '_Claude') as LensObject;
 	const agent = Agent.create( {
 		id:           'baseline-agent',   // fixed, so the snapshot does not churn on a fresh uuid
 		lenses:       [ lens ],

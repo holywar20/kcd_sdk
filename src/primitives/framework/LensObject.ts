@@ -1,5 +1,6 @@
 import * as path from 'path';
 import { KCDPrimitive, clampDepth, classifyRelPath } from './KCDPrimitive';
+import { VaultLayout } from '../../core/VaultLayout';
 import { SlotResolver } from './SlotResolver';
 import type { ArtifactType, KCDRole, PolicyEntry, ReaderFn, SerializedArtifact, SerializedLens, SlotMode, TaggedBlock } from '../types';
 import type { Policy, Surface } from '../ToolAccess';
@@ -16,6 +17,15 @@ const DISK_IS_MAIN_ONLY: ReaderFn = ( absPath ) => {
 export interface LensLoadOptions {
 	/** Required — core can't infer it (inferProjectRoot is node-side). Main passes its root. */
 	projectRoot: string;
+	/**
+	 * Which folder the vault is. Needed for one thing and it is not cosmetic: classifying a dredged
+	 * child as a PLAN, which is what keeps plan bodies out of compiled context ( see the carve-out in
+	 * `dredgeFrom` ). Without it the classifier falls back to `_Claude` and every child of a vault
+	 * named anything else classifies as `unknown` — so the carve-out silently stops firing and full
+	 * plan text rides into every compile. Optional because the default is right for most vaults and a
+	 * required field here would break every caller for a value most of them already have correct.
+	 */
+	docRoot?: string;
 	depth?: number;
 	/**
 	 * Dredge the children at all, or not. Named for a display axis, but wired as the gate on the WHOLE
@@ -44,7 +54,9 @@ export class LensObject extends KCDPrimitive {
 
 	// ── Path resolution utilities ─────────────────────────────────────────────
 
-	static readonly DEFAULT_DOC_ROOT = '_Claude';
+	/** Re-exported from the taxonomy that owns it — NOT a second literal. A default restated in two
+	 *  places is two defaults that can disagree, which is how `DEFAULT_MODEL_KEY` drifted before. */
+	static readonly DEFAULT_DOC_ROOT = VaultLayout.DEFAULT_DOC_ROOT;
 
 	// inferProjectRoot moved node-side (it needs fs) → @kcd/node `inferProjectRoot`.
 
@@ -73,6 +85,8 @@ export class LensObject extends KCDPrimitive {
 	 *  axes at that one seam — the lens keeps the single control because its mode is a document attribute. */
 	protected toolModes: Record<string, SlotMode> = {};
 	protected projectRoot?: string;
+	/** This vault's folder name — see LensLoadOptions.docRoot. Undefined falls back to the default. */
+	protected docRoot?: string;
 	protected dredgeDepth = LENS_DEFAULT_DEPTH;
 	/** When set, the dredge follows conditional (non-`always`) links too, marking
 	 *  them not-included. See LensLoadOptions.eager — the display-vs-context axis. */
@@ -93,9 +107,10 @@ export class LensObject extends KCDPrimitive {
 		// HTML is the substrate: the lens hydrates through the validate-first parser ( a malformed
 		// document throws here, all-or-nothing ). fromHtml yields the right prototype via the
 		// hydrator table, so this is a LensObject with its policy already carried from the parse.
-		const lens = KCDPrimitive.fromHtml( raw, abs ) as LensObject;
+		const lens = KCDPrimitive.fromHtml( raw, abs, opts.docRoot ?? LensObject.DEFAULT_DOC_ROOT ) as LensObject;
 
 		lens.projectRoot = opts.projectRoot;
+		lens.docRoot     = opts.docRoot;
 		lens.read        = opts.read;
 		lens.eager       = opts.eager ?? false;
 
@@ -176,7 +191,7 @@ export class LensObject extends KCDPrimitive {
 			// `stubBlock`; a plan reached via some reference's own slot rides as a row inside that reference's
 			// routing table. This is the one deliberate type carve-out that outlives the general slot-mode
 			// ruling — it's the plan's volatility, not its role, that keeps its full text out of context.
-			if ( LensObject.classifyByPath( childAbs, this.projectRoot! ) === 'plan' ) continue;
+			if ( LensObject.classifyByPath( childAbs, this.projectRoot!, this.docRoot ) === 'plan' ) continue;
 
 			if ( visited.has( childAbs ) ) continue;
 			visited.add( childAbs );
@@ -184,7 +199,7 @@ export class LensObject extends KCDPrimitive {
 			let child: KCDPrimitive;
 			try {
 				const raw = this.read( childAbs );
-				child = KCDPrimitive.fromHtml( raw, childAbs );
+				child = KCDPrimitive.fromHtml( raw, childAbs, this.docRoot ?? LensObject.DEFAULT_DOC_ROOT );
 			} catch {
 				continue;
 			}

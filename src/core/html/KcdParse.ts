@@ -80,22 +80,27 @@ export interface ParsedArtifact extends SerializedArtifact {
 
 export const KcdParse = new class KcdParse {
 
-	/** Strict: a conforming document → its object model; a malformed one THROWS. The protected door. */
-	parse( html: string, path: string ): ParsedArtifact {
-		const report = KcdValidate.validate( html, { path } );
+	/** Strict: a conforming document → its object model; a malformed one THROWS. The protected door.
+	 *  `docRoot` is required and travels straight through to the validator — see the note there on why
+	 *  it cannot have a default. */
+	parse( html: string, path: string, docRoot: string ): ParsedArtifact {
+		const report = KcdValidate.validate( html, { path, docRoot } );
 		if ( !report.ok ) {
+			// The message names the FIRST error and says how many there are; `errors` carries all of
+			// them. Both, deliberately: a sentence can only ever hold one finding, and a caller that
+			// rebuilt its report from the sentence alone silently collapsed N errors into 1.
 			const first = report.errors[ 0 ];
 			throw new KCDValidationError(
 				`KCD document failed validation ( ${ report.errors.length } error(s) ): ${ first.code } @ ${ first.where } — ${ first.msg }`,
-				path, 'conforming KCD HTML', null
+				path, 'conforming KCD HTML', null, { errors: report.errors }
 			);
 		}
 		return this.build( HtmlTree.parse( html ), path );
 	}
 
 	/** Lenient: returns null instead of throwing — for the scanner's skip-and-continue sweep. */
-	tryParse( html: string, path: string ): ParsedArtifact | null {
-		const report = KcdValidate.validate( html, { path } );
+	tryParse( html: string, path: string, docRoot: string ): ParsedArtifact | null {
+		const report = KcdValidate.validate( html, { path, docRoot } );
 		if ( !report.ok ) return null;
 		return this.build( HtmlTree.parse( html ), path );
 	}

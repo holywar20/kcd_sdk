@@ -25,9 +25,9 @@ const FIXTURE = `<!DOCTYPE html>
 
 describe( 'KcdEmit — round trip against KcdParse', () => {
 	it( 'emits a document that validates clean', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const html = KcdEmit.emit( artifact );
-		const report = KcdValidate.validate( html );
+		const report = KcdValidate.validate( html , { docRoot: '_Claude' });
 		expect( report.errors ).toEqual( [] );
 		expect( report.ok ).toBe( true );
 	} );
@@ -38,11 +38,11 @@ describe( 'KcdEmit — round trip against KcdParse', () => {
 	// below was always a `toContain`, so only the name was ever wrong; that is precisely how the claim
 	// survived being repeated into the tool description an agent reads.
 	it( 'edited frontmatter rides through; untouched body content survives', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const edited = { ...artifact, frontmatter: { ...artifact.frontmatter, status: 'draft' } };
 
 		const html = KcdEmit.emit( edited );
-		const reparsed = KcdParse.parse( html, 'fixture.html' );
+		const reparsed = KcdParse.parse( html, 'fixture.html' , '_Claude');
 
 		expect( reparsed.frontmatter[ 'status' ] ).toBe( 'draft' );
 		expect( reparsed.frontmatter[ 'name' ] ).toBe( 'emit-fixture' );
@@ -54,15 +54,15 @@ describe( 'KcdEmit — round trip against KcdParse', () => {
 	// no occupancy, so taking its value from an href would make it the very thing it replaces
 	// ( KcdAddress.fieldValue ). The round trip is the guard: emit text, read text, same value back.
 	it( 'an address field round-trips as a real value, and never as a link', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const html = KcdEmit.emit( artifact );
-		const reparsed = KcdParse.parse( html, 'fixture.html' );
+		const reparsed = KcdParse.parse( html, 'fixture.html' , '_Claude');
 		expect( reparsed.frontmatter[ 'todo' ] ).toBe( '_Claude/logs/x/todo.html' );
 		expect( html ).not.toContain( 'data-kcd-field="todo" data-kcd-type="address" href=' );
 	} );
 
 	it( 'never mints a key the source frontmatter did not carry', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const html = KcdEmit.emit( artifact );
 		expect( html ).not.toContain( 'data-kcd-field="author"' );
 		expect( html ).not.toContain( 'data-kcd-field="origin"' );
@@ -81,7 +81,7 @@ describe( 'KcdEmit — round trip against KcdParse', () => {
 describe( 'KcdEmit — the two-tier stylesheet ( §8.1 )', () => {
 
 	it( 'emits the inline baseline in every document', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const html = KcdEmit.emit( artifact, '../kcd.css' );
 		expect( html ).toContain( '<style>' );
 		expect( html ).toContain( 'background:#0d0d1c' );
@@ -95,7 +95,7 @@ describe( 'KcdEmit — the two-tier stylesheet ( §8.1 )', () => {
 	 * construction, which is exactly why it needs an assertion rather than an eyeball.
 	 */
 	it( 'puts the baseline BEFORE the link, so the real stylesheet wins the cascade', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const html = KcdEmit.emit( artifact, '../../kcd.css' );
 		expect( html.indexOf( '<style>' ) ).toBeLessThan( html.indexOf( '<link rel="stylesheet"' ) );
 	} );
@@ -103,20 +103,20 @@ describe( 'KcdEmit — the two-tier stylesheet ( §8.1 )', () => {
 	// A baseline that grows into a second design language is the failure this tier exists to avoid,
 	// and prose in §8.1 cannot stop it. Ten lines is the stated ceiling; assert it.
 	it( 'keeps the baseline under ten lines', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const html  = KcdEmit.emit( artifact, 'kcd.css' );
 		const block = html.slice( html.indexOf( '<style>' ), html.indexOf( '</style>' ) );
 		expect( block.split( '\n' ).filter( l => l.trim() ).length ).toBeLessThanOrEqual( 10 );
 	} );
 
 	it( 'emits the tier-2 href exactly as given', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		expect( KcdEmit.emit( artifact, '../../kcd.css' ) ).toContain( '<link rel="stylesheet" href="../../kcd.css">' );
 		expect( KcdEmit.emit( artifact ) ).toContain( '<link rel="stylesheet" href="kcd.css">' );
 	} );
 
 	it( 'never emits a machine-bound href', () => {
-		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' );
+		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		expect( KcdEmit.emit( artifact, KcdEmit.cssHrefFor( 'references/patterns/x.html' ) ) ).not.toContain( 'file:///' );
 	} );
 } );

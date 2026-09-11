@@ -47,7 +47,7 @@ describe( 'KcdValidate — habit rules must be a list to project', () => {
 					<div data-kcd-head><span>Rule</span></div>
 					<div data-kcd-slot="rule"><span data-kcd-field="rule" data-kcd-type="text">Scripts are dev-only and never ship.</span></div>
 				</div>
-			</section>` ) );
+			</section>` ) , { docRoot: '_Claude' });
 
 		expect( report.errors.map( e => e.code ) ).toContain( 'habit-rules-not-projecting' );
 		expect( report.ok ).toBe( false );
@@ -57,7 +57,7 @@ describe( 'KcdValidate — habit rules must be a list to project', () => {
 		const report = KcdValidate.validate( habit( 'list-rules', `
 			<section data-kcd-section="rules"><h3>Rules</h3>
 				<ul><li>write the whole path from root every time</li></ul>
-			</section>` ) );
+			</section>` ) , { docRoot: '_Claude' });
 
 		expect( codes( report ) ).not.toContain( 'habit-rules-not-projecting' );
 	} );
@@ -66,7 +66,7 @@ describe( 'KcdValidate — habit rules must be a list to project', () => {
 	// content, so the rule must stay silent — otherwise it grades authorship rather than reporting loss.
 	it( 'no rules section at all is silent, not an error', () => {
 		const report = KcdValidate.validate( habit( 'no-rules', `
-			<section data-kcd-section="action"><h3>Action</h3><p>do the thing</p></section>` ) );
+			<section data-kcd-section="action"><h3>Action</h3><p>do the thing</p></section>` ) , { docRoot: '_Claude' });
 
 		expect( codes( report ) ).not.toContain( 'habit-rules-not-projecting' );
 	} );
@@ -76,7 +76,7 @@ describe( 'KcdValidate — habit rules must be a list to project', () => {
 	// `items` ), so the check is anchored on the absence of list items rather than on seeing a table.
 	it( 'prose in the rules section fails for the same reason a table does', () => {
 		const report = KcdValidate.validate( habit( 'prose-rules', `
-			<section data-kcd-section="rules"><h3>Rules</h3><p>never edit the whitelist on your own initiative</p></section>` ) );
+			<section data-kcd-section="rules"><h3>Rules</h3><p>never edit the whitelist on your own initiative</p></section>` ) , { docRoot: '_Claude' });
 
 		expect( report.errors.map( e => e.code ) ).toContain( 'habit-rules-not-projecting' );
 	} );
@@ -90,7 +90,7 @@ describe( 'KcdValidate — a projected field may not defer to a section that is 
 	it( 'an action naming a non-projected section WARNS', () => {
 		const report = KcdValidate.validate( habit( 'template-pointer', `
 			<section data-kcd-section="action"><h3>Action</h3><p>write the chart — see the format section below for the exact shape</p></section>
-			<section data-kcd-section="format"><h3>Format</h3><p>the table template</p></section>` ) );
+			<section data-kcd-section="format"><h3>Format</h3><p>the table template</p></section>` ) , { docRoot: '_Claude' });
 
 		const hit = report.warnings.find( w => w.code === 'habit-nonprojecting-ref' );
 		expect( hit ).toBeDefined();
@@ -105,7 +105,7 @@ describe( 'KcdValidate — a projected field may not defer to a section that is 
 	it( 'an action naming its own params section is silent — params ride the projection', () => {
 		const report = KcdValidate.validate( habit( 'whitelist-pointer', `
 			<section data-kcd-section="action"><h3>Action</h3><p>check the command against private-habit-params · whitelist below</p></section>
-			<section data-kcd-section="private-habit-params"><h3>Private habit params</h3><p>ships empty</p></section>` ) );
+			<section data-kcd-section="private-habit-params"><h3>Private habit params</h3><p>ships empty</p></section>` ) , { docRoot: '_Claude' });
 
 		expect( codes( report ) ).not.toContain( 'habit-nonprojecting-ref' );
 	} );
@@ -116,7 +116,7 @@ describe( 'KcdValidate — a projected field may not defer to a section that is 
 		const report = KcdValidate.validate( habit( 'quiet-extras', `
 			<section data-kcd-section="action"><h3>Action</h3><p>place the script by species and stamp it</p></section>
 			<section data-kcd-section="promotion"><h3>The promotion ladder</h3><p>junk to diagnostic to dev-utility</p></section>
-			<section data-kcd-section="references"><h3>References</h3><p>see also</p></section>` ) );
+			<section data-kcd-section="references"><h3>References</h3><p>see also</p></section>` ) , { docRoot: '_Claude' });
 
 		expect( codes( report ) ).not.toContain( 'habit-nonprojecting-ref' );
 	} );
@@ -128,7 +128,7 @@ describe( 'KcdValidate — a projected field may not defer to a section that is 
 	it( 'a projected field pointing at ANOTHER projected field is fine', () => {
 		const report = KcdValidate.validate( habit( 'rule-backref', `
 			<section data-kcd-section="action"><h3>Action</h3><p>run it when every rule above is satisfied</p></section>
-			<section data-kcd-section="rules"><h3>Rules</h3><ul><li>effects must die with the session</li></ul></section>` ) );
+			<section data-kcd-section="rules"><h3>Rules</h3><ul><li>effects must die with the session</li></ul></section>` ) , { docRoot: '_Claude' });
 
 		expect( codes( report ) ).not.toContain( 'habit-nonprojecting-ref' );
 	} );
@@ -139,7 +139,7 @@ describe( 'KcdValidate — a projected field may not defer to a section that is 
 		const report = KcdValidate.validate( habit( 'two-pointers', `
 			<section data-kcd-section="action"><h3>Action</h3><p>write the chart described under format</p></section>
 			<section data-kcd-section="rules"><h3>Rules</h3><ul><li>follow format exactly</li></ul></section>
-			<section data-kcd-section="format"><h3>Format</h3><p>the table template</p></section>` ) );
+			<section data-kcd-section="format"><h3>Format</h3><p>the table template</p></section>` ) , { docRoot: '_Claude' });
 
 		const where = report.warnings.filter( w => w.code === 'habit-nonprojecting-ref' ).map( w => w.where );
 		expect( where ).toEqual( [ 'section:action', 'section:rules' ] );

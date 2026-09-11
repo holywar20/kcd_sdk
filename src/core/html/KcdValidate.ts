@@ -79,7 +79,23 @@ export const KcdValidate = new class KcdValidate {
 	 * Validate one artifact.
 	 * @param input  an HTML string, a real DOM element/Document, or an already-normalized HtmlEl root.
 	 */
-	validate( input: string | HtmlEl | any, opts?: { path?: string } ): ValidateReport {
+	/**
+	 * `docRoot` IS REQUIRED, and that is the whole design decision.
+	 *
+	 * It could have been optional with a `_Claude` default, and it was — implicitly, inside
+	 * `isEphemeralHref`. That silent default made the ephemeral-link law wrong in BOTH directions in
+	 * any vault named otherwise: a real link into scratch space went unreported, while a stale
+	 * `_Claude/…` href was reported for the wrong reason. It reached writes too, because `kcd_save`
+	 * validates. A default here cannot be right, because the answer depends entirely on a fact only
+	 * the caller has.
+	 *
+	 * So the caller states it. A caller with a vault passes its `docRoot`; a caller validating
+	 * in-memory HTML that belongs to no vault passes `VaultLayout.DEFAULT_DOC_ROOT` — which is not
+	 * more typing for its own sake, it is the difference between a choice and an accident. The whole
+	 * class of bug this fixes looks identical to working code right up until someone names a folder
+	 * something else.
+	 */
+	validate( input: string | HtmlEl | any, opts: { path?: string; docRoot: string } ): ValidateReport {
 		const root: HtmlEl =
 			typeof input === 'string'              ? HtmlTree.parse( input )   :
 			input && input.nodeType !== undefined  ? HtmlTree.fromDOM( input ) :
@@ -105,7 +121,7 @@ export const KcdValidate = new class KcdValidate {
 		const name = this.checkFrontmatter( article, rootType, err, warn );
 		this.checkStructure( article, rootType, err, warn );
 		this.checkBody( article, err );
-		this.checkAddressing( article, err, opts?.path );
+		this.checkAddressing( article, err, opts.docRoot, opts?.path );
 		if ( rootType === 'habit' ) this.checkHabit( article, err, warn );
 
 		return this.result( rootType, name, errors, warnings );
@@ -412,11 +428,11 @@ export const KcdValidate = new class KcdValidate {
 	 *     user's vault at all, so the assertion a link makes is false by construction — regardless of
 	 *     whether the target happens to exist on the authoring machine.
 	 */
-	checkAddressing( article: HtmlEl, err: Emit, selfPath?: string ): void {
+	checkAddressing( article: HtmlEl, err: Emit, docRoot: string, selfPath?: string ): void {
 		// The ban binds LIBRARY artifacts only. A document that itself lives in ephemeral space never
 		// ships either, so its links to its own neighbourhood assert nothing false. Without the path we
 		// cannot tell, and the safe default is to check — an unknown document is treated as shippable.
-		const selfEphemeral = selfPath !== undefined && VaultLayout.isEphemeralHref( selfPath );
+		const selfEphemeral = selfPath !== undefined && VaultLayout.isEphemeralHref( selfPath, docRoot );
 		for ( const el of HtmlTree.collect( article, d => KcdAddress.isAddress( d ) ) ) {
 			const value = KcdAddress.addressOf( el );
 			if ( !KcdAddress.isAddressValue( value ) )
@@ -429,7 +445,7 @@ export const KcdValidate = new class KcdValidate {
 			const href = ( HtmlTree.get( a, 'href' ) ?? '' ).trim();
 			if ( href === '' || href.startsWith( '#' ) || href.includes( '{' ) ) continue;
 			if ( /^(?:https?:)?\/\//.test( href ) || /^mailto:/.test( href ) )   continue;
-			if ( VaultLayout.isEphemeralHref( href ) )
+			if ( VaultLayout.isEphemeralHref( href, docRoot ) )
 				err( 'ephemeral-link', 'address', `"${ href }" links into ephemeral space ( ${ VaultLayout.ephemeralDirs().join( ', ' ) } ), which is not installed into a vault — use <code data-kcd-address> instead` );
 		}
 	}

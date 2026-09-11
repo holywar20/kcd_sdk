@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { KCDPrimitive } from '../primitives';
+import { KCDPrimitive, KCDValidationError, LensObject } from '../primitives';
 import type { SlotMode, LinkEntry, AddressEntry } from '../primitives';
 import type { Vault } from './Vault';
 import type { ArtifactRef } from '../core';
@@ -9,10 +9,14 @@ import { InstallManifest, VaultLayout, KcdEmit } from '../core';
 /** Where the seed source lives, vault-relative — protocol §10's one payload-per-host document. */
 const ROOT_CONTEXT_PATH = 'root-context.html';
 
-/** The deployed convention every href in this project uses. `Vault` does not expose `docRoot`
- *  publicly ( it is private on the class ), so this is not DERIVED — same choice
- *  `VaultDeploy._navIndexHtml` already made, for the same reason. */
-const DOC_ROOT_PREFIX = '_Claude';
+/**
+ * THE DOC ROOT IS THE VAULT'S, NOT A CONSTANT HERE. This file used to hold
+ * `const DOC_ROOT_PREFIX = '_Claude'` because `Vault.docRoot` was private — a literal asserting one
+ * vendor owns the folder, in a system that is not vendor-specific, with nowhere to override it. The
+ * cost was not theoretical: `lensIndex` wrote `_Claude/lenses/…` hrefs into the entry document of a
+ * vault actually named `_kcd`, and nothing reported the mismatch. `docRoot` is a project VARIABLE;
+ * it is now read off the vault at every site that needs it.
+ */
 
 /**
  * One validation finding — the merged currency of the two health axes below. Carries
@@ -345,16 +349,26 @@ export class VaultUtilities {
 			const rel = vault.toVaultRel( filePath );
 
 			try {
-				const artifact = KCDPrimitive.fromHtml( vault.read( filePath ), vault.toAbs( filePath ) );
+				const artifact = KCDPrimitive.fromHtml( vault.read( filePath ), vault.toAbs( filePath ), vault.docRoot );
 
 				for ( const issue of artifact.typeCheck() )
 					issues.push( { path: rel, ...issue } );
 			} catch ( e ) {
-				issues.push( {
-					path:     rel,
-					severity: 'error',
-					message:  e instanceof Error ? e.message : String( e ),
-				} );
+				// ONE ISSUE PER ERROR, not one per document. A validation throw carries every finding on
+				// `errors`; its `message` can only name the first, and building a single issue from that
+				// sentence made a four-error document report as one. The tally is what a repair loop reads,
+				// so an undercount does not look like an undercount — it looks like progress, and the sweep
+				// reads green while the document is still broken.
+				if ( e instanceof KCDValidationError && e.errors.length > 0 ) {
+					for ( const err of e.errors )
+						issues.push( { path: rel, severity: 'error', message: `${ err.code } @ ${ err.where } — ${ err.msg }` } );
+				} else {
+					issues.push( {
+						path:     rel,
+						severity: 'error',
+						message:  e instanceof Error ? e.message : String( e ),
+					} );
+				}
 			}
 		};
 
@@ -543,7 +557,7 @@ export class VaultUtilities {
 	 */
 	static links( vault: Vault, path: string ): LinksResult {
 		const abs      = vault.toAbs( path );
-		const artifact = KCDPrimitive.fromHtml( vault.read( path ), abs );
+		const artifact = KCDPrimitive.fromHtml( vault.read( path ), abs, vault.docRoot );
 		const outbound = artifact.getLinks();
 
 		// Addresses ride their own list, never mixed into outbound — collapsing them would hand the
@@ -573,7 +587,7 @@ export class VaultUtilities {
 	 * later.
 	 */
 	static parseSeeds( vault: Vault ): SeedBlock[] {
-		return VaultUtilities.parseSeedsFrom( vault.read( ROOT_CONTEXT_PATH ) );
+		return VaultUtilities.parseSeedsFrom( vault.read( ROOT_CONTEXT_PATH ), vault.docRoot );
 	}
 
 	/**
@@ -606,7 +620,7 @@ export class VaultUtilities {
 	 * install on "the folder containing CLAUDE.md" without this would mean hardcoding that filename in
 	 * the CLI, and there would then be two lists of host targets that could disagree.
 	 */
-	static parseSeedsFrom( html: string ): SeedBlock[] {
+	static parseSeedsFrom( html: string, docRoot?: string ): SeedBlock[] {
 		const out: SeedBlock[] = [];
 		const scriptRe = /<script\s+([^>]*?)>([\s\S]*?)<\/script>/g;
 
@@ -620,9 +634,30 @@ export class VaultUtilities {
 			const mode   = /data-kcd-mode="([^"]+)"/.exec( attrs )?.[ 1 ] as SeedBlock[ 'mode' ] | undefined;
 			if ( !host || !target ) continue; // malformed seed — both are protocol-required
 
-			out.push( { host, target, mode: mode ?? 'prepend', payload: body.trim() } );
+			out.push( { host, target, mode: mode ?? 'prepend', payload: VaultUtilities.forDocRoot( body.trim(), docRoot ) } );
 		}
 		return out;
+	}
+
+	/**
+	 * A seed payload rewritten for the vault it is actually being installed beside.
+	 *
+	 * The payload is prose an agent reads as instructions — "KCD tool paths resolve against
+	 * `_Claude/`" — and it ships from the bundle naming the DEFAULT. Installed unchanged into a vault
+	 * called something else, it tells every agent that opens the project to look in a folder that is
+	 * not there, and the file it says that in is the first thing they read. Found 2026-09-10: an
+	 * install with `--doc-root _kcd` produced a correct vault and a `CLAUDE.md` pointing at `_Claude`.
+	 *
+	 * A BLUNT REPLACEMENT IS THE RIGHT INSTRUMENT HERE, and it is worth saying why rather than
+	 * reaching for a placeholder token. Where the vault IS the default this is the identity function,
+	 * so it cannot misfire on the common case; where it is not, every occurrence of the default in
+	 * this payload is wrong by construction, because the payload's whole subject is where this
+	 * project's vault lives. A `{docRoot}` placeholder would buy precision the input cannot use and
+	 * would leave a brace in the file for anyone who reads the seed source directly.
+	 */
+	private static forDocRoot( payload: string, docRoot?: string ): string {
+		if ( !docRoot || docRoot === LensObject.DEFAULT_DOC_ROOT ) return payload;
+		return payload.split( LensObject.DEFAULT_DOC_ROOT ).join( docRoot );
 	}
 
 	/**
@@ -788,7 +823,7 @@ export class VaultUtilities {
 				// underscore ) — using frontmatter here would put an unresolvable slug in the one
 				// table whose whole job is telling an agent what to type.
 				what:  path.basename( path.dirname( f.relativePath ) ),
-				where: `${ DOC_ROOT_PREFIX }/${ f.relativePath }`.replace( /\\/g, '/' ),
+				where: `${ vault.docRoot }/${ f.relativePath }`.replace( /\\/g, '/' ),
 				why:   typeof f.frontmatter[ 'description' ] === 'string' ? f.frontmatter[ 'description' ] as string : '',
 			} ) )
 			.sort( ( a, b ) => a.what.localeCompare( b.what ) );
@@ -954,7 +989,7 @@ export class VaultUtilities {
 				continue;
 			}
 
-			if ( vault.exists( `${ DOC_ROOT_PREFIX }/${ stripped }` ) ) {
+			if ( vault.exists( `${ vault.docRoot }/${ stripped }` ) ) {
 				const diverged = vault.read( rel ) !== vault.read( stripped );
 				actions.push( { kind: 'delete-duplicate', kcdPath: rel, deployedPath: stripped, diverged } );
 				continue;
@@ -997,7 +1032,7 @@ export class VaultUtilities {
 			try {
 				if ( action.kind === 'delete-duplicate' ) {
 					const kcdAbs  = vault.toAbs( action.kcdPath );
-					const newHref = `${ DOC_ROOT_PREFIX }/${ action.deployedPath }`;
+					const newHref = `${ vault.docRoot }/${ action.deployedPath }`;
 					// Both passes, exactly as `move()` does it — this IS a move with the destination
 					// already occupied, so it must see the same references a real move would.
 					const found = vault.healOccurrences( kcdAbs, newHref );

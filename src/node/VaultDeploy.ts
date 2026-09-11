@@ -48,6 +48,10 @@ export interface DeployReport {
  *  `substrateSource` pointed at a live checkout ( dev, self-hosting ) might. */
 const COPY_EXCLUDE = [ '.git' ]
 
+/** File kinds whose CONTENT names the vault, and so must be retargeted rather than byte-copied.
+ *  Everything else is copied verbatim — see `_fillFile` on why this is an allowlist. */
+const TEXT_SUFFIXES = [ '.html', '.htm', '.md', '.css', '.js', '.json' ]
+
 export class VaultDeploy {
 
 	/** What this vault is missing, changing nothing. The 4.e maintenance read: point it at any
@@ -83,8 +87,8 @@ export class VaultDeploy {
 			if( !present && write ) fs.mkdirSync( abs, { recursive: true } )
 		}
 
-		items.push( ...VaultDeploy._manifest( vault, opts?.substrateSource, write ) )
-		items.push( VaultDeploy._navIndex( vault, write ) )
+		items.push( ...VaultDeploy._manifest( vault, docRoot, opts?.substrateSource, write ) )
+		items.push( VaultDeploy._navIndex( vault, docRoot, write ) )
 		items.push( VaultDeploy._commandDeck( vault, write ) )
 
 		const missing = items.filter( ( i ) => !i.present ).length
@@ -100,7 +104,7 @@ export class VaultDeploy {
 	 * cannot find part of its source should say so plainly and keep filling everything else, because
 	 * one missing optional row is not a reason to leave the rest of the vault half-built.
 	 */
-	private static _manifest( vault: string, source: string | undefined, write: boolean ): DeployItem[] {
+	private static _manifest( vault: string, docRoot: string, source: string | undefined, write: boolean ): DeployItem[] {
 		const items: DeployItem[] = []
 
 		for( const entry of InstallManifest.all() ) {
@@ -133,20 +137,73 @@ export class VaultDeploy {
 			if( gaps.length > 0 && write ) {
 				if( isDir ) {
 					fs.mkdirSync( dest, { recursive: true } )
-					fs.cpSync( src, dest, {
-						recursive: true,
-						force:     false,          // never overwrite — this fills, it does not reset
-						errorOnExist: false,
-						filter:    ( s ) => !COPY_EXCLUDE.includes( path.basename( s ) )
-					} )
+					VaultDeploy.fill( src, dest, docRoot )
 				} else {
 					fs.mkdirSync( path.dirname( dest ), { recursive: true } )
-					fs.copyFileSync( src, dest )
+					VaultDeploy._fillFile( src, dest, docRoot )
 				}
 			}
 			items.push( item )
 		}
 		return items
+	}
+
+	/**
+	 * Fill `dest` from `source`, retargeting bundled text at the vault it is actually landing in.
+ *
+ * PUBLIC because the vault is not the only thing an install copies out of the bundle. The bundled
+ * SKILLS land in `.claude/skills/` and hardcode `_Claude/…` the same way — and those are
+ * instructions an agent READS AND ACTS ON ( "read `_Claude/audits/survey/index.json`" ), so a stale
+ * path there sends an agent hunting a folder that does not exist. One door for "copy a bundled tree
+ * into this project, retargeted", rather than a second copy loop that would drift from this one.
+	 *
+	 * THIS REPLACED `fs.cpSync( recursive )`, and the reason is the whole point: cpSync copies BYTES,
+	 * and the bundled corpus is not byte-portable. Its 56 documents hardcode `_Claude/…` in every
+	 * internal link — 281 occurrences — so a verbatim copy into a vault named anything else installs a
+	 * library whose every link points at a folder that does not exist. Measured on a fresh
+	 * `--doc-root _kcd` install: 111 dangling-link warnings, all of them this, on day one.
+	 *
+	 * Semantics are cpSync's, preserved deliberately: never overwrite ( this FILLS, it does not reset ),
+	 * skip the excluded names, create directories as needed. The only change is that a text file is
+	 * read, retargeted and written rather than copied.
+	 */
+	static fill( source: string, dest: string, docRoot: string ): void {
+		// CREATE THE DESTINATION, because `cpSync( recursive )` did and this replaced it. Dropping that
+		// broke the skills install ( ENOENT on the first file ) while the vault install kept working —
+		// the vault caller happened to mkdir the destination itself, so only one of the two callers
+		// showed it. A replacement inherits every guarantee of what it replaced, including the quiet ones.
+		fs.mkdirSync( dest, { recursive: true } )
+
+		for( const entry of fs.readdirSync( source, { withFileTypes: true } ) ) {
+			if( COPY_EXCLUDE.includes( entry.name ) ) continue
+			const from = path.join( source, entry.name )
+			const to   = path.join( dest, entry.name )
+
+			if( entry.isDirectory() ) {
+				fs.mkdirSync( to, { recursive: true } )
+				VaultDeploy.fill( from, to, docRoot )
+				continue
+			}
+			VaultDeploy._fillFile( from, to, docRoot )
+		}
+	}
+
+	/**
+	 * One file, filled. A KCD-text file is retargeted; anything else is copied byte-for-byte.
+	 *
+	 * THE ALLOWLIST IS DELIBERATE, and it is an allowlist rather than a blocklist because the failure
+	 * modes are not symmetrical: missing a text type costs some stale links a person can see and fix,
+	 * while rewriting a binary by decoding it as UTF-8 corrupts a file silently. The bundle is all
+	 * text today; the day it carries a font or an image, this stays correct without being revisited.
+	 */
+	private static _fillFile( source: string, dest: string, docRoot: string ): void {
+		if( fs.existsSync( dest ) ) return          // never overwrite — this fills, it does not reset
+
+		if( !TEXT_SUFFIXES.some( ( s ) => source.toLowerCase().endsWith( s ) ) ) {
+			fs.copyFileSync( source, dest )
+			return
+		}
+		fs.writeFileSync( dest, VaultLayout.retargetDocRoot( fs.readFileSync( source, 'utf-8' ), docRoot ), 'utf-8' )
 	}
 
 	/** Every file under `source` ( excluding the copy-excluded names ) with no counterpart under
@@ -170,13 +227,13 @@ export class VaultDeploy {
 	/** The vault's root nav-index — the entry map a reader ( human or agent ) lands on. Written only
 	 *  when absent, and deliberately minimal: it is a starting point the project grows, not a
 	 *  generated artifact that would fight being edited. */
-	private static _navIndex( vault: string, write: boolean ): DeployItem {
+	private static _navIndex( vault: string, docRoot: string, write: boolean ): DeployItem {
 		const rel     = VaultLayout.NAV_INDEX_FILE
 		const dest    = path.join( vault, rel )
 		const present = fs.existsSync( dest )
 		const item: DeployItem = { kind: 'file', path: rel, present, note: 'the vault entry map' }
 		if( present || !write ) return item
-		fs.writeFileSync( dest, VaultDeploy._navIndexHtml(), 'utf-8' )
+		fs.writeFileSync( dest, VaultDeploy._navIndexHtml( docRoot ), 'utf-8' )
 		return item
 	}
 
@@ -202,14 +259,33 @@ export class VaultDeploy {
 		return item
 	}
 
-	private static _navIndexHtml(): string {
+	/**
+	 * The entry map's HTML. Two things here are easy to get wrong and were both wrong:
+	 *
+	 * THE DOC ROOT IS A PARAMETER. It was the literal `_Claude`, so an install anywhere else emitted
+	 * fifteen links into a folder that does not exist — in the one file a reader opens first.
+	 *
+	 * AN EPHEMERAL ROW IS AN ADDRESS, NOT A LINK ( §1.1 ). `work/`, `logs/`, `audits/` and the rest
+	 * are not installed into a vault, so a LINK to one asserts something false by construction — and
+	 * the validator says so, with the very `ephemeral-link` code this generator was minting six of
+	 * into every fresh vault. The generated file could not pass the project's own validator. Rows for
+	 * those directories still appear ( the map would be a lie by omission without them ); they carry
+	 * their location as an address, which asserts nothing about occupancy.
+	 */
+	private static _navIndexHtml( docRoot: string ): string {
 		const rows = VaultLayout.all()
 			.filter( ( e ) => !e.dir.includes( '/' ) )
-			.map( ( e ) => `\t\t\t<div data-kcd-slot="link">
+			.map( ( e ) => {
+				const target = `${ docRoot }/${ e.dir }/`
+				const where  = VaultLayout.ephemeralDirs().includes( e.dir )
+					? `<span data-kcd-field="where" data-kcd-type="address">${ target }</span>`
+					: `<a    data-kcd-field="where" data-kcd-type="path" href="${ target }">${ e.dir }</a>`
+				return `\t\t\t<div data-kcd-slot="link">
 				<span data-kcd-field="what"  data-kcd-type="text">${ e.dir }</span>
-				<a    data-kcd-field="where" data-kcd-type="path" href="_Claude/${ e.dir }/">${ e.dir }</a>
+				${ where }
 				<span data-kcd-field="why"   data-kcd-type="text">${ e.purpose }</span>
-			</div>` )
+			</div>`
+			} )
 			.join( '\n' )
 
 		return `<!DOCTYPE html>

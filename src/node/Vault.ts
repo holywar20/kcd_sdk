@@ -68,7 +68,10 @@ export interface HealPlan {
  */
 export interface RefIssue {
 	path:     string;
-	severity: 'warn';
+	/** `warn` for an ordinary dangling link — advisory, and often just a target not written yet.
+	 *  `error` is reserved for a WRONG-VAULT reference, which is a different kind of fact: the
+	 *  document is not pointing at something missing, it is pointing into a different vault. */
+	severity: 'warn' | 'error';
 	message:  string;
 	ref:      string;
 }
@@ -90,7 +93,14 @@ export class Vault {
 	/** Absolute vault root — projectRoot/docRoot, resolved once. */
 	readonly root: string;
 
-	constructor( private projectRoot: string, private docRoot: string = LensObject.DEFAULT_DOC_ROOT ) {
+	/**
+	 * WHICH FOLDER THIS VAULT IS, readable. `_Claude` is a DEFAULT — the value when nobody declared
+	 * one — never a fact about the system, and a consumer that needs to write a vault-rooted href
+	 * ( `${ docRoot }/lenses/x.html` ) has to ask rather than assume. It was private, so three call
+	 * sites in `VaultUtilities` kept a `DOC_ROOT_PREFIX = '_Claude'` of their own and emitted
+	 * `_Claude/…` into every vault regardless of its real name.
+	 */
+	constructor( readonly projectRoot: string, readonly docRoot: string = LensObject.DEFAULT_DOC_ROOT ) {
 		this.root = path.resolve( path.join( projectRoot, docRoot ) );
 	}
 
@@ -219,7 +229,7 @@ export class Vault {
 
 	/** Scan the whole vault, returning every artifact file with parsed frontmatter and links. */
 	scan(): ScannedFile[] {
-		return scan( this.root );
+		return scan( this.root, this.docRoot );
 	}
 
 	/**
@@ -273,11 +283,25 @@ export class Vault {
 	 * than an artifact for counting purposes, but it is a real document that can be malformed, and a
 	 * checker that skips it grades less than it claims to.
 	 *
+	 * THE VAULT ROOT IS WALKED TOO, and it was not until 2026-09-10. The walk covered the indexed
+	 * DIRECTORIES only, and the root is not one of them — so every document sitting directly at the
+	 * vault root was invisible to every whole-vault sweep ever run. That is not a marginal set: it is
+	 * `root.html`, `root-context.html`, `kcd_framework.html` and the vault's own `nav-index.html` —
+	 * the entry document an agent loads first, the seed source every host entry file is generated
+	 * from, and the map a human opens first. The most-read documents in the vault were the only ones
+	 * held to no standard, and the sweep reported clean over them. Measured: a root `nav-index.html`
+	 * carrying six errors never appeared in a sweep of its own vault, and validated only when named.
+	 *
+	 * Root files ONLY — the root's subdirectories are not re-walked here. The indexed ones are
+	 * covered by the loop below, and the rest are ephemeral space, which is deliberately not graded
+	 * ( see `isLibraryPath` ). Walking the root recursively would grade `work/` and `logs/`, undoing
+	 * that gate from the other side.
+	 *
 	 * Total, like the counter: an unreadable directory costs that directory's files, not the walk.
 	 */
 	documentPaths(): string[] {
 		const out: string[] = [];
-		const walk = ( dir: string ): void => {
+		const walk = ( dir: string, recurse: boolean ): void => {
 			let entries: fs.Dirent[];
 			try {
 				entries = fs.readdirSync( dir, { withFileTypes: true } );
@@ -286,12 +310,13 @@ export class Vault {
 			}
 			for ( const entry of entries ) {
 				const full = path.join( dir, entry.name );
-				if ( entry.isDirectory() ) { walk( full ); continue; }
+				if ( entry.isDirectory() ) { if ( recurse ) walk( full, true ); continue; }
 				if ( !/\.html?$/i.test( entry.name ) ) continue;
 				out.push( this.toVaultRel( full ) );
 			}
 		};
-		for ( const dir of VaultLayout.indexedDirs() ) walk( path.join( this.root, dir ) );
+		walk( this.root, false );
+		for ( const dir of VaultLayout.indexedDirs() ) walk( path.join( this.root, dir ), true );
 		return out;
 	}
 
@@ -317,6 +342,7 @@ export class Vault {
 	loadLens( vaultRelative: string, opts?: { depth?: number; eager?: boolean } ): LensObject {
 		return loadLensFromDisk( this.toAbs( vaultRelative ), {
 			projectRoot: this.projectRoot,
+			docRoot:     this.docRoot,
 			depth:       opts?.depth,
 			eager:       opts?.eager,
 		} );
@@ -893,7 +919,26 @@ export class Vault {
 				const href = link.href;
 				if ( href.startsWith( '#' ) || href.startsWith( 'http://' ) || href.startsWith( 'https://' ) ) continue;
 				if ( href.includes( '{' ) ) continue;
-				if ( !fs.existsSync( this.resolveHref( href ) ) )
+				if ( fs.existsSync( this.resolveHref( href ) ) ) continue;
+
+				// A WRONG-VAULT REFERENCE IS AN ERROR, not a dangling link, and the two are worth
+				// separating because they call for opposite responses: a dangling link usually means the
+				// target has not been written yet ( wait, or write it ), while this means the document
+				// believes it lives in a vault it does not live in ( repair it, now, before anything
+				// follows the link ).
+				//
+				// PROVEN, NOT GUESSED. Swap the href's leading segment for THIS vault's name: if the
+				// target then exists, the reference was right about everything except which vault it is
+				// in, and that is evidence rather than a heuristic. A link to project code
+				// ( `starmind/src/…` ) fails that test and stays an ordinary warning, which is what keeps
+				// this from flagging every href that happens to start with a directory name.
+				const elsewhere = this._wrongVaultTarget( href );
+				if ( elsewhere )
+					issues.push( {
+						path: f.relativePath, severity: 'error', ref: href,
+						message: `wrong vault: "${ href }" names "${ href.split( '/' )[ 0 ] }", but this vault is "${ this.docRoot }" — the target exists at "${ elsewhere }"`
+					} );
+				else
 					issues.push( { path: f.relativePath, severity: 'warn', message: `link target missing on disk: "${ href }"`, ref: href } );
 			}
 
@@ -909,6 +954,23 @@ export class Vault {
 			}
 		}
 		return issues;
+	}
+
+	/**
+	 * An href that would resolve if its leading segment named THIS vault — the proof behind the
+	 * wrong-vault error above. Returns the corrected href, or null when swapping the segment changes
+	 * nothing or still resolves to nothing.
+	 *
+	 * Deliberately narrow. It answers one question with disk evidence rather than inferring intent
+	 * from the shape of a name, so a project path, an asset, and a genuinely unwritten target all fall
+	 * through to the ordinary warning.
+	 */
+	private _wrongVaultTarget( href: string ): string | null {
+		const parts = href.replace( /\\/g, '/' ).replace( /^\.\//, '' ).split( '/' );
+		if ( parts.length < 2 || parts[ 0 ] === '' || parts[ 0 ] === this.docRoot ) return null;
+
+		const corrected = [ this.docRoot, ...parts.slice( 1 ) ].join( '/' );
+		return fs.existsSync( this.resolveHref( corrected ) ) ? corrected : null;
 	}
 
 	/**

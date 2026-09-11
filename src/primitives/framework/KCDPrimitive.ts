@@ -78,8 +78,11 @@ export class KCDPrimitive {
 	 * `fromSerialized` dispatch builds the correct prototype with no md parse pipeline. A malformed
 	 * document never reaches here — `KcdParse.parse` throws, all-or-nothing.
 	 */
-	static fromHtml( html: string, absPath: string ): KCDPrimitive {
-		return KCDPrimitive.fromSerialized( KcdParse.parse( html, absPath ) );
+	/** `docRoot` names the vault this document belongs to — required, no default. Every document read
+	 *  passes through here, so this is the seam that decides whether the validator can tell a link into
+	 *  scratch space from a link into a folder that merely shares a name. */
+	static fromHtml( html: string, absPath: string, docRoot: string ): KCDPrimitive {
+		return KCDPrimitive.fromSerialized( KcdParse.parse( html, absPath, docRoot ) );
 	}
 
 	/**

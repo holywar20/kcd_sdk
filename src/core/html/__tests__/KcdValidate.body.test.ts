@@ -28,7 +28,7 @@ ${ body }</article>
 describe( 'KcdValidate — the body rule', () => {
 
 	it( 'frontmatter and nothing else is an ERROR, so kcd_save refuses the write', () => {
-		const report = KcdValidate.validate( doc( 'reference', 'empty-shell', '' ) );
+		const report = KcdValidate.validate( doc( 'reference', 'empty-shell', '' ) , { docRoot: '_Claude' });
 
 		expect( report.ok ).toBe( false );
 		expect( report.errors.map( e => e.code ) ).toEqual( [ 'empty-body' ] );
@@ -37,14 +37,14 @@ describe( 'KcdValidate — the body rule', () => {
 	// The frontmatter block's own <dt>/<dd> cells are elements inside the article. If the rule counted
 	// them the empty document would pass and the rule would assert nothing at all.
 	it( 'the frontmatter block does not count as its own body', () => {
-		const report = KcdValidate.validate( doc( 'reference', 'cells-are-not-body', '' ) );
+		const report = KcdValidate.validate( doc( 'reference', 'cells-are-not-body', '' ) , { docRoot: '_Claude' });
 
 		expect( report.errors.some( e => e.code === 'empty-body' ) ).toBe( true );
 	} );
 
 	// The ruling, pinned: an h1 alone is thin, not broken. Anything stricter grades authorship.
 	it( 'frontmatter plus a bare <h1> PASSES', () => {
-		const report = KcdValidate.validate( doc( 'reference', 'title-only', '<h1>Title only</h1>\n' ) );
+		const report = KcdValidate.validate( doc( 'reference', 'title-only', '<h1>Title only</h1>\n' ) , { docRoot: '_Claude' });
 
 		expect( report.errors ).toEqual( [] );
 		expect( report.ok ).toBe( true );
@@ -54,7 +54,7 @@ describe( 'KcdValidate — the body rule', () => {
 		const body = '<h1>Normal Reference</h1>\n'
 			+ '<p>A document with an actual body — prose, a heading, and a named section.</p>\n'
 			+ '<section data-kcd-section="location"><h2>Location</h2><p>It lives here.</p></section>\n';
-		const report = KcdValidate.validate( doc( 'reference', 'normal-reference', body ) );
+		const report = KcdValidate.validate( doc( 'reference', 'normal-reference', body ) , { docRoot: '_Claude' });
 
 		expect( report.errors ).toEqual( [] );
 		expect( report.ok ).toBe( true );
@@ -65,7 +65,7 @@ describe( 'KcdValidate — the body rule', () => {
 	// adding a second exemption would only duplicate that. Pinned here so a future reader who goes
 	// looking for the missing carve-out finds the reason instead of a hole.
 	it( 'a template is exempt — it never reaches the rule', () => {
-		const report = KcdValidate.validate( doc( 'template', 'scaffold', '' ) );
+		const report = KcdValidate.validate( doc( 'template', 'scaffold', '' ) , { docRoot: '_Claude' });
 
 		expect( report.errors ).toEqual( [] );
 		expect( report.ok ).toBe( true );

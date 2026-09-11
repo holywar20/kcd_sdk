@@ -182,6 +182,35 @@ export class VaultLayout {
 	 *  string; the table that owns the taxonomy should own this too. */
 	static readonly NAV_INDEX_FILE = 'nav-index.html'
 
+	/**
+	 * The vault folder's name WHEN NOBODY DECLARED ONE. A default, never a fact — the folder may be
+	 * `_Claude`, `_kcd`, `_Gemini`, anything the project chose.
+	 *
+	 * ONE literal, here, because this file previously spelled it five times as a parameter default and
+	 * two other modules kept private copies. Every one of those was a place the default could be
+	 * changed in isolation and a place a reader could mistake for an assertion. `LensObject` re-exports
+	 * this rather than restating it.
+	 */
+	static readonly DEFAULT_DOC_ROOT = '_Claude'
+
+	/**
+	 * Text authored against the DEFAULT doc root, retargeted at the vault it is actually landing in.
+	 *
+	 * The bundled corpus hardcodes `_Claude/…` in every internal link — 281 occurrences across 42
+	 * documents — so installing it verbatim into a vault called anything else produces a library whose
+	 * links all point at a folder that is not there. Measured on a fresh `--doc-root _kcd` install:
+	 * 111 dangling-link warnings, and every single warning was this.
+	 *
+	 * Identity when the vault IS the default, so the ordinary install is untouched and this cannot
+	 * misfire on it. Where the vault is NOT the default, every occurrence of the default in bundled
+	 * text is wrong by construction — the corpus is talking about its own vault, and that vault has a
+	 * different name here.
+	 */
+	static retargetDocRoot( text: string, docRoot: string ): string {
+		if( !docRoot || docRoot === VaultLayout.DEFAULT_DOC_ROOT ) return text
+		return text.split( VaultLayout.DEFAULT_DOC_ROOT ).join( docRoot )
+	}
+
 	/** Every row, in table order — for the doc generator and anything enumerating the structure. */
 	static all(): readonly LayoutEntry[] {
 		return LAYOUT
@@ -211,7 +240,7 @@ export class VaultLayout {
 	 * of the table; a `context/` descendant is support material for whatever owns it; and inside
 	 * `lenses/`, only the lens's own file is the lens. Everything else is the table.
 	 */
-	static classify( relPath: string, docRoot = '_Claude' ): ArtifactType {
+	static classify( relPath: string, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): ArtifactType {
 		const norm = relPath.replace( /\\/g, '/' )
 		if( !norm.startsWith( docRoot + '/' ) ) return 'unknown'
 		if( norm.endsWith( '/' + VaultLayout.NAV_INDEX_FILE ) ) return 'nav-index'
@@ -236,7 +265,7 @@ export class VaultLayout {
 	 * empty array means anything goes: `unknown` is scratch space, and scratch that refused writes would
 	 * be useless.
 	 */
-	static acceptedTypes( relPath: string, docRoot = '_Claude' ): readonly ArtifactType[] {
+	static acceptedTypes( relPath: string, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): readonly ArtifactType[] {
 		const implied = VaultLayout.classify( relPath, docRoot )
 		if( implied === 'unknown' ) return []
 
@@ -251,7 +280,7 @@ export class VaultLayout {
 	 * May a document declaring `declared` be written at this path? The one question a write guard should
 	 * ask. An empty accepted set is untyped space and takes anything.
 	 */
-	static accepts( relPath: string, declared: ArtifactType, docRoot = '_Claude' ): boolean {
+	static accepts( relPath: string, declared: ArtifactType, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): boolean {
 		const allowed = VaultLayout.acceptedTypes( relPath, docRoot )
 		return allowed.length === 0 || allowed.includes( declared )
 	}
@@ -307,7 +336,7 @@ export class VaultLayout {
 	 * A path is archival if it IS a declared directory or sits beneath one. Segment-boundary matching,
 	 * never bare `startsWith`: `plans/plans_completed-notes` must not match `plans/plans_complete`.
 	 */
-	static isArchivalPath( href: string, docRoot = '_Claude' ): boolean {
+	static isArchivalPath( href: string, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): boolean {
 		const parts  = href.replace( /\\/g, '/' ).replace( /^\.\//, '' ).split( '/' ).filter( p => p !== '' )
 		const anchor = parts.lastIndexOf( docRoot )
 		const rel    = ( anchor >= 0 ? parts.slice( anchor + 1 ) : parts ).join( '/' )
@@ -323,7 +352,7 @@ export class VaultLayout {
 	 * declared prefix. The two exclusions are not interchangeable: ephemeral content never ships and may
 	 * not be linked into ( §1.1 ); archival content ships and must stay linkable.
 	 */
-	static isEphemeralHref( href: string, docRoot = '_Claude' ): boolean {
+	static isEphemeralHref( href: string, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): boolean {
 		const parts = href.replace( /\\/g, '/' ).replace( /^\.\//, '' ).split( '/' ).filter( p => p !== '' )
 
 		// Accepts both an href ( `_Claude/work/x` ) and an absolute file path

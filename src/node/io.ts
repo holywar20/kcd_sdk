@@ -53,7 +53,7 @@ export function findPackageRoot( startPath: string ): string {
  * Dredge a lens from disk with the real fs reader injected — the node-side convenience so
  * main never hand-wires `fs` into LensObject.load. projectRoot is inferred if not given.
  */
-export function loadLensFromDisk( lensPath: string, opts?: { projectRoot?: string; depth?: number; eager?: boolean } ): LensObject {
+export function loadLensFromDisk( lensPath: string, opts?: { projectRoot?: string; docRoot?: string; depth?: number; eager?: boolean } ): LensObject {
 	const projectRoot = opts?.projectRoot ?? inferProjectRoot( lensPath );
-	return LensObject.load( lensPath, { projectRoot, depth: opts?.depth, eager: opts?.eager, read: fsReader } );
+	return LensObject.load( lensPath, { projectRoot, docRoot: opts?.docRoot, depth: opts?.depth, eager: opts?.eager, read: fsReader } );
 }

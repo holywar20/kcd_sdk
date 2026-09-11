@@ -49,13 +49,13 @@ const JS_FRONTMATTER_RE = /^\/\*---\r?\n([\s\S]*?)\r?\n---\s*\*\/\r?\n?([\s\S]*)
 // Inline links in a `.js` comment body: [text](href). Deliberately simple.
 const LINK_RE = /\[([^\]]*)\]\(([^)]+)\)/g;
 
-export function scan( root: string, opts?: ScanOptions ): ScannedFile[] {
+export function scan( root: string, docRoot: string, opts?: ScanOptions ): ScannedFile[] {
 	const absRoot = path.resolve( root );
 	const topDirs = opts?.includeDirs ? new Set( opts.includeDirs ) : null;
 	const files   = walkFiles( absRoot, topDirs );
 
 	return files
-		.map( absPath => parseFile( absPath, absRoot ) )
+		.map( absPath => parseFile( absPath, absRoot, docRoot ) )
 		.filter( ( f ): f is ScannedFile => f !== null )
 		.filter( f => !opts?.filter || f.relativePath.includes( opts.filter ) );
 }
@@ -88,12 +88,12 @@ function walkFiles( dir: string, topDirs: Set<string> | null, atRoot = true ): s
 
 /** An HTML file is parsed by the one HTML front end ( KcdParse ); a non-conforming HTML file is not
  *  a KCD artifact and drops out of the scan ( returns null ). A `.js` file keeps the comment path. */
-function parseFile( absPath: string, absRoot: string ): ScannedFile | null {
+function parseFile( absPath: string, absRoot: string, docRoot: string ): ScannedFile | null {
 	const raw          = fs.readFileSync( absPath, 'utf-8' );
 	const relativePath = path.relative( absRoot, absPath ).replace( /\\/g, '/' );
 
 	if ( /\.html?$/i.test( absPath ) ) {
-		const parsed = KcdParse.tryParse( raw, absPath );
+		const parsed = KcdParse.tryParse( raw, absPath, docRoot );
 		if ( !parsed ) return null;
 		return {
 			path:        absPath,

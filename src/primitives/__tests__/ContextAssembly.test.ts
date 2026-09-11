@@ -119,7 +119,7 @@ describe( 'LensObject.getContextBlocks + ContextAssembler — Phase 2 integratio
 		const lens = loadFixtureLens();
 		// Built through fromHtml so it carries real projected content, not a hand-rolled stub —
 		// exactly what `addInjected` receives from the "drop context onto the agent" GUI hook.
-		const realInjected = KCDPrimitive.fromHtml( INJECTED_HTML, `${ ROOT }/injected.html` );
+		const realInjected = KCDPrimitive.fromHtml( INJECTED_HTML, `${ ROOT }/injected.html` , '_Claude');
 		lens.addInjected( realInjected );
 		const out = lens.serializeForContext();
 
@@ -132,7 +132,7 @@ describe( 'LensObject.getContextBlocks + ContextAssembler — Phase 2 integratio
 
 	it( 'the References routing table sinks below the lens identity, but still above injected', () => {
 		const lens = loadFixtureLens();
-		const realInjected = KCDPrimitive.fromHtml( INJECTED_HTML, `${ ROOT }/injected.html` );
+		const realInjected = KCDPrimitive.fromHtml( INJECTED_HTML, `${ ROOT }/injected.html` , '_Claude');
 		lens.addInjected( realInjected );
 		const out = lens.serializeForContext();
 
@@ -144,7 +144,7 @@ describe( 'LensObject.getContextBlocks + ContextAssembler — Phase 2 integratio
 	} );
 
 	it( 'never throws on an unloaded lens\'s stubBlock — silently omitted, unlike the throwing serializeForContext guard', () => {
-		const bare = KCDPrimitive.fromHtml( LENS_HTML, `${ ROOT }/lens.html` ) as LensObject;
+		const bare = KCDPrimitive.fromHtml( LENS_HTML, `${ ROOT }/lens.html` , '_Claude') as LensObject;
 		expect( bare.stubBlock() ).toBeNull();
 	} );
 
@@ -241,7 +241,7 @@ describe( 'habit slot dredge is links-only — no mode rides full text; only a s
 		// no difference to the LENS's own on-mode slot; injection is a separate, deliberate act.
 		const neverHabitPath = path.join( HABITS_DIR, 'log-session/log-session-never.html' );
 		const neverHabit = fs.readFileSync( neverHabitPath, 'utf-8' );
-		lens.addInjected( KCDPrimitive.fromHtml( neverHabit, neverHabitPath ) );
+		lens.addInjected( KCDPrimitive.fromHtml( neverHabit, neverHabitPath , '_Claude') );
 
 		// addInjected is itself always a "suggested" act (the GUI "drop context" gesture) — the
 		// injected habit's OWN body now rides as its DENSE four-field form ( KcdContext.projectHabit ),
@@ -453,7 +453,7 @@ describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Ph
 describe( 'Know/Care/Do labels are stripped from compiled context — real deployed base lens', () => {
 	it( 'the base lens compiles with no K/C/D region headings, but its sections and slot rows survive', () => {
 		const p = path.join( PROJECT_ROOT, '_Claude/lenses/_lens-base.html' );
-		const lens = KCDPrimitive.fromHtml( fs.readFileSync( p, 'utf-8' ), p );
+		const lens = KCDPrimitive.fromHtml( fs.readFileSync( p, 'utf-8' ), p , '_Claude');
 		const joined = lens.getContextBlocks().map( b => b.text ).join( '\n\n' );
 
 		for ( const label of [ 'Know', 'Care', 'Do' ] )

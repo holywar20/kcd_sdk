@@ -69,7 +69,7 @@ function build( type: string, name: string, input: Parameters<typeof KcdSynth.sy
 		body,
 		links:       [],
 	} as any );
-	return { body, undeclared, html, report: KcdValidate.validate( html ) };
+	return { body, undeclared, html, report: KcdValidate.validate( html , { docRoot: '_Claude' }) };
 }
 
 describe( 'KcdSynth — prose sections', () => {
@@ -90,7 +90,7 @@ describe( 'KcdSynth — prose sections', () => {
 			sections: { location: 'Alpha.', interface: 'Beta.', status: 'Gamma.' },
 		} );
 
-		const parsed = KcdParse.parse( html, 'synth-round.html' );
+		const parsed = KcdParse.parse( html, 'synth-round.html' , '_Claude');
 		expect( Object.keys( parsed.sections ).sort() ).toEqual( [ 'interface', 'location', 'status' ] );
 	} );
 
