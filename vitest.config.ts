@@ -1,6 +1,37 @@
 import { defineConfig } from 'vitest/config'
+import type { Reporter } from 'vitest/reporters'
+import { existsSync } from 'fs'
+import { resolve } from 'path'
+import { pathToFileURL } from 'url'
 
-import testResults from '../scripts/test-results/reporter.mjs'
+/**
+ * The structured-record reporter ( see _Claude/references/notes/test-results-pipeline.html ), loaded
+ * OPTIONALLY and never fatally.
+ *
+ * IT LIVES IN THE VAULT, at `_Claude/dev-utilities/`, because that is the shared bucket that travels
+ * with the project as documentation. Its previous home was `starmind_root/scripts/` — outside BOTH
+ * repos, so on a fresh machine it simply was not there, and a STATIC import of a missing path is not
+ * a test failure: esbuild cannot build the config at all, vitest dies at startup, and NOTHING runs.
+ *
+ * So the load is dynamic and caught. A reporter is infrastructure: a missing one degrades to
+ * `default` alone, which is a quieter run rather than no run. The guard is duplicated in starmind's
+ * config rather than shared, deliberately — the thing that makes an optional folder optional cannot
+ * itself live in that folder.
+ */
+async function loadTestResults(): Promise<( ( suite: string ) => Reporter ) | null> {
+	const path = resolve( __dirname, '..', '_Claude', 'dev-utilities', 'test-results', 'reporter.mjs' )
+	if( !existsSync( path ) ) return null
+	try {
+		// The specifier is COMPUTED so the config bundler leaves it as a runtime import rather than
+		// trying to resolve it at build time — which is the failure this guard exists to prevent.
+		const mod = await import( pathToFileURL( path ).href )
+		return mod.default ?? null
+	}
+	catch( err ) {
+		process.stderr.write( `[test-results] reporter not loaded: ${ ( err as Error )?.message }\n` )
+		return null
+	}
+}
 
 /**
  * The first config this package has ever had.
@@ -23,7 +54,10 @@ import testResults from '../scripts/test-results/reporter.mjs'
  * So this config CODIFIES the previous behaviour rather than changing it. If the file count moves when
  * it lands, that is a defect in this file, not a discovery.
  */
-export default defineConfig( {
+export default defineConfig( async () => {
+const testResults = await loadTestResults()
+
+return {
 	test: {
 		// ── THE STRUCTURED RECORD ( plan 4.a ) ────────────────────────────────────────────────────
 		//
@@ -31,10 +65,10 @@ export default defineConfig( {
 		// would trade the terminal output a person reads for the file an agent reads. Both, or this
 		// becomes a worse experience wearing a better one.
 		//
-		// The reporter is shared from the workspace root rather than copied per package, for the same
-		// reason membership in `test-all.mjs` is read off the tree: three copies of one shape drift, and
-		// the one that drifts is the one nobody is looking at.
-		reporters: [ 'default', testResults( 'vitest:kcd_sdk' ) ],
+		// The reporter is shared from the vault rather than copied per package, for the same reason
+		// membership in `test-all.mjs` was read off the tree: three copies of one shape drift, and the
+		// one that drifts is the one nobody is looking at. It is also OPTIONAL — see loadTestResults.
+		reporters: [ 'default', ...( testResults ? [ testResults( 'vitest:kcd_sdk' ) ] : [] ) ],
 		name:        'kcd_sdk',
 		// Node-only by construction. @kcd/core is deliberately Node-free so the renderer can import it,
 		// and @kcd/node is the fs layer — neither has ever wanted a DOM, and the suite mounts nothing.
@@ -80,4 +114,5 @@ export default defineConfig( {
 			exclude:          [ '**/__tests__/**', '**/*.test.ts', '**/dist/**', '**/*.d.ts' ]
 		}
 	}
+}
 } )

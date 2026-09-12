@@ -19,11 +19,23 @@
  * artifact becomes several `ContextBlock`s ( Know / Care / Do ), the unit `ContextAssembler` merges
  * and sorts across a whole loaded set. `project()` ( Phase 1 ) is unchanged — the flat single-string
  * view a lone-artifact preview still wants — and shares the same tag-walking core.
+ *
+ * TWO PROJECTIONS, ONE WALK ( 2026-09-11 ). `lean()` / `leanArtifact()` are the READ path
+ * ( `kcd_get` ): the same markdown `block()` emits, with the blank lines squeezed out and `body`
+ * dropped from the artifact entirely. NO TAGS SURVIVE either path — Bryan's ruling: "tags are a
+ * filing mechanism that allows for the documentation to come down to the agent without all the
+ * formatting ceremony on the wire", and a markdown `###` says what an `<h3>` says for a third the
+ * tokens. So the difference between reading and compiling is one boolean about air, not a second
+ * tree walk, and the policy for what NEVER reaches an agent has one home in `dropped()`.
+ *
+ * Two things are exempt from the whitespace strip, both because their whitespace IS content: a `pre`
+ * rides verbatim in a markdown fence, and a real `<table>` renders as a padded markdown table
+ * ( `table()` ) rather than flattening to one `- a · b · c` line that hid which row was the header.
  */
 
 import { HtmlTree, type HtmlEl, type HtmlNode } from './HtmlTree';
 import { KcdAddress } from './KcdAddress';
-import type { SerializedArtifact } from '../../primitives/types';
+import type { SerializedArtifact, SerializedLens } from '../../primitives/types';
 
 /** Frontmatter fields that survive into the AI projection. Everything else ( author,
  *  schema-version, base, todo, completed, … ) is authoring bookkeeping a human maintains the
@@ -34,6 +46,16 @@ const FRONTMATTER_KEEP = [ 'name', 'description', 'status' ];
  *  region-block is tagged one of these three; a non-lens artifact's whole body defaults to its own
  *  `getRole()` ( `know` or `do` ), since it never carries an explicit `data-kcd-region` wrapper. */
 export type ContextRegion = 'care' | 'know' | 'do';
+
+/**
+ * An artifact projected for READING rather than for editing — `KcdContext.leanArtifact`'s output.
+ * Structurally a `SerializedArtifact` with `sections` stripped to the lean projection and `body`
+ * REMOVED, so the one field a round trip would corrupt cannot be mistaken for the one it needs
+ * ( see `leanArtifact` ). `nodes` carries a lens's dredged children, each leaned the same way.
+ */
+export interface LeanArtifact extends Omit<SerializedArtifact, 'body'> {
+	nodes?: LeanArtifact[];
+}
 
 /** One `data-kcd-slot` row's fields, structured — not yet rendered to text. The identity a routing
  *  merge dedupes BY is `where` ( a real path/href, not a string it has to re-derive by parsing
@@ -82,24 +104,34 @@ export const KcdContext = new class KcdContext {
 		for ( const key of FRONTMATTER_KEEP ) {
 			const v = fm[ key ];
 			if ( v === undefined || v === '' ) continue;
-			lines.push( `${ key }: ${ Array.isArray( v ) ? v.join( ', ' ) : v }` );
+			lines.push( `${ key }: ${ this.decodeEntities( Array.isArray( v ) ? v.join( ', ' ) : String( v ) ) }` );
 		}
 		return lines.join( '\n' );
 	}
 
 	/** Reparse the artifact's body HTML and walk it to plain, audience-stripped text. Empty /
-	 *  unparseable input yields ''. */
-	body( html: string ): string {
+	 *  unparseable input yields ''. `tight` is the read path's air-squeeze — see `lean()`. */
+	body( html: string, tight = false ): string {
 		if ( !html || !html.trim() ) return '';
 		const root = HtmlTree.parse( html );
-		return this.renderNodes( root.kids );
+		return this.renderNodes( root.kids, tight );
 	}
 
-	/** `block()` over an already-collected node array, joined/collapsed the same way `body()` is —
-	 *  the shared tail both the flat projector and the per-region-block projector render through. */
-	renderNodes( nodes: HtmlNode[] ): string {
+	/**
+	 * `block()` over an already-collected node array, joined/collapsed the same way `body()` is —
+	 * the shared tail both the flat projector and the per-region-block projector render through.
+	 *
+	 * `tight` is the ONE axis on which the read projection differs from the compile one. `block()`
+	 * pads a heading or a paragraph with empty entries so compiled prose breathes; the read path
+	 * drops those entries, so the same walk lands one line per block with no air between. It is a
+	 * FILTER of empty entries rather than a regex over the joined string, deliberately — a `pre` or a
+	 * table rides as one entry with its own newlines inside, and a string-level squeeze could not
+	 * tell that whitespace from the padding it means to remove.
+	 */
+	renderNodes( nodes: HtmlNode[], tight = false ): string {
 		const out: string[] = [];
 		this.block( nodes, out );
+		if ( tight ) return out.filter( s => s !== '' ).join( '\n' ).trim();
 		return out.join( '\n' ).replace( /\n{3,}/g, '\n\n' ).trim();
 	}
 
@@ -211,29 +243,40 @@ export const KcdContext = new class KcdContext {
 		return kids.filter( k => !( HtmlTree.isEl( k ) && this.HEADINGS.has( k.tag ) ) );
 	}
 
+	/**
+	 * Elements that never reach an agent, whatever the projection style — the POLICY half of the
+	 * walk, held apart from the rendering half so the two emitters below (`block`, the markdown
+	 * projection; `leanBlock`, the tag-preserving one) cannot drift about WHAT is dropped while
+	 * differing about HOW the survivors look. Anything added here is dropped by both at once.
+	 *
+	 * The gates, in order: the audience gate ( protocol §5 ); the faux-table header row ( visual-only
+	 * chrome ); machine/chrome tags ( `dl` is the frontmatter block, projected separately ); and the
+	 * Tools section — metadata, whose `tool`-kind slots feed `KcdParse.toolModes` → the wire's tool
+	 * manifest and never ride as body content. The last line is the defence for a stray `tool` slot
+	 * sitting OUTSIDE a Tools section: same metadata rule, caught by KIND rather than by section name.
+	 */
+	dropped( el: HtmlEl ): boolean {
+		if ( KcdAddress.isHumanOnly( el ) ) return true;
+		if ( HtmlTree.has( el, 'data-kcd-head' ) ) return true;
+		if ( this.SKIP.has( el.tag ) ) return true;
+		if ( KcdAddress.isSection( el ) && HtmlTree.get( el, 'data-kcd-section' ) === 'tools' ) return true;
+		if ( KcdAddress.isSlot( el ) && HtmlTree.get( el, 'data-kcd-slot' ) === 'tool' ) return true;
+		return false;
+	}
+
 	/** Walk a node array, emitting block boundaries. Containers recurse; leaf blocks emit their
 	 *  collapsed inline text and stop ( so a `<blockquote><p>…` is not counted twice ). */
 	block( kids: HtmlNode[], out: string[] ): void {
 		for ( const kid of kids ) {
 			if ( kid.type === 'text' ) { const t = this.inline( kid ); if ( t ) out.push( t ); continue; }
-
-			if ( KcdAddress.isHumanOnly( kid ) ) continue;  // the audience gate — protocol §5
-			if ( HtmlTree.has( kid, 'data-kcd-head' ) ) continue;  // the table header row — visual-only chrome
+			if ( this.dropped( kid ) ) continue;
 
 			const tag = kid.tag;
-			if ( this.SKIP.has( tag ) ) continue;
-
-			// The Tools section is metadata: its `tool`-kind slots feed `KcdParse.toolModes` → the wire's tool
-			// manifest, and never ride as body content. Skip the whole section so BOTH stamped and bare tool
-			// slots stay out of Knowledge — a metadata section by name, exactly as References / Habits are
-			// manifest sections. ( Closes the Tools-in-Knowledge leak. )
-			if ( KcdAddress.isSection( kid ) && HtmlTree.get( kid, 'data-kcd-section' ) === 'tools' ) continue;
 
 			// A region wrapper is transparent: recurse in, but strip its own K/C/D label heading first.
 			if ( KcdAddress.isRegion( kid ) ) { this.block( this.dropRegionLabel( kid.kids ), out ); continue; }
 
-			// Defence for a stray explicit `tool` slot outside a Tools section — same metadata rule, by KIND.
-			if ( KcdAddress.isSlot( kid ) ) { if ( HtmlTree.get( kid, 'data-kcd-slot' ) === 'tool' ) continue; out.push( this.slotLine( kid ) ); continue; }
+			if ( KcdAddress.isSlot( kid ) ) { out.push( this.slotLine( kid ) ); continue; }
 
 			if ( this.HEADINGS.has( tag ) ) {
 				out.push( '', '#'.repeat( Number( tag[ 1 ] ) ) + ' ' + this.inline( kid ), '' );
@@ -241,14 +284,169 @@ export const KcdContext = new class KcdContext {
 			}
 			if ( tag === 'li' ) { out.push( '- ' + this.inline( kid ) ); continue; }
 			if ( tag === 'p' || tag === 'blockquote' ) { out.push( '', this.inline( kid ), '' ); continue; }
+
+			// A real `<table>` is taken WHOLE, never row by row — a markdown table has to know its own
+			// column count and widths before it can emit its first line, which a per-`<tr>` branch can
+			// never know. See `table()` for why this stopped being `- a · b · c`.
+			if ( tag === 'table' ) { const t = this.table( kid ); if ( t ) out.push( '', t, '' ); continue; }
+
+			// `pre` is whitespace-SIGNIFICANT — its newlines ARE the content, so the collapse every
+			// other block gets is suspended here and the text rides verbatim inside a markdown fence.
+			// The fence is not decoration: without it a code example is indistinguishable from the
+			// prose around it, and a reader cannot tell which newlines were authored.
+			// The one text path that skips `inline()`, so it decodes entities itself — see `ENTITIES`.
+			if ( tag === 'pre' ) { const t = this.decodeEntities( HtmlTree.textOf( kid ) ).replace( /^\n+|\s+$/g, '' ); if ( t ) out.push( '', '```\n' + t + '\n```', '' ); continue; }
+
+			// A stray `<tr>` outside any table — the old flat form, kept as the fallback it always was.
 			if ( tag === 'tr' ) {
-				const cells = kid.kids.filter( HtmlTree.isEl ).map( ( c ) => this.inline( c ) ).filter( Boolean );
-				if ( cells.length ) out.push( '- ' + cells.join( ' · ' ) );
+				const cells = this.cellsOf( kid );
+				if ( cells.some( Boolean ) ) out.push( '- ' + cells.filter( Boolean ).join( ' · ' ) );
 				continue;
 			}
-			// Container ( body, article, section, ul, ol, div, table, thead, tbody, … ) — recurse in.
+			// Container ( body, article, section, ul, ol, div, … ) — recurse in.
 			this.block( kid.kids, out );
 		}
+	}
+
+	/**
+	 * Body / section HTML → the LEAN read projection ( 2026-09-11, Bryan ): the same markdown `block()`
+	 * already emits, with every blank line squeezed out.
+	 *
+	 * There is no second emitter here, and the absence is the point. This started as a tag-preserving
+	 * walk ( `<h3>`, `<li>` kept ) and Bryan ruled it back: "keeping tags out. Tags are a filing
+	 * mechanism that allows for the documentation to come down to the agent without all the formatting
+	 * ceremony on the wire." A markdown `###` says what an `<h3>` says for a third the tokens, so the
+	 * read path and the compile path want the SAME text and differ only in how much air sits between
+	 * its blocks — which is a post-pass, not a parallel tree walk.
+	 *
+	 * Whitespace is structural, never decorative: no indentation, no blank lines, inline runs collapsed
+	 * to single spaces, one newline between block siblings so two paragraphs cannot weld into one
+	 * sentence. The two places that exemption does not reach are `pre` and a table, and both are
+	 * handled in `block()` where BOTH projections get them — their whitespace is the content.
+	 */
+	lean( html: string ): string {
+		return this.body( html, true );
+	}
+
+	/**
+	 * One serialized artifact → its LEAN read shape: `sections` projected through `lean()`, and `body`
+	 * GONE.
+	 *
+	 * Dropping the body is not an extra economy tacked onto the strip — it is the half that makes the
+	 * strip safe. `body` is `kcd_save`'s edit payload ( kcd_get → mutate → kcd_save ), and a STRIPPED
+	 * body handed back to that round trip would save a document with every `data-kcd-section` wrapper
+	 * missing: refused outright on a closed type, and on an open one landed as a gutted file. A field
+	 * that cannot survive the round trip must not be present wearing the name of the one that can, so
+	 * the lean shape does not carry a smaller `body` — it carries none, and the caller that needs the
+	 * real one asks for `full`.
+	 *
+	 * Nothing is lost by the omission that the shape does not already hold: `sections` is the body's
+	 * keyed decomposition ( ~92% of its characters on a real lens ), the `<h1>` it drops is
+	 * `frontmatter.name`, and the `<dl>` it drops is `frontmatter` itself. A lens's dredged `nodes`
+	 * recurse through the same projection, since each child is an artifact read for the same reason.
+	 */
+	leanArtifact( a: SerializedArtifact ): LeanArtifact {
+		const { body: _body, ...rest } = a;
+		const lean: LeanArtifact = { ...rest, frontmatter: this.leanFrontmatter( a.frontmatter ), sections: this.leanSections( a.sections ) };
+		const nodes = ( a as SerializedLens ).nodes;
+		if ( Array.isArray( nodes ) ) lean.nodes = nodes.map( n => this.leanArtifact( n ) );
+		return lean;
+	}
+
+	/** Frontmatter for the LEAN read: string values entity-decoded, every other value untouched.
+	 *  `description` is the field an agent reads on EVERY artifact and on every dredged child, and it is
+	 *  the densest `&mdash;` carrier in the vault. Decoding it is safe in this shape and in no
+	 *  neighbouring one for the same reason the shape already drops `body`: lean is the READ projection,
+	 *  never an edit payload. `full` keeps its frontmatter exactly as authored, because that one IS the
+	 *  payload `kcd_save` writes back. */
+	leanFrontmatter( fm: Record<string, unknown> ): Record<string, unknown> {
+		const out: Record<string, unknown> = {};
+		for ( const [ k, v ] of Object.entries( fm ) )
+			out[ k ] = typeof v === 'string'  ? this.decodeEntities( v )
+				: Array.isArray( v ) ? v.map( x => typeof x === 'string' ? this.decodeEntities( x ) : x )
+				: v;
+		return out;
+	}
+
+	/** `lean()` over an artifact's whole `sections` map, key by key. A section that projects to
+	 *  nothing ( human-only throughout, or a Tools section ) is DROPPED rather than kept as an empty
+	 *  string — an empty value reads as "this section exists and is blank", which is a different and
+	 *  false claim. */
+	leanSections( sections: Record<string, string> ): Record<string, string> {
+		const out: Record<string, string> = {};
+		for ( const [ name, html ] of Object.entries( sections ) ) {
+			const text = this.lean( html );
+			if ( text ) out[ name ] = text;
+		}
+		return out;
+	}
+
+	/** Above this width a column is left UNPADDED. Alignment is the affordance, but a prose column is
+	 *  where it turns on itself: one 400-character Description would pad every other cell in that
+	 *  column out to 400, and the table would cost more in trailing spaces than in content. Forty is
+	 *  wide enough for the identifier / kind / default / path columns that alignment actually helps
+	 *  and narrow enough that a sentence never qualifies. */
+	PAD_CAP = 40;
+
+	/**
+	 * A real `<table>` → a markdown table ( Bryan, 2026-09-11: "parse tables into md format — it's an
+	 * affordance for the agent, preserving white space" ).
+	 *
+	 * It used to flatten to one `- a · b · c` line per row, and the cost was not cosmetic: the HEADER
+	 * row flattened identically to a data row, so a reader saw `- Name · Type · Default · Description`
+	 * and had nothing but word-shape telling it that line was the key to the four below. A hundred
+	 * artifacts carry one of these. Markdown's separator line restores exactly what was lost — which
+	 * cell names a column and which fills one — and it is a form every model already reads fluently.
+	 *
+	 * This is the second exemption from the whitespace strip, `pre` being the first, and for the same
+	 * reason: here the whitespace IS the affordance. Columns are padded to their widest cell so a
+	 * value can be read down its column, capped at `PAD_CAP` so a prose column cannot turn the
+	 * padding into the payload.
+	 *
+	 * A `|` inside a cell is escaped rather than dropped — an unescaped one silently splits a cell in
+	 * two and every column after it in that row shifts by one, which is a wrong table that still
+	 * looks like a table. Ragged rows are padded to the widest, for the same reason.
+	 */
+	table( el: HtmlEl ): string {
+		const rows = HtmlTree.collect( el, e => e.tag === 'tr' )
+			.filter( r => !this.dropped( r ) )
+			.map( r => this.cellsOf( r ) )
+			.filter( cells => cells.length > 0 );
+		if ( !rows.length ) return '';
+
+		// A table with no `<th>` anywhere still needs a header line to be a markdown table at all —
+		// an EMPTY one, rather than promoting the first data row to a title it was never given.
+		const headed = HtmlTree.collect( el, e => e.tag === 'th' ).length > 0;
+		const width  = Math.max( ...rows.map( r => r.length ) );
+		const grid   = rows.map( r => [ ...r, ...Array( width - r.length ).fill( '' ) ] );
+		if ( !headed ) grid.unshift( Array( width ).fill( '' ) );
+
+		// The LAST column is never padded: there is nothing to its right to align against, so its
+		// padding is trailing whitespace on every row — pure cost, no affordance. Every other column
+		// pads to its widest cell, or not at all once that exceeds `PAD_CAP`.
+		const widths = Array.from( { length: width }, ( _, c ) => {
+			if ( c === width - 1 ) return 0;
+			const w = Math.max( 3, ...grid.map( r => r[ c ].length ) );
+			return w > this.PAD_CAP ? 0 : w;
+		} );
+		const line = ( cells: string[] ) => '| ' + cells.map( ( v, c ) => v.padEnd( widths[ c ] ) ).join( ' | ' ) + ' |';
+
+		const [ head, ...body ] = grid;
+		return [
+			line( head ),
+			'| ' + widths.map( w => '-'.repeat( Math.max( 3, w ) ) ).join( ' | ' ) + ' |',
+			...body.map( line ),
+		].join( '\n' );
+	}
+
+	/** One row's cells as collapsed text, `|` escaped so a cell cannot split itself in two. Empty
+	 *  cells are KEPT — a blank column is data about the row, and dropping it shifts every cell after
+	 *  it left by one. */
+	cellsOf( tr: HtmlEl ): string[] {
+		return tr.kids
+			.filter( HtmlTree.isEl )
+			.filter( c => ( c.tag === 'td' || c.tag === 'th' ) && !this.dropped( c ) )
+			.map( c => this.inline( c ).replace( /\|/g, '\\|' ) );
 	}
 
 	/** A dredge/nav slot's fields, read structurally — the data half of `slotLine`, shared by the flat
@@ -268,7 +466,12 @@ export const KcdContext = new class KcdContext {
 	 *  routing merge's re-render of its deduped survivors both go through this, so the two can never
 	 *  drift into two different row shapes. */
 	renderRow( row: SlotRow ): string {
-		const text = [ row.what, row.why ].filter( Boolean ).join( ' — ' );
+		// Entities decoded HERE rather than in `readSlot`, because this is the one place every row
+		// becomes text: a slot read out of a document, AND a roster row `Agent` builds straight from a
+		// lens's own frontmatter ( its lens-file rows, its grant rows ), which never passes through
+		// `readSlot` at all. `where` is left verbatim — it is a route an agent retypes and a merge
+		// dedupes on, not prose, and a path carrying a typographic entity is not a thing that exists.
+		const text = [ row.what, row.why ].map( v => this.decodeEntities( v ) ).filter( Boolean ).join( ' — ' );
 		return '- ' + ( row.where ? `${ text } (${ row.where })` : text );
 	}
 
@@ -305,7 +508,7 @@ export const KcdContext = new class KcdContext {
 	 *  it's the same trigger prose a lens's Why cell defers to via `mode:habit`. The rendered grammar
 	 *  keeps the English word "when" as a connector — only the section id / source field changed. */
 	projectHabit( artifact: SerializedArtifact ): string {
-		const name        = String( artifact.frontmatter[ 'name' ] ?? '' ).trim();
+		const name        = this.decodeEntities( String( artifact.frontmatter[ 'name' ] ?? '' ).trim() );
 		const secs        = this.habitSections( artifact.body );
 		const when        = secs[ 'why' ]?.text ?? '';
 		const action      = secs[ 'action' ]?.text ?? '';
@@ -389,8 +592,46 @@ export const KcdContext = new class KcdContext {
 		return { text: parts.join( ' ' ), items };
 	}
 
-	/** Collapse a node's whole-subtree text to a single trimmed line. */
+	/**
+	 * Named entities the vault actually authors, decoded ON THE WAY OUT to agent text and nowhere else.
+	 *
+	 * `HtmlTree.decode` deliberately does NOT know these ( it handles `&lt; &gt; &quot; &#39; &apos;
+	 * &#NNN; &amp;` and stops ), and it must not learn them. Every `kcd_save` re-parses and
+	 * re-serializes the body, so a `decode` wider than `escapeText` corrodes the entities it does not
+	 * own — `&mdash;` came back as `&amp;mdash;` the last time that symmetry was broken, and
+	 * `HtmlTree.entities.test.ts` pins the seam shut.
+	 *
+	 * The table lives on the PROJECTION side instead, where text is handed to a model and never written
+	 * back, and that is exactly what makes it safe to be partial. Roughly 1,600 literal `&mdash;` /
+	 * `&rdquo;` / `&rarr;` runs an agent was billed several tokens for each become one character, and
+	 * not one byte on disk moves. Kept deliberately SMALL and explicit — what a census of the vault
+	 * actually found, plus the near neighbours an author reaches for next — rather than a dependency or
+	 * a thousand-row table nobody maintains.
+	 *
+	 * `&nbsp;` maps to an ORDINARY space, not U+00A0: this projection collapses whitespace anyway, and a
+	 * non-breaking space is an invisible character that costs more and says nothing to a reader with no
+	 * line to break.
+	 *
+	 * The one known loss: a source `&amp;mdash;` is already `&mdash;` by the time it reaches here, so
+	 * prose QUOTING an entity as literal text reads as the character instead. That is the same
+	 * non-injectivity `generators/apply-repairs` pins as a deliberate trade, it is one occurrence in the
+	 * whole vault, and it costs a sentence's clarity rather than a byte of any file.
+	 */
+	ENTITIES: Record<string, string> = {
+		mdash: '—', ndash:  '–', hellip: '…', nbsp:  ' ',
+		ldquo: '“', rdquo:  '”', lsquo:  '‘', rsquo: '’',
+		rarr:  '→', middot: '·', bull:   '•', times: '×', deg: '°',
+	};
+
+	/** Named entities → their characters, for agent-facing text ONLY ( see `ENTITIES` ). An unmapped
+	 *  name passes through exactly as authored — this decodes what it knows and never guesses. */
+	decodeEntities( s: string ): string {
+		return s.includes( '&' ) ? s.replace( /&([a-zA-Z]+);/g, ( m, name ) => this.ENTITIES[ name ] ?? m ) : s;
+	}
+
+	/** Collapse a node's whole-subtree text to a single trimmed line. The entity decode runs BEFORE the
+	 *  collapse, so a decoded `&nbsp;` folds into the run around it instead of surviving as a stray. */
 	inline( n: HtmlNode ): string {
-		return HtmlTree.textOf( n ).replace( /\s+/g, ' ' ).trim();
+		return this.decodeEntities( HtmlTree.textOf( n ) ).replace( /\s+/g, ' ' ).trim();
 	}
 }();
