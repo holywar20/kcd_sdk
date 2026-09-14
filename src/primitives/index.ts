@@ -2,7 +2,7 @@ export * from './framework';
 export * from './procedure';
 export { KCDParseError, KCDValidationError } from './errors';
 export { SLOT_MODES } from './types';
-export { POLICIES, SURFACES } from './ToolAccess';
+export { POLICIES, SURFACES, holds } from './ToolAccess';
 export type { Policy, Surface } from './ToolAccess';
 export type {
 	ArtifactType,
@@ -42,6 +42,7 @@ import { GeneratorObject } from './procedure/GeneratorObject';
 import { AnalyzerObject } from './procedure/AnalyzerObject';
 import { UtilityObject } from './procedure/UtilityObject';
 import { AuditObject } from './framework/AuditObject';
+import { BugReportObject } from './framework/BugReportObject';
 
 KCDPrimitive.registerHydrator( 'lens', LensObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'plan', PlanObject.fromSerialized );
@@ -61,3 +62,4 @@ KCDPrimitive.registerHydrator( 'utility', UtilityObject.fromSerialized );
 // audit is a RECORD, not a procedure — role 'know', free-form shape, hydrated so a report crosses
 // the bridge as a report rather than as a bare primitive wearing the right type string.
 KCDPrimitive.registerHydrator( 'audit', AuditObject.fromSerialized );
+KCDPrimitive.registerHydrator( 'bug-report', BugReportObject.fromSerialized );

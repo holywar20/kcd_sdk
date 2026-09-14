@@ -16,6 +16,7 @@
 import { HtmlTree } from './HtmlTree';
 import type { HtmlEl, HtmlNode } from './HtmlTree';
 import { KcdAddress } from './KcdAddress';
+import { KcdShapes } from './KcdShapes';
 import { VaultLayout } from '../VaultLayout';
 
 export interface ValidateIssue { code: string; where: string; msg: string; }
@@ -170,7 +171,8 @@ export const KcdValidate = new class KcdValidate {
 			if ( spec.type === 'slug' ) { const fix = this.slugUnderscore( value ); if ( fix ) err( 'underscore-slug', `field:${ key }`, `"${ value }" has internal underscores — slugs are hyphenated ( use "${ fix }" )` ); }
 
 			// per-field extras
-			if ( spec.oneOf && !spec.oneOf.includes( value ) )    err( 'not-allowed', `field:${ key }`, `"${ value }" not in { ${ spec.oneOf.join( ' | ' ) } }` );
+			const oneOf = this.allowedValues( key, spec, rootType );
+			if ( oneOf && !oneOf.includes( value ) )              err( 'not-allowed', `field:${ key }`, `"${ value }" not in { ${ oneOf.join( ' | ' ) } }` );
 			if ( spec.pattern && !spec.pattern.test( value ) )    err( 'bad-format', `field:${ key }`, `"${ value }" does not match the expected form` );
 			if ( spec.maxLen && value.length > spec.maxLen )      err( 'too-long', `field:${ key }`, `"${ key }" exceeds ${ spec.maxLen } chars` );
 			if ( key === 'name' && !this.nameOk( value ) )        err( 'bad-name', 'field:name', `"${ value }" must be kebab-case, ≤64 chars, no "claude"/"anthropic"` );
@@ -182,6 +184,13 @@ export const KcdValidate = new class KcdValidate {
 			if ( spec.required && !seen[ key ] ) err( 'missing-required', `field:${ key }`, `required frontmatter field "${ key }" is absent` );
 
 		return name;
+	}
+
+	/** The closed set a field's value must fall in. `status` defers to the type's own vocabulary when its
+	 *  shape declares one — a bug report is `working`, never `active` — and to the global set otherwise. */
+	allowedValues( key: string, spec: FieldSpec, rootType: string ): readonly string[] | undefined {
+		if ( key !== 'status' ) return spec.oneOf;
+		return KcdShapes.statusesFor( rootType ) ?? spec.oneOf;
 	}
 
 	// ── Structure pass ──────────────────────────────────────────────────────────
@@ -232,6 +241,10 @@ export const KcdValidate = new class KcdValidate {
 					err( 'unkinded-slot', 'slot', `slot carries no kind — data-kcd-slot must name one of { ${ KcdAddress.SLOT_KINDS.join( ' | ' ) } }` );
 				else if ( !KcdAddress.SLOT_KINDS.includes( kind ) )
 					err( 'bad-slot-kind', `slot:${ kind }`, `slot kind "${ kind }" not in { ${ KcdAddress.SLOT_KINDS.join( ' | ' ) } }` );
+				// A tool slot is a lens's tool exposure — what composes onto an agent. Every other type is a
+				// process written as prose and encodes no permissions, so a tool slot there is refused.
+				if ( kind === 'tool' && rootType !== 'lens' )
+					err( 'tool-slot-non-lens', 'slot:tool', `tool slots belong to a lens alone — a ${ rootType } names the tools it reaches for in prose, not in a tool slot` );
 				const hc = HtmlTree.get( el, 'data-kcd-habit-class' );
 				if ( hc ) habitClasses[ hc ] = ( habitClasses[ hc ] ?? 0 ) + 1;
 				if ( HtmlTree.collect( el, d => KcdAddress.isField( d ) ).length === 0 )

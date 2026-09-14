@@ -74,7 +74,7 @@ export interface ParsedArtifact extends SerializedArtifact {
 	policy: PolicyEntry[];
 	params: ParsedParam[];
 	slots: ParsedSlot[];
-	/** tool name → mode, from the where-less slots of the Tools section ( lens only; {} elsewhere ). */
+	/** `group.tool` identity → mode, from the where-less slots of the Tools section ( lens only; {} elsewhere ). */
 	toolModes: Record<string, SlotMode>;
 }
 
@@ -132,7 +132,8 @@ export const KcdParse = new class KcdParse {
 	}
 
 	// ── Tools ( a lens's MCP tool composition — the `tool`-kind slots ) ──
-	// A tool is NOT a path artifact: its slot names the tool ( the `what` cell ) and carries a mode, no
+	// A tool is NOT a path artifact: its slot names the tool by its `group.tool` identity ( the `what` cell,
+	// kept verbatim — the key the agent and the wire file it under ) and carries a mode, no
 	// `where`, so it never enters `policy` ( which skips where-less rows ). Keyed on the explicit slot KIND
 	// now ( `data-kcd-slot="tool"` ), decoupled from the section NAME — the migration's whole point. Bare
 	// tool slots still resolve via `inferSlotKind` ( tools-section → tool ). A row without a `what` or with

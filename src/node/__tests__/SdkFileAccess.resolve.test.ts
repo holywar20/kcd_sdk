@@ -8,10 +8,9 @@ import type { GrantRef } from '../../session/InjectedItem'
 /**
  * The RESOLVER — one question, asked by every guard in three processes.
  *
- * Split from the main SdkFileAccess suite because that one touches real disk by contract and this one must
- * not: resolution is pure path math over configuration, and it deliberately never stats. A test that
- * created files here would be asserting something the resolver does not do — and would hide the property
- * that makes a refusal safe, namely that it can disclose the RULE without disclosing whether a file exists.
+ * Split from the main SdkFileAccess suite because that one touches real disk by contract and this one does
+ * not: over paths that do not exist, resolution is path math over configuration. Links are the one thing it
+ * reads the disk for, and those cases live in the main suite, beside the disk they need.
  *
  * Paths hang off `tmpdir()` so they are absolute on both platforms without ever being created. A literal
  * will not do: `join( 'C:', 'x' )` is drive-RELATIVE, and a POSIX literal resolves against the current

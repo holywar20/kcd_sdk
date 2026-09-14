@@ -1,5 +1,5 @@
 import { describe, it, expect, afterEach } from 'vitest'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'fs'
 import { join } from 'path'
 import { tmpdir } from 'os'
 import { SdkFileAccess, SEARCH_MATCH_CAP, SEARCH_YIELD_EVERY, type SearchToken } from '../SdkFileAccess'
@@ -20,6 +20,76 @@ afterEach( () => {
 		const d = dirs.pop() as string
 		rmSync( d, { recursive: true, force: true } )
 	}
+} )
+
+describe( 'containment through links', () => {
+
+	/** A project with a secret next door, and a link inside the project pointing at the secret's folder. */
+	function planted(): { root: string; outside: string; link: string } {
+		const root    = tmpDir()
+		const outside = tmpDir()
+		writeFileSync( join( outside, 'secret.md' ), 'not yours' )
+		const link = join( root, 'link' )
+		symlinkSync( outside, link, 'junction' )
+		return { root, outside, link }
+	}
+
+	/** A FILE symlink, which Windows only lets an elevated or developer-mode process make. */
+	function fileLink( target: string, at: string ): boolean {
+		try { symlinkSync( target, at, 'file' ); return true }
+		catch { return false }
+	}
+
+	it( 'judges a path by where it lands, not how it is spelled', () => {
+		const { root, link } = planted()
+		expect( SdkFileAccess.jail( join( link, 'secret.md' ), [ root ] ) ).toBeNull()
+		expect( SdkFileAccess.resolveLevel( join( link, 'secret.md' ), [ { path: root, level: 'delete' } ] ).level ).toBe( 'none' )
+	} )
+
+	it( 'judges a file that does not exist yet by its deepest real folder', () => {
+		const { root, link } = planted()
+		expect( SdkFileAccess.jail( join( link, 'new', 'pwned.md' ), [ root ] ) ).toBeNull()
+		expect( SdkFileAccess.jail( join( root, 'new', 'fine.md' ), [ root ] ) ).not.toBeNull()
+	} )
+
+	it( 'still contains a project that itself sits behind a link', () => {
+		const real  = tmpDir()
+		const alias = join( tmpDir(), 'alias' )
+		symlinkSync( real, alias, 'junction' )
+		writeFileSync( join( real, 'notes.md' ), 'mine' )
+
+		expect( SdkFileAccess.jail( join( alias, 'notes.md' ), [ real ] ) ).not.toBeNull()
+		expect( SdkFileAccess.jail( join( real, 'notes.md' ), [ alias ] ) ).not.toBeNull()
+	} )
+
+	it( 'returns the real path, so the caller opens what was judged', () => {
+		const root = tmpDir()
+		writeFileSync( join( root, 'notes.md' ), 'mine' )
+		expect( SdkFileAccess.jail( join( root, 'notes.md' ), [ root ] ) ).toBe( join( realpathSync.native( root ), 'notes.md' ) )
+	} )
+
+	it( 'follows a dangling link to where a write through it would land', ( ctx ) => {
+		const { root, outside } = planted()
+		if( !fileLink( join( outside, 'created-by-write.md' ), join( root, 'innocent.md' ) ) ) ctx.skip()
+		expect( SdkFileAccess.jail( join( root, 'innocent.md' ), [ root ] ) ).toBeNull()
+	} )
+
+	it( 'lands a link loop nowhere', ( ctx ) => {
+		const root = tmpDir()
+		if( !fileLink( join( root, 'b.md' ), join( root, 'a.md' ) ) || !fileLink( join( root, 'a.md' ), join( root, 'b.md' ) ) ) ctx.skip()
+		expect( SdkFileAccess.jail( join( root, 'a.md' ), [ root ] ) ).toBeNull()
+	} )
+
+	it( 'never opens a link while searching file contents', async () => {
+		const { root, outside } = planted()
+		writeFileSync( join( root, 'own.md' ), 'not yours either way' )
+		// When the machine allows a file link, it is planted too; the junction is there either way.
+		fileLink( join( outside, 'secret.md' ), join( root, 'secret-link.md' ) )
+
+		const scan = await new SdkFileAccess().grepText( root, 'not yours' )
+
+		expect( scan.rows.map( ( r ) => r.path ) ).toEqual( [ join( root, 'own.md' ) ] )
+	} )
 } )
 
 describe( 'SdkFileAccess.search', () => {

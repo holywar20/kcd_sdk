@@ -34,4 +34,7 @@ export interface ToolDef {
 	 * Absent on a def that never crossed the seam, where a reader falls back to the bare name.
 	 */
 	id?: string;
+	/** THE WIRE NAME, `group__tool` — the identity as a model reads and writes it, stamped beside `id` and
+	 *  riding for the same reason. What the manifest names a tool by. Absent pre-seam. */
+	wire?: string;
 }

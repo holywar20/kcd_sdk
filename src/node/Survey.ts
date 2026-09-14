@@ -59,7 +59,6 @@ export interface SurveyReport {
 	root:         string;
 	components:   SurveyComponent[];
 	totals:       { components: number; files: number; bytes: number };
-	capabilities: { tsScan: boolean };
 	limits:       { maxFiles: number; truncated: boolean };
 }
 
@@ -241,7 +240,6 @@ export class Survey {
 				files:      files.length,
 				bytes:      files.reduce( ( n, f ) => n + f.size, 0 ),
 			},
-			capabilities: { tsScan: fs.existsSync( path.join( root, 'tsconfig.json' ) ) },
 			limits:       { maxFiles, truncated },
 		};
 	}
@@ -278,7 +276,6 @@ export class Survey {
 			generated:    report.generated,
 			root:         report.root,
 			totals:       report.totals,
-			capabilities: report.capabilities,
 			limits:       report.limits,
 			components:   report.components.map( c => ( {
 				id: c.id, kind: c.kind, path: c.path, file: `${ c.id }.json`, description: c.description,

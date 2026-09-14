@@ -97,6 +97,10 @@ export type ArtifactType =
 	// substrate's. It was already in KcdAddress.TYPES and already had a KcdShapes entry; only this
 	// union lacked it, so a report validated as `unknown` and went ungoverned.
 	| 'audit'
+	// A filed defect and the proof of its repair ( the `bug-report` contract ). Ephemeral like `audit`,
+	// but shaped: its status words and its annotated body fields are the task board's own, so a report
+	// maps onto a `bugfix` Task field for field — see BugReportObject.
+	| 'bug-report'
 	| 'utility'
 	| 'habit'
 	| 'contract'
@@ -204,7 +208,7 @@ export interface SerializedLens extends SerializedArtifact {
 	 *  Absent on a lens that has had nothing injected. */
 	injected?: SerializedArtifact[];
 	/** Per-tool three-state inclusion the LENS itself contributes ( tool name → mode ), parsed from
-	 *  the lens's Tools table ( `data-kcd-section="tools"` — where-less slots, MCP tool names, not
+	 *  the lens's Tools table ( `data-kcd-section="tools"` — where-less slots, `group.tool` identities, not
 	 *  path artifacts ). The composition BASELINE, read through the lens's two axis getters and overridden
 	 *  per-tool by the agent's own maps. Absent on a lens with no Tools table. Unlike references/habits,
 	 *  a tool is not a dredged node, so it rides here rather than in `nodes`. */

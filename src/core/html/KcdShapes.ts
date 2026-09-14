@@ -69,6 +69,11 @@ export interface TypeShape {
 	 *  ( a reference is pointer prose; its section vocabulary is wide by design and policing it would
 	 *  invent a rule the corpus never had ). */
 	open?:     boolean;
+	/** The type's OWN status vocabulary, replacing the global set for this type alone. Absent ⇒ the
+	 *  global `KcdAddress.STATUSES`. For a type whose lifecycle is not draft→active — a bug report moves
+	 *  queued→working→verified — and forcing it onto the global words would mean translating at every
+	 *  read. */
+	statuses?: readonly string[];
 }
 
 /** The gap report for one document — what `audit` returns and what both gates consume. */
@@ -124,6 +129,7 @@ export const SHAPES: Record<string, TypeShape> = {
 			{ name: 'action',      tier: 'expected', hint: 'What to do when it fires. A rules-only habit may omit this.' },
 			{ name: 'explanation', tier: 'expected', hint: 'The rationale the dense projection carries.' },
 			{ name: 'rules',       tier: 'optional', hint: 'Hard constraints, when the behaviour is a prohibition rather than an act.' },
+			{ name: 'references',  tier: 'optional', slot: 'reference', hint: 'What this habit leans on and what leans on it — reference rows.' },
 		],
 	},
 
@@ -225,6 +231,23 @@ export const SHAPES: Record<string, TypeShape> = {
 	framework:         { purpose: 'Orientation for the substrate itself.',            open: true, sections: [] },
 	'prompt-partial':  { purpose: 'A reusable fragment composed into a prompt.',      open: true, sections: [] },
 	audit:             { purpose: 'What a generator or analyzer emitted, kept as a record.', open: true, sections: [] },
+
+	// The task board's vocabulary, not a new one. `queued | working | rejected | verified` is the
+	// task board's `AgentState` verbatim; `needs-human` is the one addition — the escape path, which the
+	// board expresses as an ask raised against the task rather than as a state.
+	'bug-report': {
+		purpose: 'A filed defect and the proof of its repair — what broke, what moved, and the evidence that settles it.',
+		open: true,
+		statuses: [ 'queued', 'working', 'rejected', 'verified', 'needs-human' ],
+		sections: [
+			{ name: 'report',       tier: 'required', hint: 'The symptom, how to reproduce it, where it lives, and the recorded failure quoted. Carries raisedBy, priority, exitCondition.' },
+			{ name: 'door',         tier: 'expected', hint: 'The trace areas this agent armed, then a closing line once disarmed — or none.' },
+			{ name: 'repair',       tier: 'expected', hint: 'What moved: the files, the behaviour, and why. Carries assignee, startedAt.' },
+			{ name: 'proof',        tier: 'expected', hint: 'The evidence before and after, or a plain statement that the fix could not be confirmed.' },
+			{ name: 'verification', tier: 'expected', hint: 'Who signed it, or the question put to the human. Carries verifiedBy, approval, endedAt.' },
+			{ name: 'notes',        tier: 'optional', hint: 'Anything else a later reader needs.' },
+		],
+	},
 };
 
 export const KcdShapes = new class KcdShapes {
@@ -242,6 +265,12 @@ export const KcdShapes = new class KcdShapes {
 		if ( !shape ) return [];
 		if ( shape.regions ) return shape.regions.flatMap( r => r.sections );
 		return shape.sections ?? [];
+	}
+
+	/** The status words a type accepts — its own set when the shape declares one, else `undefined` and
+	 *  the caller falls back to the global set. */
+	statusesFor( type: string ): readonly string[] | undefined {
+		return this.shapeFor( type )?.statuses;
 	}
 
 	/** Just the names, canonical order — what synthesis emits and what a fix follows. */

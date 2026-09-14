@@ -1,5 +1,10 @@
+import * as fs from 'fs';
+import * as path from 'path';
 import { describe, it, expect } from 'vitest';
+import '../../primitives/index';   // registers the hydrators, so a load yields a real LensObject
 import { Agent } from '../Agent';
+import { LensObject } from '../../primitives/framework/LensObject';
+import { KcdEdit } from '../../core/html/KcdEdit';
 import type { ToolDef } from '../ToolDef';
 
 /**
@@ -67,6 +72,13 @@ describe( 'Agent — the two tool axes', () => {
 		expect( agent.toolAllowances() ).toEqual( { 'srv.probe': 'allow' } );
 	} );
 
+	it( 'a lens\'s tools grant NOTHING live — only what was merged into the agent is held', () => {
+		// Lens tools are merged into the agent's passport once, at authoring; `toolPolicies` mirrors it.
+		const agent = agentWith( { 'srv.probe': 'allow' } );
+		agent.composedToolPolicies = { 'srv.commit': 'allow' };
+		expect( agent.toolAllowances() ).toEqual( { 'srv.probe': 'allow' } );
+	} );
+
 	it( 'keeps ASK in the allowances — a prompt is not an absence', () => {
 		const agent = agentWith( { 'srv.probe': 'ask' } );
 		expect( agent.toolAllowances() ).toEqual( { 'srv.probe': 'ask' } );
@@ -119,5 +131,40 @@ describe( 'Agent — the two tool axes', () => {
 		// else is keyed by would make missing metadata a way in. This inverts the old fallback deliberately.
 		const doubles: ToolDef[] = [ { name: 'probe', description: 'Look at a thing.', inputSchema: { type: 'object' } } ];
 		expect( agentWith( { probe: 'allow' }, {}, doubles ).toolManifest() ).toBe( '' );
+	} );
+} );
+
+/**
+ * WHAT A LENS FILES A TOOL UNDER — the identity, read off the real floor lens rather than a fixture.
+ *
+ * `_lens-base` is the document every agent wears, so it is the contract: its Tools table names each tool as
+ * `group.tool`, and that key must reach the agent unchanged and be the key an edit addresses. A fixture
+ * could agree with the code and still disagree with the vault.
+ */
+describe( 'a lens contributes tools by IDENTITY', () => {
+	const PROJECT_ROOT = path.resolve( __dirname, '../../../..' );   // kcd_sdk/src/agent/__tests__ → repo root
+	const BASE_PATH    = path.join( PROJECT_ROOT, '_Claude/lenses/_lens-base.html' );
+
+	function loadBase(): LensObject {
+		return LensObject.load( BASE_PATH, { projectRoot: PROJECT_ROOT, read: ( abs ) => fs.readFileSync( abs, 'utf-8' ) } );
+	}
+
+	it( 'composes the floor lens\'s tools onto the agent under their group.tool keys', () => {
+		const agent = Agent.create( { lenses: [ loadBase() ] } );
+		expect( agent.composedToolPolicies[ 'daedalus.kcd_get' ] ).toBe( 'allow' );
+		expect( agent.composedToolSurfaces[ 'daedalus.kcd_get' ] ).toBe( 'preload' );
+		// No bare key rides along beside the identity.
+		expect( Object.keys( agent.composedToolPolicies ) ).not.toContain( 'kcd_get' );
+	} );
+
+	it( 'edits a tool row by its identity, and a bare name addresses nothing', () => {
+		const body = loadBase().serialize().body;
+
+		const removed = KcdEdit.setTool( body, 'daedalus.kcd_get', 'off' );
+		expect( removed ).not.toBeNull();
+		expect( removed ).not.toContain( '>daedalus.kcd_get<' );
+		expect( removed ).toContain( '>daedalus.kcd_query<' );
+
+		expect( KcdEdit.setTool( body, 'kcd_get', 'off' ) ).toBeNull();
 	} );
 } );

@@ -910,6 +910,16 @@ export function frameCompaction( summary: string ): string {
 }
 
 /**
+ * The reorientation a forked session opens with. The agent arrives from a lane's conversation and nothing
+ * else in its context says the job changed. States the situation and sets no rules: what the agent should
+ * leave alone is the person's to say, and a rule enforced by the system here would be one they route around.
+ */
+export function frameFork(): string {
+	return '[fork — you are not working a lane. This session was forked from another conversation, and you'
+		+ ' are now in a session with the user, working with them directly.]';
+}
+
+/**
  * A tool result the wire no longer carries — replaced by where to go and read it.
  *
  * SELF-CONTAINED on purpose: the path rides in every stub rather than being named once in the system half.

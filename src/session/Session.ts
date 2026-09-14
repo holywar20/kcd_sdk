@@ -12,7 +12,7 @@
  * bridge whole via serialize / fromSerialized, the same trinity as Agent.
  */
 
-import { Transcript, type Turn, type TurnEntry, type WireMessage, type WireOptions, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type ReasoningPolicy, type ToolsPolicy, type ChatPolicy, type LimitsPolicy, type SessionPolicies, type SessionCompaction, type Grant, isGrant, grantSubject, grantKind, grantLevel, frameToolResultStub, KEEP_TOOL_RESULT_TURNS } from './TurnEntry';
+import { Transcript, type Turn, type TurnEntry, type WireMessage, type WireOptions, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type ReasoningPolicy, type ToolsPolicy, type ChatPolicy, type LimitsPolicy, type SessionPolicies, type SessionCompaction, type Grant, isGrant, grantSubject, grantKind, grantLevel, frameToolResultStub, frameFork, KEEP_TOOL_RESULT_TURNS } from './TurnEntry';
 import { type GrantRef } from './InjectedItem';
 import type { Agent } from '../agent/Agent';
 import type { SlotRow } from '../core/html/KcdContext';
@@ -246,6 +246,10 @@ export class Session {
 
 	/** Spawn a fresh session. `agentId` may be omitted / '' for a DRAFT (agentless) session — it's inert
 	 *  until reassign() binds it to an agent. */
+	/** How much conversation a fork from a lane carries. Five COMPLETE turns is enough for the work in hand to
+	 *  make sense and short enough that a fork is genuinely cheaper than the session it came from. */
+	static readonly FORK_KEEP_TURNS = 5;
+
 	static create( opts: SessionOptions ): Session {
 		const now = Date.now();
 		return new Session(
@@ -309,6 +313,97 @@ export class Session {
 	}
 
 	/** The bridge wire form, the save form, the reconstruction source — one function, many purposes. */
+	/**
+	 * FORK THIS SESSION FROM ITS LANE — a sibling, re-authored as though somebody had opened it fresh. Called
+	 * from the lane side by convention, and distinct from the chat surface's forks, which copy.
+	 *
+	 * NOT A COMPACTION, and the distinction is the whole design. A compaction is constrained: it rewrites a
+	 * prefix that is already cached, which is why the grant hoist waits for one ( that is the moment the
+	 * cache miss is already paid for ) and why its artefacts are scars a reader has to interpret. A child
+	 * session has NO cache yet. Nothing has been sent, so nothing is pinned, and the conversation can simply
+	 * be WRITTEN CORRECTLY instead of patched. So there are no compaction records here, no summaries, and no
+	 * compacted turns — the child is not a session that has been through something, it is a new one.
+	 *
+	 * NO TEXT IS TOUCHED. Nothing is compressed, paraphrased, or handed to an agent to tidy. The only
+	 * editorial act is choosing how much history to carry, and that is a count of turns, not a judgement
+	 * about them.
+	 *
+	 * THE AUTHORIZATION IS RE-STATED, ONCE. A live session spreads its grants across the history as the
+	 * events that produced them — injected at turn 3, re-injected at turn 7, revoked at turn 9 — and reading
+	 * that story back is how the child would learn the same fact several times and the wrong one last. So
+	 * the grant ENTRIES are stripped out of the copied turns and the current set is seeded whole onto
+	 * `pendingEntries`, where the next turn drains it. A revoked grant is simply not carried: the
+	 * re-authoring is where that pending revocation executes, exactly as a compaction is elsewhere, and by
+	 * the same rule — not-promoting IS the execution.
+	 *
+	 * THE AGENT IS REORIENTED, and that is all it is told. It arrives from a lane's conversation into one with
+	 * a person, and nothing else in its context says the job changed.
+	 *
+	 * THE PASSPORT IS NOT THIS METHOD'S BUSINESS. One is issued per run from session state at send time, so
+	 * a correctly-stated child gets a correct passport — and the manifest, which `Environment` rebuilds from
+	 * that passport every turn, follows from it. Nothing here needs to issue either.
+	 *
+	 * The caller places what comes back — row, turns, current pointer. This makes the object and keeps no
+	 * opinion about where it lives.
+	 */
+	forkFromLane( opts: { keepTurns?: number; title?: string | null } = {} ): Session {
+		const child = Session.create( {
+			projectId:  this.projectId,
+			agentId:    this.agentId,
+			title:      opts.title ?? null,
+			folder:     this.folder,
+			tags:       [ ...this.tags ],
+			zoom:       this.zoom,
+			fontFamily: this.fontFamily,
+			policies:   this.policies,
+		} );
+
+		// COMPLETE turns only. A failed turn never landed and an empty one has nothing in it, so carrying
+		// either spends the child's window on something that was not part of the conversation.
+		const whole = this.transcript.allTurns().filter( ( t ) => !t.failed && t.entries.length > 0 );
+		const keep  = Math.max( 0, opts.keepTurns ?? Session.FORK_KEEP_TURNS );
+
+		child.transcript = new Transcript( whole.slice( -keep ).map( ( t ) => ( {
+			...t,
+			entries: t.entries.filter( ( e ) => !isGrant( e ) ),
+			// Born included and unmarked. `compacted` is derived from compaction records and the child has
+			// none; stating it here says the same thing the absence would, and says it where it is read.
+			include:   true,
+			compacted: false,
+		} ) ) );
+
+		// THE REORIENTATION IS TEXT IN THE CONVERSATION, not state on the session. It rides the child's first
+		// send ahead of the grants and is history from then on, so it survives a reload by being part of what
+		// was said — nothing has to remember that this session is a fork.
+		child.pendingEntries = [ { at: Date.now(), kind: 'user', text: frameFork() }, ...this._currentGrants() ];
+		return child;
+	}
+
+	/**
+	 * Every grant this session currently holds, as ENTRIES and as of now — the last word about each
+	 * subject, with revoked ones dropped.
+	 *
+	 * Deliberately flat where `grants()` / `attachments()` / `hoistedGrants()` are tiered. Those three part
+	 * company over whether COMPACTION has taken an entry off the deck, which is a fact about this session's
+	 * history; a child being authored fresh has no history for it to be a fact about, so the three tiers
+	 * collapse back into the one truth they are all views of.
+	 */
+	private _currentGrants(): TurnEntry[] {
+		const out = new Map<string, Grant>();
+		for ( const turn of this.transcript.allTurns() ) {
+			for ( const entry of turn.entries ) {
+				if ( !isGrant( entry ) ) continue;
+				out.set( grantSubject( entry ), entry );
+			}
+		}
+		for ( const entry of this.pendingEntries ) {
+			if ( isGrant( entry ) ) out.set( grantSubject( entry ), entry );
+		}
+		return [ ...out.values() ]
+			.filter( ( g ) => !g.removed )
+			.map( ( g ) => ( { ...g } ) );
+	}
+
 	serializeForWire(): SerializedSession {
 		return {
 			id:         this.id,

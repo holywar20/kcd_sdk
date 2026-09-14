@@ -4,10 +4,9 @@
  * The inverse of `KcdParse.frontmatter()`: given a `frontmatter` record it rebuilds the
  * `<dl data-kcd-frontmatter>` block, splices it into the artifact's existing `body` ( replacing the
  * stale one wholesale ), and wraps the result in a full HTML document. Everything below the
- * frontmatter — regions, sections, slots, params — passes through **untouched**: today's only editing
- * surface ( the Editor.vue POC ) edits frontmatter alone, so that is the only half this emitter
- * regenerates. A richer emit ( sections/regions rebuilt from structured state ) is a later, separate
- * design pass — see 05-sub §Phase 3.
+ * frontmatter — regions, sections, slots, params — passes through **untouched**: frontmatter is the
+ * only half this emitter regenerates. A richer emit ( sections/regions rebuilt from structured
+ * state ) is a later, separate design pass — see 05-sub §Phase 3.
  *
  * Declared `data-kcd-type`s are read straight off `KcdValidate.FRONTMATTER`, never a second table —
  * one spec, so an emitted field can never declare a type the validator itself would flag as drift.

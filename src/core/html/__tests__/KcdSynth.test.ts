@@ -242,6 +242,23 @@ describe( 'KcdSynth — regions and slot rows', () => {
 		expect( html ).not.toContain( '<table' );                      // never a real table
 	} );
 
+	// A habit's References rows were silently dropped: the shape did not list the section, so the content
+	// path had nowhere to place them. The fix is the list, not a bespoke pass-through.
+	it( 'keeps a habit\'s references rows', () => {
+		const { html, report } = build( 'habit', 'synth-habit-refs', {
+			sections: { why: 'a trigger', action: 'an act' },
+			slots: [ {
+				section: 'references',
+				rows: [ { what: 'cover-changes', where: '_Claude/habits/unslotted/cover-changes.html', why: 'the test half' } ],
+			} ],
+		} );
+
+		expect( report.errors ).toEqual( [] );
+		expect( html ).toContain( 'data-kcd-section="references"' );
+		expect( html ).toContain( 'data-kcd-slot="reference"' );
+		expect( html ).toContain( 'href="_Claude/habits/unslotted/cover-changes.html"' );
+	} );
+
 	it( 'defaults an unknown slot kind to table-data rather than emitting an invalid one', () => {
 		const { report } = build( 'lens', 'synth-badkind', {
 			sections: { purpose: 'p', philosophy: 'q' },

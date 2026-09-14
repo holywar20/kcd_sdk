@@ -1,4 +1,4 @@
-import { readdirSync, statSync, readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, cpSync, rmSync } from 'fs'
+import { readdirSync, statSync, readFileSync, existsSync, mkdirSync, writeFileSync, renameSync, cpSync, rmSync, realpathSync, lstatSync, readlinkSync } from 'fs'
 import { join, extname, relative, resolve, sep, dirname, basename } from 'path'
 import { homedir } from 'os'
 import { execFile } from 'child_process'
@@ -82,6 +82,12 @@ export const GREP_READ_BYTES    = 262_144   // 256 KiB
 export const GREP_WALK_CAP      = 200_000
 export const GREP_YIELD_BUDGET  = 200
 export const GREP_READ_COST     = 10
+
+/** How many dangling links `real` follows before calling the path a loop. The OS's own ceiling is of this
+ *  order; a chain longer than it resolves to nothing on disk anyway. */
+const LINK_HOPS = 40
+/** Where a path that cannot be resolved lands — a spelling no root can contain, so it is refused. */
+const UNREACHABLE = '\0unreachable'
 
 /** How to search file contents. The reach axes are NOT here: `grepText` is the core walk and imposes no
  *  authorization of its own, exactly as the rest of this class does not — the caller admits the root
@@ -412,9 +418,9 @@ export class SdkFileAccess {
 		while( stack.length > 0 ) {
 			const dir = stack.pop() as string
 
-			let dirents: { name: string; isDir: boolean }[]
+			let dirents: { name: string; isDir: boolean; isLink: boolean }[]
 			try {
-				dirents = readdirSync( dir, { withFileTypes: true } ).map( ( d ) => ( { name: d.name, isDir: d.isDirectory() } ) )
+				dirents = readdirSync( dir, { withFileTypes: true } ).map( ( d ) => ( { name: d.name, isDir: d.isDirectory(), isLink: d.isSymbolicLink() } ) )
 			} catch( err ) {
 				this._warn( 'grep_walk_failed', { dir, message: this._msg( err ) } )
 				continue
@@ -438,6 +444,9 @@ export class SdkFileAccess {
 					continue
 				}
 
+				// A LINK IS NEVER OPENED. The root was admitted, and a link under it can point anywhere — reading
+				// through one would be the containment the root's admission promised, broken by one name.
+				if( d.isLink ) continue
 				// Every cheap refusal runs BEFORE the stat, and the stat before the read. A protected
 				// file is dropped from the candidate list rather than read and then withheld.
 				if( noise && Noise.skipsFile( d.name ) ) continue
@@ -816,22 +825,68 @@ export class SdkFileAccess {
 			+ 'policy ). This is not something a retry or a different path will fix.'
 	}
 
-	/** Pure path containment — resolve `path` and return it iff it sits inside one of `roots`, else
-	 *  null. No fs touch, no instance state (static). `..` segments resolve away first, so an escaping
-	 *  path lands outside every root and returns null; the `sep` boundary stops `/foo/bar` from matching
-	 *  a `/foo/ba` root. The primitive `WhitelistGuard` turns a null into a loud GuardError. */
+	/** Path containment — return the REAL path iff it sits inside one of `roots`, else null. Static, no
+	 *  instance state. `..` segments resolve away first, so an escaping path lands outside every root and
+	 *  returns null; the `sep` boundary stops `/foo/bar` from matching a `/foo/ba` root. The primitive
+	 *  `WhitelistGuard` turns a null into a loud GuardError.
+	 *
+	 *  ── LINKS ARE RESOLVED ON BOTH SIDES ──
+	 *  A path is judged where it LANDS, not where it is spelled. A symlink or junction inside a root that
+	 *  points out of it would otherwise pass a comparison of spellings and then be followed by the open —
+	 *  the root a boundary in name only. The roots are resolved the same way, so a project that itself
+	 *  sits behind a link still contains its own files. The returned path is the resolved one, and it is
+	 *  the path a caller should open: opening the spelling it was handed would follow whatever the link
+	 *  points at by then. */
 	static jail( path: string, roots: string[] ): string | null {
-		const target = resolve( path )
+		const target = SdkFileAccess.real( path )
 		// Windows filesystems are case-INSENSITIVE — compare case-folded there, so a target whose casing
 		// differs from the whitelisted root (a lowercased drive letter, a model that re-cased the path, …)
 		// still resolves as contained. The RETURNED path keeps its real resolved casing for the fs op.
 		const fold = process.platform === 'win32' ? ( s: string ) => s.toLowerCase() : ( s: string ) => s
 		const t    = fold( target )
 		for( const root of roots ) {
-			const base = fold( resolve( root ) )
+			const base = fold( SdkFileAccess.real( root ) )
 			if( t === base || t.startsWith( base + sep ) ) return target
 		}
 		return null
+	}
+
+	/**
+	 * Where a path REALLY is — every link along it followed, `..` collapsed.
+	 *
+	 * A path that does not exist yet ( a file about to be written, a folder about to be made ) is resolved
+	 * through its deepest EXISTING ancestor, with the rest appended as spelled — nothing that does not exist
+	 * can redirect. A DANGLING link does exist, though, and a write through one creates its target: so a
+	 * link that will not resolve is followed by its own stated destination, hop by hop, rather than treated
+	 * as a name that is not there yet. A chain too long to be anything but a loop lands nowhere at all.
+	 */
+	static real( path: string, hops = 0 ): string {
+		const target = resolve( path )
+		if( hops > LINK_HOPS ) return UNREACHABLE
+		const tail: string[] = []
+		let head = target
+		for( ;; ) {
+			try {
+				return join( realpathSync.native( head ), ...tail )
+			} catch {
+				const pointed = SdkFileAccess._pointsAt( head )
+				if( pointed !== null ) return SdkFileAccess.real( join( pointed, ...tail ), hops + 1 )
+				const parent = dirname( head )
+				if( parent === head ) return target
+				tail.unshift( basename( head ) )
+				head = parent
+			}
+		}
+	}
+
+	/** Where a link at `path` says it goes, or null when `path` is not a link. */
+	private static _pointsAt( path: string ): string | null {
+		try {
+			if( !lstatSync( path ).isSymbolicLink() ) return null
+			return resolve( dirname( path ), readlinkSync( path ) )
+		} catch {
+			return null
+		}
 	}
 
 	// ── private ──────────────────────────────────────────────────────────────────────

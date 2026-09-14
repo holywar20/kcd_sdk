@@ -61,7 +61,7 @@ export interface HabitSlotView {
 	candidates: HabitSlotCandidate[];
 }
 import { DEFAULT_MODEL_KEY } from './Model';
-import type { Policy, Surface } from '../primitives/ToolAccess';
+import { holds, type Policy, type Surface } from '../primitives/ToolAccess';
 import type { ToolDef } from './ToolDef';
 
 /*
@@ -187,6 +187,17 @@ export interface SerializedAgent {
 	folder?: string;
 	/** Human scratch-pad — per-agent sticky note. Null = empty. */
 	notes: string | null;
+}
+
+/** The roster form of an Agent — who it is and what it stacks, never loaded content. A list read answers
+ *  this; the whole graph is `SerializedAgent`, reached by naming the agent. */
+export interface AgentSummary {
+	id: string;
+	projectId: string;
+	name: string;
+	model: string | null;
+	/** The authored lens stack as paths, primary first. The auto-appended base lens is not in it. */
+	lensPaths: string[];
 }
 
 export interface AgentOptions {
@@ -583,6 +594,17 @@ export class Agent {
 		return agent;
 	}
 
+	/** The roster form — identity and the authored lens stack as paths. Carries no lens content, so a
+	 *  whole fleet of these costs what one row of a table would. */
+	summarize(): AgentSummary {
+		const lensPaths: string[] = [];
+		for ( const lens of this.domainLenses ) {
+			const path = lens.getPath();
+			if ( path ) lensPaths.push( path );
+		}
+		return { id: this.id, projectId: this.projectId, name: this.name, model: this.model, lensPaths };
+	}
+
 	/** One function, many purposes: the bridge wire form, the save form, the reconstruction source.
 	 *  Ships base strings + serialized lenses only — composed{X} is rebuilt on arrival. */
 	serializeForWire(): SerializedAgent {
@@ -672,21 +694,18 @@ export class Agent {
 	effectivePlans():      string[] { return _union( this.basePlans,      this.composedPlans ); }
 
 	/**
-	 * THE ALLOWANCES this agent contributes — the lenses' baseline with this agent's own layered over it,
-	 * agent-wins-per-tool, and every subtraction spent on the way out.
+	 * THE ALLOWANCES this agent holds — its own `toolPolicies`, with nothing denied surviving.
 	 *
-	 * NOTHING DENIED SURVIVES. A tool an agent turned off is ABSENT here rather than present with an `off`
-	 * beside it, and that is the whole guarantee rather than a tidiness: every later reader — the gate, the
-	 * manifest, the preloaded schema, the harness cut — works from a list that cannot express a denial, so
-	 * none of them can be the one that forgets to check for one. It cannot leak because it is not there.
+	 * A LENS IS NOT READ HERE. Its tools were merged into the agent's passport once, when the lens was
+	 * authored onto it, and `toolPolicies` mirrors that passport; the agent owns its tools from then on.
+	 * `composedToolPolicies` stays for display — what a lens offers — and grants nothing.
 	 *
-	 * A draft with no lens just returns its own map, which for a fresh agent is empty — and an agent that
-	 * holds nothing reaches nothing. That is the model rather than a gap in it.
+	 * NOTHING UNHELD SURVIVES: a tool at `off` or `deny` is absent, so no reader can forget to check.
 	 */
 	toolAllowances(): Record<string, Policy> {
-		const merged: Record<string, Policy> = { ...this.composedToolPolicies, ...this.toolPolicies };
-		for ( const [ id, policy ] of Object.entries( merged ) ) if ( policy === 'off' ) delete merged[ id ];
-		return merged;
+		const held: Record<string, Policy> = { ...this.toolPolicies };
+		for ( const [ id, policy ] of Object.entries( held ) ) if ( !holds( policy ) ) delete held[ id ];
+		return held;
 	}
 
 	/** What one held tool COSTS — the same lens-then-agent overlay on the other axis, resolved per tool
@@ -1393,12 +1412,20 @@ export class Agent {
 		const deferred = ( t: ToolDef ): boolean => this.toolSurfaceFor( t.id! ) === 'manifest';
 		const sections = Agent.groupByServer( held ).map( g => {
 			const head = g.doc ? `### ${ g.name }\n${ g.doc }` : `### ${ g.name }`;
-			return head + '\n' + g.tools.map( t => `- ${ t.name } — ${ t.description }${ deferred( t ) ? ' ' + MARK : '' }` ).join( '\n' );
+			// Each row names the tool the way the model must CALL it — its wire name, which carries the server.
+			return head + '\n' + g.tools.map( t => `- ${ t.wire ?? t.name } — ${ t.description }${ deferred( t ) ? ' ' + MARK : '' }` ).join( '\n' );
 		} );
+
+		// THE CALLING RULE, stated rather than left to judgment: a tool call is parsed mechanically, so the
+		// name must be the row's name exactly. The example is a real row's own name, so this never spells the
+		// wire separator itself.
+		const example = held[ 0 ].wire ?? held[ 0 ].name;
+		const RULE = `Call a tool by the exact name its row begins with — \`${ example }\`, letter for letter, server part included. `
+			+ 'A name that is not on this list is not a tool you hold.';
 
 		// EMPTY IS ABSENT, on the note as much as on the section: an agent whose tools are all loaded is told
 		// nothing about fetching schemas, because for that run there is nothing to fetch.
-		const parts = [ '## Available tools' ];
+		const parts = [ '## Available tools', RULE ];
 		if ( held.some( deferred ) ) parts.push( NOTE );
 		parts.push( sections.join( '\n\n' ) );
 		return parts.join( '\n\n' );

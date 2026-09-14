@@ -271,10 +271,10 @@ const TOOLS_FIXTURE = `<!DOCTYPE html>
 <section data-kcd-section="tools">
 <div data-kcd-table>
 <div data-kcd-head><span>Tool</span><span>Mode</span></div>
-<div data-kcd-slot="tool" data-kcd-mode="on"><span data-kcd-field="what" data-kcd-type="text">recall</span><span data-kcd-field="why" data-kcd-type="text">on</span></div>
-<div data-kcd-slot="tool" data-kcd-mode="suggested"><span data-kcd-field="what" data-kcd-type="text">learn</span><span data-kcd-field="why" data-kcd-type="text">suggested</span></div>
-<div data-kcd-slot="tool" data-kcd-mode="off"><span data-kcd-field="what" data-kcd-type="text">grep</span><span data-kcd-field="why" data-kcd-type="text">off</span></div>
-<div data-kcd-slot data-kcd-mode="on"><span data-kcd-field="what" data-kcd-type="text">write</span><span data-kcd-field="why" data-kcd-type="text">on</span></div>
+<div data-kcd-slot="tool" data-kcd-mode="on"><span data-kcd-field="what" data-kcd-type="text">memory.recall</span><span data-kcd-field="why" data-kcd-type="text">on</span></div>
+<div data-kcd-slot="tool" data-kcd-mode="suggested"><span data-kcd-field="what" data-kcd-type="text">memory.learn</span><span data-kcd-field="why" data-kcd-type="text">suggested</span></div>
+<div data-kcd-slot="tool" data-kcd-mode="off"><span data-kcd-field="what" data-kcd-type="text">sm_file.grep</span><span data-kcd-field="why" data-kcd-type="text">off</span></div>
+<div data-kcd-slot data-kcd-mode="on"><span data-kcd-field="what" data-kcd-type="text">sm_file.write</span><span data-kcd-field="why" data-kcd-type="text">on</span></div>
 </div>
 </section>
 </section>
@@ -291,16 +291,16 @@ const TOOLS_FIXTURE = `<!DOCTYPE html>
 describe( 'KcdParse / KcdContext — tool-kind slots ( explicit data-kcd-slot="tool" + bare-slot fallback )', () => {
 	it( 'toolModes keys on the KIND, not the section name — explicit `tool` slots AND a bare tools-section slot both resolve; mode `off` drops out', () => {
 		const artifact = KcdParse.build( HtmlTree.parse( TOOLS_FIXTURE ), 'tools.html' );
-		expect( artifact.toolModes ).toEqual( { recall: 'on', learn: 'suggested', write: 'on' } );
-		// grep is mode `off` → contributes nothing.
-		expect( artifact.toolModes.grep ).toBeUndefined();
+		expect( artifact.toolModes ).toEqual( { 'memory.recall': 'on', 'memory.learn': 'suggested', 'sm_file.write': 'on' } );
+		// sm_file.grep is mode `off` → contributes nothing.
+		expect( artifact.toolModes[ 'sm_file.grep' ] ).toBeUndefined();
 	} );
 
 	it( 'a bare slot in a tools section infers kind `tool` by position; an explicit stamp is read verbatim', () => {
 		const artifact = KcdParse.build( HtmlTree.parse( TOOLS_FIXTURE ), 'tools.html' );
 		const byName = ( n: string ) => artifact.slots.find( s => s.what === n )!;
-		expect( byName( 'recall' ).kind ).toBe( 'tool' );   // explicit
-		expect( byName( 'write' ).kind ).toBe( 'tool' );    // inferred from the tools section
+		expect( byName( 'memory.recall' ).kind ).toBe( 'tool' );   // explicit
+		expect( byName( 'sm_file.write' ).kind ).toBe( 'tool' );    // inferred from the tools section
 	} );
 
 	it( 'a tool slot is metadata — it never renders into the compiled body ( the Tools-in-Knowledge leak, closed )', () => {

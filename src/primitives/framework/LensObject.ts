@@ -79,7 +79,7 @@ export class LensObject extends KCDPrimitive {
 	 *  serialize distinctly (they ride the wire but never reach disk). They contribute
 	 *  as always-loaded Know — see getNodes / addInjected. */
 	protected injected: KCDPrimitive[] = [];
-	/** Per-tool three-state inclusion the lens CONTRIBUTES ( tool name → mode ), parsed from the lens's
+	/** Per-tool three-state inclusion the lens CONTRIBUTES ( `group.tool` → mode ), parsed from the lens's
 	 *  Tools table. Unlike references/habits a tool is not a dredged node, so it lives here, not in `nodes`.
 	 *  Read through `getToolPolicies` / `getToolSurfaces`, which spend the three-state on the agent's two
 	 *  axes at that one seam — the lens keeps the single control because its mode is a document attribute. */
@@ -251,7 +251,7 @@ export class LensObject extends KCDPrimitive {
 		this.injected.push( node );
 	}
 
-	/** The per-tool modes this lens contributes ( tool name → mode ) — the raw authored table. A tool is not
+	/** The per-tool modes this lens contributes ( `group.tool` → mode ) — the raw authored table. A tool is not
 	 *  a node, so this is its own read, not `getNodes()`. Prefer the two axis readers below; this survives
 	 *  for the authoring surfaces, which still edit the lens's own three-state control. */
 	getToolModes(): Record<string, SlotMode> { return { ...this.toolModes }; }

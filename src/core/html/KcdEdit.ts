@@ -174,9 +174,10 @@ export const KcdEdit = new class KcdEdit {
 		] );
 	}
 
-	/** Set ( or clear ) a tool's mode on the lens's Tools table. `off` REMOVES the row ( a lens carries only
-	 *  the tools it contributes — off is absence ); `on`/`suggested` replace the row's mode, minting the
-	 *  section on first use. The agent's own `toolModes` still overrides this at compile. */
+	/** Set ( or clear ) a tool's mode on the lens's Tools table. `toolName` is the tool's `group.tool` identity,
+	 *  matched and written verbatim. `off` REMOVES the row ( a lens carries only the tools it contributes — off
+	 *  is absence ); `on`/`suggested` replace the row's mode, minting the section on first use. The agent's own
+	 *  tool policies still override this at compile. */
 	setTool( body: string, toolName: string, mode: 'off' | 'on' | 'suggested' ): string | null {
 		const root = HtmlTree.parse( body );
 		if( mode === 'off' ) {

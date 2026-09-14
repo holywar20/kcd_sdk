@@ -143,7 +143,7 @@ export interface ModelDescriptor {
 	 * every model but the one that declares it: the binding lives on the thing, not in a side table, so
 	 * "which model gets which root context" is read straight off the descriptor. The resolved TEXT is
 	 * not carried here (the descriptor stays pure/path-only) — it is read + emitted main-side and
-	 * surfaced on `ModelRosterEntry.rootContextText`.
+	 * answered per key by the `models.root_context` pull.
 	 */
 	rootContext?: string;
 }
@@ -202,7 +202,7 @@ export interface ModelConfigField {
  * descriptor here. Hiding governs the pickers, never the binding — the surfaces that OFFER a choice
  * (the model store's `menuFor`, the renderer Registry's model catalog) are what skip an invisible row.
  */
-export type ModelRosterEntry = ModelDescriptor & { status: ModelStatus; doc: string; config: ModelConfigField[]; rootContextText: string | null; visible: boolean };
+export type ModelRosterEntry = ModelDescriptor & { status: ModelStatus; doc: string; config: ModelConfigField[]; visible: boolean };
 
 /**
  * The fallback model key — the ONE model every resolution path terminates on, and the only model key

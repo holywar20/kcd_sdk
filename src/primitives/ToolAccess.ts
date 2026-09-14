@@ -11,11 +11,9 @@
  * Ordered loosest to strictest, and the order is load-bearing: the segmented control renders in array order,
  * so the track says which direction is safer without needing a legend.
  *
- * `off` IS A SUBTRACTION, NOT A STATE ANY DOCUMENT CARRIES. Absence and deny are one fact rather than two —
- * a tool that is not on the passport is denied, and a denied tool is not on it. That identity is what makes
- * a denial unable to leak: there is nothing there to leak. The word is stored for exactly one reason, which
- * is that an agent must be able to take back a tool a LENS supplied, and a subtraction has to be written
- * down somewhere to be applied. It is spent during assembly and never survives it.
+ *   off  — NOT GRANTED. A setting a person can change. As a tool value it is a subtraction: it takes back a
+ *          tool a lens supplied, and is spent during assembly rather than stored.
+ *   deny — NEVER. Authored on a project and read live, above every passport. No tier below holds it.
  *
  * ── SURFACE: HOW MUCH OF IT RIDES IN THE PROMPT ──
  * `manifest` is a name and a line saying what it is for. `preload` is the full schema, in the prompt before
@@ -29,8 +27,13 @@
  * MOOT FOR A TOOL THAT IS NOT HELD. There is no cost question to answer about a thing that is not there,
  * and a control must not offer one.
  */
-export const POLICIES = [ 'allow', 'ask', 'off' ] as const;
+export const POLICIES = [ 'allow', 'ask', 'off', 'deny' ] as const;
 export type Policy = typeof POLICIES[ number ];
+
+/** Whether a policy leaves the thing callable — neither `off` nor `deny`. */
+export function holds( policy: Policy ): boolean {
+	return policy === 'allow' || policy === 'ask';
+}
 
 export const SURFACES = [ 'manifest', 'preload' ] as const;
 export type Surface = typeof SURFACES[ number ];

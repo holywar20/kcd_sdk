@@ -70,7 +70,7 @@ const MANIFEST: readonly ManifestEntry[] = [
 	},
 	{
 		bundleSource: 'contracts', vaultHome: 'contracts', required: true,
-		purpose: 'The behavioral agreements the bundled lenses and generators are evaluated against.'
+		purpose: 'The invocable procedures the bundled lenses and generators are evaluated against.'
 	},
 	{
 		bundleSource: 'references/kcd_sdk', vaultHome: 'references/kcd_sdk', required: true,

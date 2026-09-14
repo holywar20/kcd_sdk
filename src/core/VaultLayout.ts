@@ -91,7 +91,7 @@ const LAYOUT: readonly LayoutEntry[] = [
 	},
 	{
 		dir: 'contracts', type: 'contract', layer: 'data', indexed: true,
-		purpose: 'Behavioral agreements — composable prose a third party can evaluate against.'
+		purpose: 'Invocable procedures — composable prose a third party can evaluate against.'
 	},
 	{
 		dir: 'utilities', type: 'utility', layer: 'data', indexed: true,
@@ -150,6 +150,10 @@ const LAYOUT: readonly LayoutEntry[] = [
 	{
 		dir: 'reports', type: 'audit', layer: 'data', indexed: false,
 		purpose: 'Analyzer output.'
+	},
+	{
+		dir: 'bug-reports', type: 'bug-report', layer: 'data', indexed: false,
+		purpose: 'Filed defects and the proof of their repair ( the bug-report contract ). Ephemeral — verified reports are deleted at the monthly sweep.'
 	},
 	{
 		dir: 'audits', type: 'unknown', layer: 'data', indexed: false,
