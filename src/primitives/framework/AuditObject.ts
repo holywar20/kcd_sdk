@@ -21,7 +21,9 @@ const HEADING_RE = /<h[2-6][^>]*>([\s\S]*?)<\/h[2-6]>/g;
 const ENTRY_RE = /^([A-Z][A-Z0-9]*-\d+)\b\s*(?:\(([^)]*)\))?\s*[·—–-]*\s*([\s\S]*)$/;
 
 /**
- * An audit: what a generator or analyzer emitted, kept as a record. Free-form by design — the
+ * An audit: what a generator or analyzer emitted on its LAST run — current state under a fixed name,
+ * flush-and-fill, never a history ( ruling: Bryan, 2026-09-15 ). Status is a fresh run, not an old
+ * report; the run date is frontmatter, never the filename. Free-form by design — the
  * shape table declares no required sections, because the report a track needs is the track's
  * business and pinning it here would make the analyzer serve the type rather than the reader.
  *

@@ -149,7 +149,7 @@ const LAYOUT: readonly LayoutEntry[] = [
 	},
 	{
 		dir: 'reports', type: 'audit', layer: 'data', indexed: false,
-		purpose: 'Analyzer output.'
+		purpose: 'Analyzer output — one report per analyzer under a fixed, undated name, flush-and-fill each run.'
 	},
 	{
 		dir: 'bug-reports', type: 'bug-report', layer: 'data', indexed: false,

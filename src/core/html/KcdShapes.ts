@@ -221,16 +221,20 @@ export const SHAPES: Record<string, TypeShape> = {
 	// Loose by construction. A reference is pointer prose — where a thing lives, how to use it, what
 	// state it is in — and its section vocabulary is deliberately wide ( 58 of 60 in the corpus carry
 	// sections, under no shared vocabulary ). Declaring a required set here would invent a rule the
-	// type never had and light up the largest population in the vault.
+	// type never had and light up the largest population in the vault. The one declared section is OPTIONAL
+	// and exists for its slot: an undeclared section's rows had nowhere to land on the content path and were
+	// dropped without a warning — the same defect, and the same fix, as a habit's references.
 	reference: {
 		purpose: 'A pointer to a living artifact: where it lives, how to use it, and its current state.',
 		open: true,
-		sections: [],
+		sections: [
+			{ name: 'references', tier: 'optional', slot: 'reference', hint: 'What this reference leans on and what leans on it — reference rows.' },
+		],
 	},
 
 	framework:         { purpose: 'Orientation for the substrate itself.',            open: true, sections: [] },
 	'prompt-partial':  { purpose: 'A reusable fragment composed into a prompt.',      open: true, sections: [] },
-	audit:             { purpose: 'What a generator or analyzer emitted, kept as a record.', open: true, sections: [] },
+	audit:             { purpose: 'What a generator or analyzer emitted on its last run — flush-and-fill under a fixed name, dated in frontmatter, never a history.', open: true, sections: [] },
 
 	// The task board's vocabulary, not a new one. `queued | working | rejected | verified` is the
 	// task board's `AgentState` verbatim; `needs-human` is the one addition — the escape path, which the

@@ -29,11 +29,13 @@ export interface AccessVerdict {
 	 * The depth GRANTS alone give this path — the fact "a person explicitly handed this subject over, at
 	 * this rung", independent of whether that was what decided the verdict.
 	 *
-	 * Separate from `via` because they answer different questions and one caller needs both. `via` is for
-	 * the AUDIT line and names a grant only when it changed the outcome. This is for the write surface,
-	 * which relaxes its extension limit on an explicit hand-over — and that must not depend on whether
-	 * configuration happened to already cover the path, or the same gesture would work on a file outside
-	 * the project and be refused on one inside it, for reasons invisible to the person making it.
+	 * Separate from `via` because they answer different questions. `via` is for the AUDIT line and names a
+	 * grant only when it changed the outcome; this is the plain fact of the hand-over, for any door that must
+	 * key on the gesture rather than on whether configuration happened to already cover the path — keyed
+	 * on `via`, the same gesture would work on a file outside the project and be refused on one inside it,
+	 * for reasons invisible to the person making it. Its one consumer was the write surface's extension
+	 * exemption, retired with the allowlist on 2026-09-14 ( bug-report-11 ); nothing reads it today, and
+	 * it stays because the distinction is real, cheap, and pinned by its own tests.
 	 */
 	granted: AccessLevel
 }

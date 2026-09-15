@@ -126,6 +126,31 @@ describe( 'Agent — the two tool axes', () => {
 		expect( agent.preloadedToolIds() ).toEqual( [ 'srv.commit' ] );
 	} );
 
+	it( 'names the search tool in the manifest note once the host binds one, and no mechanism before', () => {
+		// bug-report-9. The note used to say only "ask for its schema" — the tool that fetches one describes
+		// itself on the wire, and a name spelled here would be a second copy. A local model told the mechanism
+		// only inside a tool result kept calling the one tool it had fetched. So the host BINDS the name and
+		// the note says which tool to call, that a server's name fetches all of that server's tools, and that
+		// a tool already fetched is no stand-in for one that is not.
+		const agent = agentWith( { 'srv.probe': 'allow' } );
+		expect( agent.toolManifest() ).toContain( 'ask for its schema, then call it' );
+		expect( agent.toolManifest() ).not.toContain( 'tool_search' );
+
+		agent.bindEnv( { searchTool: 'tool_search' } );
+		const note = agent.toolManifest().split( '\n' ).find( l => l.startsWith( 'Everything you hold' ) );
+		expect( note ).toContain( 'call tool_search with its exact name' );
+		expect( note ).toContain( 'server\'s name' );
+		expect( note ).toContain( 'never stands in for one you have not fetched' );
+	} );
+
+	it( 'says nothing about fetching when nothing is deferred, whichever tool the host named', () => {
+		// Both bound defs ride whole, so there is nothing to fetch and the note — mechanism and all — is absent.
+		const agent = agentWith( { 'srv.probe': 'allow', 'srv.commit': 'allow' }, { 'srv.probe': 'preload', 'srv.commit': 'preload' } );
+		agent.bindEnv( { searchTool: 'tool_search' } );
+		expect( agent.toolManifest() ).not.toContain( 'tool_search' );
+		expect( agent.toolManifest() ).not.toContain( 'Everything you hold' );
+	} );
+
 	it( 'does not hold a def that never crossed the serve seam', () => {
 		// A double has no identity to be filed under, and admitting it BECAUSE it lacks the field everything
 		// else is keyed by would make missing metadata a way in. This inverts the old fallback deliberately.

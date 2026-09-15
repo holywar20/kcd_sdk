@@ -80,6 +80,9 @@ function fullAgent(): Agent {
 		hostPrompt:  'The host environment preamble.',
 		rootContext: 'The model standing root context.',
 		toolDefs:    TOOLS,
+		// THE SEARCH TOOL'S NAME, bound as the host binds it, so the manifest's note names the mechanism the
+		// wire carries rather than the mechanism-free form an unhosted agent falls back to ( bug-report-9 ).
+		searchTool:  'tool_search',
 		// ONE CONTRIBUTOR, declaring the memory band for itself. The fixture used to bind `memory` +
 		// `memoryTags` — a contributor compiled in by name — and the tag-vocabulary constant that headed the
 		// band went with the memory module. A contributor composes its own text now.
@@ -95,6 +98,8 @@ function fullAgent(): Agent {
 
 describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 
+	/** Re-pinned 2026-09-15 for two deliberate changes to the tool manifest: the calling rule ( wire names,
+	 *  2026-09-13 ) and the note naming the search tool the host bound ( bug-report-9 ). */
 	it( 'pins the assembled system half byte-for-byte', () => {
 		expect( fullAgent().wireSystem() ).toMatchInlineSnapshot(`
 			"The host environment preamble.
@@ -143,7 +148,9 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 
 			## Available tools
 
-			Everything you hold is listed here. A tool marked [schema on request] is not in your callable set yet — ask for its schema, then call it.
+			Call a tool by the exact name its row begins with — \`probe\`, letter for letter, server part included. A name that is not on this list is not a tool you hold.
+
+			Everything you hold is listed here. A tool marked [schema on request] is not callable yet: call tool_search with its exact name, or with a server's name for all of that server's tools, then call it. A tool you already have never stands in for one you have not fetched.
 
 			### Fixture server
 			A fixture server.
@@ -186,7 +193,7 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 			{
 			  "lenses": 127,
 			  "system": 30,
-			  "tools": 67,
+			  "tools": 140,
 			}
 		`);
 	} );

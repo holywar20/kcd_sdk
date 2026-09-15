@@ -73,6 +73,9 @@ export interface SynthResult {
 /** Block-level tags that mark a body as already-authored HTML rather than plain text. */
 const BLOCK_START = /^\s*<(p|div|ul|ol|section|table|pre|blockquote|h[1-6]|dl|figure)\b/i;
 
+/** A section body that opens with its own heading — the author has titled it. */
+const AUTHORED_HEADING = /^\s*<h[1-6]\b/i;
+
 /**
  * HTML comment syntax an agent tried to author in prose. STRIPPED, not escaped.
  *
@@ -261,11 +264,19 @@ export const KcdSynth = new class KcdSynth {
 		return text ? this.proseToHtml( text ) : '';
 	}
 
-	/** `<section data-kcd-section>` with its heading. Depth drives the heading level only. */
+	/**
+	 * `<section data-kcd-section>` with its heading. Depth drives the heading level only.
+	 *
+	 * An author whose HTML already opens with a heading has titled the section, so no second one is added —
+	 * `Phase 1` above `<h3>Phase 1 — Publish</h3>` says the same thing twice ( ruling: Bryan, 2026-09-15 ).
+	 */
 	sectionEl( name: string, inner: string, depth: number ): string {
-		const level = Math.min( Math.max( depth, 2 ), 6 );
+		const level   = Math.min( Math.max( depth, 2 ), 6 );
+		const heading = AUTHORED_HEADING.test( inner )
+			? ''
+			: `\t<h${ level } data-kcd-heading>${ HtmlTree.escapeText( this.headingFor( name ) ) }</h${ level }>\n`;
 		return `<section data-kcd-section="${ HtmlTree.escapeAttr( name ) }">\n`
-			+ `\t<h${ level } data-kcd-heading>${ HtmlTree.escapeText( this.headingFor( name ) ) }</h${ level }>\n`
+			+ heading
 			+ this.indent( inner )
 			+ `\n</section>`;
 	}

@@ -174,6 +174,25 @@ describe( 'KcdSynth — declared shape drives placement', () => {
 		expect( undeclared ).toEqual( [] );
 	} );
 
+	// A title written into a phase's own HTML used to sit under a bare auto `Phase N` heading.
+	it( 'lets a section\'s authored heading stand instead of adding a second one', () => {
+		const { html, report } = build( 'plan', 'synth-titled', {
+			sections: {
+				goal: 'g', phases: 'p', 'current-state': 'c',
+				'phase-1': '<h3>Phase 1 — Publish</h3>\n<p>The first.</p>',
+				'phase-2': 'Untitled prose.',
+			},
+		} );
+
+		expect( report.errors ).toEqual( [] );
+		const one = html.slice( html.indexOf( 'data-kcd-section="phase-1"' ), html.indexOf( 'data-kcd-section="phase-2"' ) );
+		expect( one.match( /<h[1-6]\b/g ) ).toHaveLength( 1 );
+		expect( one ).toContain( 'Phase 1 — Publish' );
+		// A section with no heading of its own still gets one.
+		const two = html.slice( html.indexOf( 'data-kcd-section="phase-2"' ) );
+		expect( two ).toMatch( /<h[1-6] data-kcd-heading>/ );
+	} );
+
 	// Found on the first live drive: phases supplied 2-then-1 were emitted 2-then-1. Numbered siblings
 	// carry their sequence in their names, and ordering is this module's job, not the caller's.
 	it( 'orders nested children numerically, not in the order supplied', () => {
@@ -257,6 +276,21 @@ describe( 'KcdSynth — regions and slot rows', () => {
 		expect( html ).toContain( 'data-kcd-section="references"' );
 		expect( html ).toContain( 'data-kcd-slot="reference"' );
 		expect( html ).toContain( 'href="_Claude/habits/unslotted/cover-changes.html"' );
+	} );
+
+	it( 'keeps a reference\'s references rows', () => {
+		const { html, report } = build( 'reference', 'synth-reference-refs', {
+			sections: { location: 'It lives here.' },
+			slots: [ {
+				section: 'references',
+				rows: [ { what: 'kcd-document-protocol', where: '_Claude/references/kcd_sdk/kcd-document-protocol.html', why: 'the format' } ],
+			} ],
+		} );
+
+		expect( report.errors ).toEqual( [] );
+		expect( html ).toContain( 'data-kcd-section="references"' );
+		expect( html ).toContain( 'data-kcd-slot="reference"' );
+		expect( html ).toContain( 'href="_Claude/references/kcd_sdk/kcd-document-protocol.html"' );
 	} );
 
 	it( 'defaults an unknown slot kind to table-data rather than emitting an invalid one', () => {

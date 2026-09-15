@@ -305,6 +305,7 @@ export type AgentEnvironment = {
 	hostPrompt?:     string;
 	rootContext?:    string;
 	toolDefs?:       ToolDef[];
+	searchTool?:     string;
 	contributions?:  Contribution[];
 	attachments?:    string;
 	grants?:         SlotRow[];
@@ -404,6 +405,12 @@ export class Agent {
 	/** The live tool defs available to this agent — the flat set the manifest + suggested surface read,
 	 *  each carrying its BAKED per-mode counts. Bound from the MCP store; `[]` until bound. */
 	toolDefs: ToolDef[] = [];
+	/** THE NAME OF THE TOOL THAT FETCHES A DEFERRED SCHEMA, as the model calls it — bound by the host that
+	 *  serves the search, the way `hostPrompt` is, so this package never spells a name it does not own. The
+	 *  manifest's note on deferred tools names the mechanism only when this is set; '' ( every SDK-built
+	 *  agent outside a dispatch ) keeps the note mechanism-free. Added for bug-report-9: a local model told
+	 *  the mechanism only inside a tool result went on calling the one tool it had already fetched. */
+	searchTool: string = '';
 	/** What the installed CONTRIBUTORS returned for this run — each carrying the band it declared. `[]`
 	 *  until bound, when nothing is installed that contributes, and when every contributor came back dry;
 	 *  all three mean the same thing to the compile, which is that those bands emit nothing. */
@@ -673,6 +680,7 @@ export class Agent {
 		if ( env.hostPrompt  !== undefined ) this.hostPrompt  = env.hostPrompt;
 		if ( env.rootContext !== undefined ) this.rootContext = env.rootContext;
 		if ( env.toolDefs    !== undefined ) this.toolDefs    = env.toolDefs;
+		if ( env.searchTool  !== undefined ) this.searchTool  = env.searchTool;
 		if ( env.contributions !== undefined ) this.contributions = env.contributions;
 		if ( env.attachments !== undefined ) this.attachments = env.attachments;
 		if ( env.grants      !== undefined ) this.grantRows   = env.grants;
@@ -1404,10 +1412,19 @@ export class Agent {
 		if ( !held.length ) return '';
 
 		// The mark rides the ROWS and the sentence explains it ONCE, so saying it costs per manifest rather
-		// than per tool. It names no mechanism on purpose: the tool that fetches a schema describes itself on
-		// the wire, and spelling its name here too would be a second copy to keep in step.
+		// than per tool.
+		//
+		// THE MECHANISM IS NAMED WHEN THE HOST HAS NAMED IT ( bug-report-9 ). This sentence used to name no
+		// tool on purpose — the search tool describes itself on the wire, and a name spelled here too would
+		// be a second copy to keep in step. A local model on deferred tools showed the cost of that: told the
+		// mechanism only in a tool result, it kept calling the one tool it had fetched while saying it meant
+		// another, until the round ceiling. So the note says which tool to call, that a server's name fetches
+		// every tool it holds, and that a tool already fetched is no stand-in — and the name is BOUND by the
+		// host that serves the search ( `searchTool` ), never spelled here, so there is still one speller.
 		const MARK = '[schema on request]';
-		const NOTE = `Everything you hold is listed here. A tool marked ${ MARK } is not in your callable set yet — ask for its schema, then call it.`;
+		const NOTE = this.searchTool
+			? `Everything you hold is listed here. A tool marked ${ MARK } is not callable yet: call ${ this.searchTool } with its exact name, or with a server's name for all of that server's tools, then call it. A tool you already have never stands in for one you have not fetched.`
+			: `Everything you hold is listed here. A tool marked ${ MARK } is not in your callable set yet — ask for its schema, then call it.`;
 
 		const deferred = ( t: ToolDef ): boolean => this.toolSurfaceFor( t.id! ) === 'manifest';
 		const sections = Agent.groupByServer( held ).map( g => {

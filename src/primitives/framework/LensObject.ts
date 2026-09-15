@@ -1,4 +1,4 @@
-import * as path from 'path';
+import { PathText } from '../../core/PathText';
 import { KCDPrimitive, clampDepth, classifyRelPath } from './KCDPrimitive';
 import { VaultLayout } from '../../core/VaultLayout';
 import { SlotResolver } from './SlotResolver';
@@ -61,12 +61,12 @@ export class LensObject extends KCDPrimitive {
 	// inferProjectRoot moved node-side (it needs fs) → @kcd/node `inferProjectRoot`.
 
 	static resolveHref( href: string, projectRoot: string ): string {
-		return path.resolve( projectRoot, href );
+		return PathText.resolve( projectRoot, href );
 	}
 
 	/** Absolute path → ArtifactType. A thin wrapper: relativize, then the one shared taxonomy. */
 	static classifyByPath( absPath: string, projectRoot: string, docRoot = LensObject.DEFAULT_DOC_ROOT ): ArtifactType {
-		return classifyRelPath( path.relative( projectRoot, absPath ), docRoot );
+		return classifyRelPath( PathText.relative( projectRoot, absPath ), docRoot );
 	}
 
 	// ── Spine state ───────────────────────────────────────────────────────────
@@ -101,7 +101,9 @@ export class LensObject extends KCDPrimitive {
 	// ── Static entry points ──────────────────────────────────────────────────
 
 	static load( lensPath: string, opts: LensLoadOptions ): LensObject {
-		const abs = path.resolve( lensPath );
+		// An absolute lensPath stands as given; a relative one resolves against the project root, since core
+		// has no working directory to offer and a lens path was never relative to one.
+		const abs = PathText.resolve( opts.projectRoot, lensPath );
 		const raw = opts.read( abs );
 
 		// HTML is the substrate: the lens hydrates through the validate-first parser ( a malformed
@@ -228,7 +230,7 @@ export class LensObject extends KCDPrimitive {
 	 *  ( Bryan, 2026-07-12: vault-relative paths, no project-resolution magic yet ). Passthrough when no
 	 *  projectRoot is known. */
 	vaultRelative( abs: string ): string {
-		return this.projectRoot ? path.relative( this.projectRoot, abs ).replace( /\\/g, '/' ) : abs;
+		return this.projectRoot ? PathText.relative( this.projectRoot, abs ).replace( /\\/g, '/' ) : abs;
 	}
 
 	/** The full Know graph: dredged children plus any session-injected nodes. The single
