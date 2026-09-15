@@ -99,10 +99,16 @@ function fullAgent(): Agent {
 describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 
 	/** Re-pinned 2026-09-15 for two deliberate changes to the tool manifest: the calling rule ( wire names,
-	 *  2026-09-13 ) and the note naming the search tool the host bound ( bug-report-9 ). */
+	 *  2026-09-13 ) and the note naming the search tool the host bound ( bug-report-9 ). The agent's name
+	 *  block landed the same day on another machine, and the two were pinned together at the merge. */
 	it( 'pins the assembled system half byte-for-byte', () => {
 		expect( fullAgent().wireSystem() ).toMatchInlineSnapshot(`
 			"The host environment preamble.
+
+			---
+
+			## Name
+			You are baseline.
 
 			---
 
@@ -168,6 +174,8 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 			[
 			  "host-prompt",
 			  null,
+			  "agent-name",
+			  null,
 			  "system-prompt",
 			  null,
 			  "root-context",
@@ -188,11 +196,19 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 		`);
 	} );
 
+	it( 'tells the agent its name, and carries no name block for an agent without one', () => {
+		expect( fullAgent().compiledContext().find( b => b.section === 'agent-name' )?.text ).toBe( '## Name\nYou are baseline.' );
+
+		const unnamed = fullAgent();
+		unnamed.name = '  ';
+		expect( unnamed.compiledContext().some( b => b.section === 'agent-name' ) ).toBe( false );
+	} );
+
 	it( 'pins the budget split, so a block that changes BUCKET is caught as well as one that moves', () => {
 		expect( fullAgent().compiledBudget() ).toMatchInlineSnapshot(`
 			{
-			  "lenses": 127,
-			  "system": 30,
+			  "lenses": 128,
+			  "system": 36,
 			  "tools": 140,
 			}
 		`);
@@ -247,6 +263,7 @@ describe( 'Agent.contextSegments — the breakdown is the wire, decomposed', () 
 		expect( agent.contextSegments().map( s => `${ s.source } / ${ s.label }` ) ).toMatchInlineSnapshot(`
 			[
 			  "system / host prompt",
+			  "system / name",
 			  "system / agent instruction",
 			  "system / root context",
 			  "lens / purpose",

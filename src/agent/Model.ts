@@ -23,14 +23,6 @@ export interface ModelDescriptor {
 	key: string;
 	/** UI display name. */
 	label: string;
-	/**
-	 * The persona NAME this model answers to ( "Winston" for the local / GB10 stack, "Claude" for the
-	 * Anthropic / Claude-Code models ) — the human name the user keeps their agents straight by,
-	 * distinct from the lens ( its worldview / focus ) and from `label` ( the technical model name ).
-	 * Hardcoded on the descriptor for now and surfaced to the renderer, so a prompt template can inject
-	 * `{name}`. Optional: absent → a consumer falls back ( e.g. to the lens / agent name ).
-	 */
-	persona?: string;
 	/** Which connector family serves this model. */
 	provider: 'anthropic' | 'test' | 'local' | 'remote' | 'claude_code_max';
 	/** The wire id sent to the provider's API. */

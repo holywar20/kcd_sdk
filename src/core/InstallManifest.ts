@@ -57,6 +57,10 @@ const MANIFEST: readonly ManifestEntry[] = [
 		purpose: 'The authoring lens. REQUIRED, not a nicety: the bundled kcd-configure skill defers all lens-authoring taste to it ( `kcd_compile { lenses: ["lens-crafter"] }` ) before writing anything, so a vault without it leaves the one shipped skill compiling nothing at the exact step where it starts producing value. Shipped as a directory so the lens keeps its `{name}/{name}.html` + `context/` anatomy.'
 	},
 	{
+		bundleSource: 'lenses/house', vaultHome: 'lenses/house', required: true,
+		purpose: 'The house lens — what the project\'s house agent is composed from. REQUIRED: every project is minted with a house agent wearing it, and Starmind\'s automatic work ( session titles, compaction ) runs on that agent, so a vault without it cannot host its own house agent. Pairs with `prompts`, which carries each task\'s wording; the lens carries the stance they all share. Shipped as a directory for the same anatomy reason as lens-crafter.'
+	},
+	{
 		bundleSource: 'habits', vaultHome: 'habits', required: true,
 		purpose: 'Atomic behavior fragments the base lens and every domain lens link into.'
 	},
