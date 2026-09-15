@@ -19,6 +19,10 @@ export {
 } from './VaultUtilities';
 export { VaultDeploy, type DeployReport, type DeployItem, type DeployItemKind } from './VaultDeploy';
 export {
+	VaultTools, VAULT_TOOL_OPS,
+	type VaultToolOp, type VaultToolNames, type VaultToolSpec, type VaultToolInvoke, type VaultToolsOptions,
+} from './VaultTools';
+export {
 	Survey,
 	type SurveyReport, type SurveyComponent, type ComponentKind,
 	type SurveyLanguage, type SurveyEntryPoint, type SurveyTests,

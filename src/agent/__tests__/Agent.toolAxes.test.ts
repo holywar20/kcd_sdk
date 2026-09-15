@@ -151,8 +151,8 @@ describe( 'a lens contributes tools by IDENTITY', () => {
 
 	it( 'composes the floor lens\'s tools onto the agent under their group.tool keys', () => {
 		const agent = Agent.create( { lenses: [ loadBase() ] } );
-		expect( agent.composedToolPolicies[ 'daedalus.kcd_get' ] ).toBe( 'allow' );
-		expect( agent.composedToolSurfaces[ 'daedalus.kcd_get' ] ).toBe( 'preload' );
+		expect( agent.composedToolPolicies[ 'sm_documentation.get_doc' ] ).toBe( 'allow' );
+		expect( agent.composedToolSurfaces[ 'sm_documentation.get_doc' ] ).toBe( 'preload' );
 		// No bare key rides along beside the identity.
 		expect( Object.keys( agent.composedToolPolicies ) ).not.toContain( 'kcd_get' );
 	} );
@@ -160,10 +160,10 @@ describe( 'a lens contributes tools by IDENTITY', () => {
 	it( 'edits a tool row by its identity, and a bare name addresses nothing', () => {
 		const body = loadBase().serialize().body;
 
-		const removed = KcdEdit.setTool( body, 'daedalus.kcd_get', 'off' );
+		const removed = KcdEdit.setTool( body, 'sm_documentation.get_doc', 'off' );
 		expect( removed ).not.toBeNull();
-		expect( removed ).not.toContain( '>daedalus.kcd_get<' );
-		expect( removed ).toContain( '>daedalus.kcd_query<' );
+		expect( removed ).not.toContain( '>sm_documentation.get_doc<' );
+		expect( removed ).toContain( '>sm_documentation.query_docs<' );
 
 		expect( KcdEdit.setTool( body, 'kcd_get', 'off' ) ).toBeNull();
 	} );

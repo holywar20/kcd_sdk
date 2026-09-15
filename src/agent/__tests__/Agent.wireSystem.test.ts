@@ -101,6 +101,11 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 
 			---
 
+			## Name
+			You are baseline.
+
+			---
+
 			The agent own authored instruction.
 
 			---
@@ -161,6 +166,8 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 			[
 			  "host-prompt",
 			  null,
+			  "agent-name",
+			  null,
 			  "system-prompt",
 			  null,
 			  "root-context",
@@ -181,11 +188,19 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 		`);
 	} );
 
+	it( 'tells the agent its name, and carries no name block for an agent without one', () => {
+		expect( fullAgent().compiledContext().find( b => b.section === 'agent-name' )?.text ).toBe( '## Name\nYou are baseline.' );
+
+		const unnamed = fullAgent();
+		unnamed.name = '  ';
+		expect( unnamed.compiledContext().some( b => b.section === 'agent-name' ) ).toBe( false );
+	} );
+
 	it( 'pins the budget split, so a block that changes BUCKET is caught as well as one that moves', () => {
 		expect( fullAgent().compiledBudget() ).toMatchInlineSnapshot(`
 			{
 			  "lenses": 127,
-			  "system": 30,
+			  "system": 36,
 			  "tools": 67,
 			}
 		`);
@@ -240,6 +255,7 @@ describe( 'Agent.contextSegments — the breakdown is the wire, decomposed', () 
 		expect( agent.contextSegments().map( s => `${ s.source } / ${ s.label }` ) ).toMatchInlineSnapshot(`
 			[
 			  "system / host prompt",
+			  "system / name",
 			  "system / agent instruction",
 			  "system / root context",
 			  "lens / purpose",

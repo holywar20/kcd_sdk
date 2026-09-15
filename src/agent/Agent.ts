@@ -1222,6 +1222,9 @@ export class Agent {
 				// every agent in every session, and a cache invalidates from the earliest edit forward, so the
 				// layer that never varies belongs where nothing beneath it can force it to be re-prefilled.
 				this.hostPrompt   ? [ Agent.extraBlock( 'host-prompt',   this.hostPrompt   ) ] : [],
+				// The agent's NAME, straight after the host. Per-agent where the host is shared, and stable across
+				// every turn this agent takes, so it sits above everything that varies more.
+				this.nameBlock()  ? [ Agent.extraBlock( 'agent-name',    this.nameBlock()  ) ] : [],
 				// The agent's OWN authored instruction follows it — the most specific statement of
 				// who this agent is, and it led the wire long before the compile existed ( the orchestrator's
 				// old `assembleSystem([ systemPrompt, ... ])` put it first ). Folding it in HERE is what closes
@@ -1264,6 +1267,13 @@ export class Agent {
 				this.modeLine ? [ Agent.extraBlock( 'mode-line', this.modeLine ) ] : []
 			] )
 		} );
+	}
+
+	/** The agent's name, as the agent is told it. Derived here rather than bound from outside, because the
+	 *  name is this agent's own fact. '' for an agent with no name, which drops the block. */
+	nameBlock(): string {
+		const name = this.name.trim();
+		return name ? `## Name\nYou are ${ name }.` : '';
 	}
 
 	/** The system half a real turn sends — `compiledContext()` projected to text. THE one string, and the
@@ -1479,7 +1489,7 @@ export class Agent {
 	 *  `compiledBudget()` signature change plus the inspector band, so it lands with the renderer slice
 	 *  rather than being half-done here. `frame` and `mode-line` join for the same reason and carry the same
 	 *  reservation. */
-	private static readonly SYSTEM_SECTIONS = new Set<string>( [ 'host-prompt', 'system-prompt', 'root-context', 'attachments', 'frame', 'mode-line' ] );
+	private static readonly SYSTEM_SECTIONS = new Set<string>( [ 'host-prompt', 'agent-name', 'system-prompt', 'root-context', 'attachments', 'frame', 'mode-line' ] );
 	/** The compiled sections that price as TOOLS — the surface, not the identity that may reach for it. */
 	private static readonly TOOL_SECTIONS = new Set<string>( [ 'tool-manifest' ] );
 	/** Every section the bottom-of-context manifest emits — the routing tables a reader finds filed together.
@@ -1508,6 +1518,7 @@ export class Agent {
 	 *  two only ever agree until one of them is edited. */
 	private static readonly SECTION_LABELS: Record<string, string> = {
 		'host-prompt':     'host prompt',
+		'agent-name':      'name',
 		'system-prompt':   'agent instruction',
 		'root-context':    'root context',
 		'attachments':     'attachments',
