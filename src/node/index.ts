@@ -17,7 +17,8 @@ export {
 	type MigrationActionKind, type MigrationAction, type MigrationPlan, type MigrationApplyReport,
 	type StylesheetFixReport,
 } from './VaultUtilities';
-export { VaultDeploy, type DeployReport, type DeployItem, type DeployItemKind } from './VaultDeploy';
+export { VaultDeploy, type DeployReport, type DeployItem, type DeployItemKind, type DeployOptions } from './VaultDeploy';
+export { VaultSnapshot, type SnapshotInfo } from './VaultSnapshot';
 export {
 	VaultTools, VAULT_TOOL_OPS,
 	type VaultToolOp, type VaultToolNames, type VaultToolSpec, type VaultToolInvoke, type VaultToolsOptions,

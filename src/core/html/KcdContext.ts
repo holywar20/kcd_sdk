@@ -457,7 +457,14 @@ export const KcdContext = new class KcdContext {
 			const { key, value } = KcdAddress.readField( f );
 			if ( key ) cells[ key ] = value;
 		}
-		return { what: cells[ 'what' ] ?? '', where: cells[ 'where' ] ?? '', why: cells[ 'why' ] ?? '' };
+		// `rule` IS a `what`, and reading it as one is the whole fix — a rule row is a What with no Where and
+		// no Why, so it needs no second row shape and no second render path. Until 2026-09-16 this returned
+		// the three names alone and a `rule` cell fell on the floor: `renderRow` joined two empty strings and
+		// emitted a bare '- ', so every rules section authored the way `author-reference` PRESCRIBES projected
+		// as blank bullets. Seven documents, seventy-eight rules, none of it visible to an agent and all of it
+		// rendering correctly for a human. The validator now refuses a slot that reads as nothing, so the next
+		// unread field name is a loud failure rather than a silent one.
+		return { what: cells[ 'what' ] ?? cells[ 'rule' ] ?? '', where: cells[ 'where' ] ?? '', why: cells[ 'why' ] ?? '' };
 	}
 
 	/** A `SlotRow` → one tight line. `where` rides as a parenthesized route, not a markdown link — the

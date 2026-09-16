@@ -247,8 +247,20 @@ export const KcdValidate = new class KcdValidate {
 					err( 'tool-slot-non-lens', 'slot:tool', `tool slots belong to a lens alone — a ${ rootType } names the tools it reaches for in prose, not in a tool slot` );
 				const hc = HtmlTree.get( el, 'data-kcd-habit-class' );
 				if ( hc ) habitClasses[ hc ] = ( habitClasses[ hc ] ?? 0 ) + 1;
-				if ( HtmlTree.collect( el, d => KcdAddress.isField( d ) ).length === 0 )
+				// A ROW THE READER CANNOT READ, in the two ways that happens. Carrying no field at all was
+				// always caught; carrying only fields NOBODY READS was not, and that is how a `rule` cell came
+				// to be legal to write and impossible to project — seventy-eight authored rules invisible to
+				// every agent, on pages that rendered correctly and validated clean.
+				//
+				// The test is `ROW_FIELDS`, the same list `KcdContext.readSlot` reads by, so the two cannot
+				// drift apart again: a name added to the reader is admitted here in the same edit, and a name
+				// never added is refused at authoring time instead of vanishing at projection time.
+				const fields = HtmlTree.collect( el, d => KcdAddress.isField( d ) );
+				const named  = fields.map( d => HtmlTree.get( d, 'data-kcd-field' ) ?? '' );
+				if ( fields.length === 0 )
 					err( 'unaddressed-slot', 'slot', 'slot row carries no data-kcd-field — its cells are invisible to the parser' );
+				else if ( !named.some( n => KcdAddress.ROW_FIELDS.includes( n ) ) )
+					err( 'unread-slot', `slot:${ kind }`, `slot row carries only fields the reader never reads ( ${ named.filter( Boolean ).join( ', ' ) } ) — it renders for a human and projects NOTHING to an agent. A row is read from { ${ KcdAddress.ROW_FIELDS.join( ' | ' ) } }` );
 				const mode = HtmlTree.get( el, 'data-kcd-mode' );
 				if ( mode && !KcdAddress.MODES.includes( mode ) )
 					err( 'bad-mode', `mode:${ mode }`, `mode must be one of { ${ KcdAddress.MODES.join( ' | ' ) } }` );

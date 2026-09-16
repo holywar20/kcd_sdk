@@ -52,6 +52,24 @@ export const KcdAddress = new class KcdAddress {
 	 *  Every slot MUST name one — a bare `data-kcd-slot` is invalid ( KcdValidate: `unkinded-slot` ). */
 	SLOT_KINDS   = [ 'reference', 'habit', 'contract', 'tool', 'rule', 'link', 'table-data' ];
 
+	/**
+	 * THE FIELD NAMES A SLOT ROW IS ACTUALLY READ FROM — the one list the reader and the validator share.
+	 *
+	 * `what` / `where` / `why` are the faux-table's three columns. `rule` is a fourth NAME for the first of
+	 * them: a rule row is a What with no Where and no Why, which is why it needs no second row shape and no
+	 * second render path — see `KcdContext.readSlot`.
+	 *
+	 * It is here, beside `SLOT_KINDS`, because the alternative is what shipped: `readSlot` knew three names,
+	 * the validator checked only that SOME field existed, and a `rule` cell satisfied the validator while
+	 * projecting nothing. Seventy-eight authored rules across seven documents were invisible to every agent
+	 * that loaded them, on pages that rendered correctly for a human and passed `kcd_health` clean. One list,
+	 * read by both, is what stops a field name being legal to write and impossible to read.
+	 */
+	ROW_FIELDS   = [ 'what', 'where', 'why', 'rule' ];
+
+	/** The names that can supply a row's TEXT. A row carrying only `where` renders as a bare route. */
+	ROW_TEXT     = [ 'what', 'rule' ];
+
 	KNOWN_ATTRS = [
 		'data-kcd', 'data-kcd-frontmatter', 'data-kcd-field', 'data-kcd-type',
 		'data-kcd-region', 'data-kcd-section', 'data-kcd-heading', 'data-kcd-merge', 'data-kcd-merge-key', 'data-kcd-slot',

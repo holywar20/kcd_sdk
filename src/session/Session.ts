@@ -85,9 +85,33 @@ export interface SerializedSession {
 	 *  on. Absent on an older wire/row, as is a BARE legacy retention policy — both hydrate through
 	 *  `Session.policiesFrom`, which is the one place the old shape is understood. */
 	policies?: SessionPolicies;
+	/** WHY this session was opened, as the surface that opened it said it — see `SessionBrief`. PERSISTED,
+	 *  because compilation must not depend on whether the app has restarted since. Absent for an ordinary
+	 *  chat, which is opened for no stated reason. */
+	brief?: SessionBrief | null;
 	/** Is a turn in flight right now — see `TurnStatus`. Rides the wire so every surface can see it;
 	 *  never written to the session row. Absent → 'idle', which is always true on arrival. */
 	turnStatus?: TurnStatus;
+}
+
+/**
+ * WHY A SESSION WAS OPENED, as the surface that opened it would say it — a named template and the values that
+ * fill it. Rendered into the session's `frame`, which is the layer that rides above the agent's own compile.
+ *
+ * A FLAG AND A BAG, not finished prose ( Bryan, 2026-09-16 ). The wording belongs to the app and is authored in
+ * code beside the rest of what Starmind says about itself; the surface supplies only the facts. A renderer that
+ * could send the text itself would be a second author of the system prompt.
+ *
+ * IT PERSISTS, because compilation must not depend on whether the app has been restarted since the session was
+ * opened. It is written ONCE, when the session is opened, and never refreshed: it is what was true at the
+ * beginning, which is what the system half is for. A brief that re-resolved every turn would move the stable
+ * prefix under the model on every edit, and would spam a plan at an agent that has tools to re-read it.
+ */
+export interface SessionBrief {
+	/** Which authored template to fill. Unknown names render nothing rather than failing a turn. */
+	template: string;
+	/** The values it is filled with, `{Name}` by name. */
+	params:   Record<string, string>;
 }
 
 export interface SessionOptions {
@@ -108,6 +132,8 @@ export interface SessionOptions {
 	 *  is filled from the defaults. An opener that cares about one policy — a house seat setting `chat` or
 	 *  `tools` off — should not have to restate the other four to say it. */
 	policies?: Partial<SessionPolicies>;
+	/** Why this session was opened — see `SessionBrief`. Absent for an ordinary chat. */
+	brief?: SessionBrief | null;
 }
 
 /** The policies every session is born on — the whole transcript rides ( nothing narrowed ) and it never
@@ -204,8 +230,15 @@ export class Session {
 
 	/** The caller's own frame — the layer that rides ABOVE the agent's compile: a room's, a constellation
 	 *  node's identity, an evaluator's standard. Empty for a chat. RUNTIME ONLY: set by whoever spawns the
-	 *  session, never serialized, never a row column. */
+	 *  session, never serialized, never a row column.
+	 *
+	 *  A main-side spawner assigns it directly. A SURFACE cannot — nothing of the renderer's crosses into a
+	 *  string the app speaks in its own voice — so a surface sends a `brief` instead and main renders that
+	 *  into this field. One slot, two ways in, and the persisted half is the brief rather than the prose. */
 	frame: string = '';
+
+	/** WHY this session was opened, kept so the frame can be rebuilt after a restart. See `SessionBrief`. */
+	brief: SessionBrief | null = null;
 
 	/** WHO THIS SESSION RUNS AS — bound, not held. A RESOLVER rather than an Agent, deliberately: one Agent
 	 *  serves many sessions and is rebuilt on reload or reassign, so a held instance goes stale while a
@@ -251,8 +284,8 @@ export class Session {
 	static readonly FORK_KEEP_TURNS = 5;
 
 	static create( opts: SessionOptions ): Session {
-		const now = Date.now();
-		return new Session(
+		const now     = Date.now();
+		const session = new Session(
 			opts.id ?? crypto.randomUUID(),
 			opts.projectId ?? '',
 			opts.agentId ?? '',
@@ -266,11 +299,15 @@ export class Session {
 			opts.fontFamily ?? null,
 			Session.policiesFrom( opts.policies ),
 		);
+		// Assigned rather than constructed, as `frame` is: both are layers a caller hangs on a session, not
+		// part of what a session IS.
+		session.brief = opts.brief ?? null;
+		return session;
 	}
 
 	/** Rebuild from the wire / DB seed. */
 	static fromSerialized( json: SerializedSession ): Session {
-		return new Session(
+		const session = new Session(
 			json.id,
 			json.projectId ?? '',   // absent on a payload written before sessions carried their project
 			json.agentId ?? '',
@@ -284,6 +321,8 @@ export class Session {
 			json.fontFamily ?? null,
 			Session.policiesFrom( json.policies ),
 		);
+		session.brief = json.brief ?? null;
+		return session;
 	}
 
 	/**
@@ -418,6 +457,7 @@ export class Session {
 			zoom:       this.zoom,
 			fontFamily: this.fontFamily,
 			policies:   this.policies,
+			brief:      this.brief,
 			turnStatus: this.turnStatus,
 		};
 	}

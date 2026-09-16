@@ -318,3 +318,42 @@ describe( 'KcdParse / KcdContext — tool-kind slots ( explicit data-kcd-slot="t
 		expect( KcdContext.project( artifact ) ).not.toContain( 'recall' );
 	} );
 } );
+
+describe( 'a rule row — a What by another name ( bug 17 )', () => {
+
+	/** A rules section in the shape `author-reference` prescribes: one cell, named `rule`. */
+	const RULES = [
+		'<!DOCTYPE html><html><body><article data-kcd="reference">',
+		'<dl data-kcd-frontmatter>',
+		'<dt>name</dt><dd data-kcd-field="name" data-kcd-type="slug">r</dd>',
+		'<dt>description</dt><dd data-kcd-field="description" data-kcd-type="text">d</dd>',
+		'<dt>type</dt><dd data-kcd-field="type" data-kcd-type="enum">reference</dd>',
+		'<dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>',
+		'</dl>',
+		'<section data-kcd-section="rules"><h2 data-kcd-heading>Rules</h2><div data-kcd-table>',
+		'<div data-kcd-head><span>Rule</span></div>',
+		'<div data-kcd-slot="rule"><span data-kcd-field="rule" data-kcd-type="text">Never merge the two axes.</span></div>',
+		'<div data-kcd-slot="rule"><span data-kcd-field="rule" data-kcd-type="text">Position is a queue, not a clock.</span></div>',
+		'</div></section></article></body></html>'
+	].join( '' );
+
+	/**
+	 * THE REGRESSION, stated as what was actually wrong: this projected two bare bullets, because `readSlot`
+	 * returned only what/where/why and a `rule` cell fell on the floor. The page rendered correctly for a
+	 * human and `kcd_health` passed clean, which is how it survived across seven documents.
+	 */
+	it( 'projects its text, where it used to project a bare bullet', () => {
+		const out = KcdContext.project( KcdParse.parse( RULES, 'r.html', '_Claude' ) );
+
+		expect( out ).toContain( '- Never merge the two axes.' );
+		expect( out ).toContain( '- Position is a queue, not a clock.' );
+		// The exact old output, asserted ABSENT — a bare bullet is the shape of the bug.
+		expect( out ).not.toMatch( /^- $/m );
+	} );
+
+	/** Through the SAME render path, which is why no second row shape was needed. */
+	it( 'renders through renderRow like every other row — one path, not two', () => {
+		const out = KcdContext.project( KcdParse.parse( RULES, 'r.html', '_Claude' ) );
+		expect( out ).toContain( KcdContext.renderRow( { what: 'Never merge the two axes.', where: '', why: '' } ) );
+	} );
+} );

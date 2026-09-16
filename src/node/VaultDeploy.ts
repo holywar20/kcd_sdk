@@ -24,6 +24,21 @@ import { LensObject, VaultLayout, InstallManifest } from '../core'
  *  `substrate` is one `InstallManifest` row, filled from the bundle; `file` is a seeded document. */
 export type DeployItemKind = 'dir' | 'substrate' | 'file'
 
+/**
+ * Where a deploy reads from and writes to, and how hard it writes.
+ *
+ * `force` is the whole difference between REPAIR and RESET. Without it a deploy fills gaps and leaves
+ * every existing file exactly as it is; with it, a framework file whose content has drifted from what
+ * the bundle ships is written back to canonical. Nothing else changes — `force` reaches only files the
+ * `InstallManifest` claims, so a document the project wrote itself is untouchable either way. That
+ * boundary is the reason a reset is offerable at all: it cannot reach a person's own work.
+ */
+export interface DeployOptions {
+	docRoot?:         string
+	substrateSource?: string
+	force?:           boolean
+}
+
 /** One step of a deployment — what it is, where it goes ( vault-relative ), and whether it was
  *  already there. `present: true` in an apply() report means "left alone", never "overwritten". */
 export interface DeployItem {
@@ -31,16 +46,37 @@ export interface DeployItem {
 	path:    string
 	present: boolean
 	note?:   string
+	/** How many files under this step are ABSENT — the repair measurement. `present` says whether the step
+	 *  is satisfied; this says how big the gap is, as a NUMBER rather than a phrase buried in `note`. It is
+	 *  there so a reader of this report never has to parse prose to draw a count. */
+	missingFiles: number
+	/** How many files under this step differ from what the bundle ships — the RESET measurement, beside
+	 *  the fill measurement above. A present row with `changed: 0` is byte-identical to canonical; a
+	 *  present row with `changed: 12` is a row somebody has edited. Always 0 for a step with no canonical
+	 *  counterpart ( a layout directory, a seeded file ), which have nothing to drift from. */
+	changed: number
 }
 
-/** The full effect of a deploy — every step, whether it ran, and how much was missing. Returned by
- *  both `inspect()` ( nothing happened ) and `apply()` ( it did ), distinguished by `applied`. */
+/**
+ * The full effect of a deploy — every step, whether it ran, and how much was missing. Returned by both
+ * `inspect()` ( nothing happened ) and `apply()` ( it did ), distinguished by `applied`.
+ *
+ * EVERY COUNT HERE DESCRIBES WHAT THE WALK FOUND, not the state it left. From an inspect those are the
+ * same thing. From an apply they are not: `missing: 35` on an applied report means "thirty-five steps
+ * were absent and have now been filled", and a fresh `inspect()` immediately afterwards would answer 0.
+ * Read an applied report as a record of work done, never as a health check — that is what `inspect` is
+ * for, and asking the wrong one is how a repair comes to report itself as a failure.
+ */
 export interface DeployReport {
 	root:    string
 	docRoot: string
 	items:   DeployItem[]
 	/** How many steps were NOT already satisfied. 0 from inspect() = a complete, healthy vault. */
 	missing: number
+	/** How many FILES ( not steps ) differ from canonical across every substrate row. This is what a reset
+	 *  would overwrite, and the number the confirm has to say out loud: a vault can be complete — nothing
+	 *  missing, nothing to repair — and still carry fifty edited framework documents. */
+	changed: number
 	applied: boolean
 }
 
@@ -56,13 +92,13 @@ export class VaultDeploy {
 
 	/** What this vault is missing, changing nothing. The 4.e maintenance read: point it at any
 	 *  project and it answers "is this vault whole?" without touching disk. */
-	static inspect( projectRoot: string, opts?: { docRoot?: string; substrateSource?: string } ): DeployReport {
+	static inspect( projectRoot: string, opts?: DeployOptions ): DeployReport {
 		return VaultDeploy._run( projectRoot, opts, false )
 	}
 
 	/** Fill every gap `inspect()` would report. Idempotent: anything already present is left exactly
 	 *  as it is, so running this against a healthy vault is a no-op that still returns a full report. */
-	static apply( projectRoot: string, opts?: { docRoot?: string; substrateSource?: string } ): DeployReport {
+	static apply( projectRoot: string, opts?: DeployOptions ): DeployReport {
 		return VaultDeploy._run( projectRoot, opts, true )
 	}
 
@@ -70,7 +106,7 @@ export class VaultDeploy {
 	 * The one walk both operations share. `write` is the only difference between a preview and a
 	 * deployment — every decision about WHAT should exist is made identically either way.
 	 */
-	private static _run( projectRoot: string, opts: { docRoot?: string; substrateSource?: string } | undefined, write: boolean ): DeployReport {
+	private static _run( projectRoot: string, opts: DeployOptions | undefined, write: boolean ): DeployReport {
 		const docRoot = opts?.docRoot ?? LensObject.DEFAULT_DOC_ROOT
 		const vault   = path.resolve( projectRoot, docRoot )
 		const items: DeployItem[] = []
@@ -83,16 +119,17 @@ export class VaultDeploy {
 		for( const entry of VaultLayout.all() ) {
 			const abs     = path.join( vault, entry.dir )
 			const present = fs.existsSync( abs )
-			items.push( { kind: 'dir', path: entry.dir, present, note: entry.purpose } )
+			items.push( { kind: 'dir', path: entry.dir, present, missingFiles: 0, changed: 0, note: entry.purpose } )
 			if( !present && write ) fs.mkdirSync( abs, { recursive: true } )
 		}
 
-		items.push( ...VaultDeploy._manifest( vault, docRoot, opts?.substrateSource, write ) )
+		items.push( ...VaultDeploy._manifest( vault, docRoot, opts?.substrateSource, write, opts?.force === true ) )
 		items.push( VaultDeploy._navIndex( vault, docRoot, write ) )
 		items.push( VaultDeploy._commandDeck( vault, write ) )
 
 		const missing = items.filter( ( i ) => !i.present ).length
-		return { root: projectRoot, docRoot, items, missing, applied: write }
+		const changed = items.reduce( ( sum, i ) => sum + i.changed, 0 )
+		return { root: projectRoot, docRoot, items, missing, changed, applied: write }
 	}
 
 	/**
@@ -104,7 +141,7 @@ export class VaultDeploy {
 	 * cannot find part of its source should say so plainly and keep filling everything else, because
 	 * one missing optional row is not a reason to leave the rest of the vault half-built.
 	 */
-	private static _manifest( vault: string, docRoot: string, source: string | undefined, write: boolean ): DeployItem[] {
+	private static _manifest( vault: string, docRoot: string, source: string | undefined, write: boolean, force: boolean ): DeployItem[] {
 		const items: DeployItem[] = []
 
 		for( const entry of InstallManifest.all() ) {
@@ -115,7 +152,9 @@ export class VaultDeploy {
 				items.push( {
 					kind:    'substrate',
 					path:    entry.vaultHome,
-					present: fs.existsSync( dest ),
+					present:      fs.existsSync( dest ),
+					missingFiles: 0,
+					changed:      0,
 					note:    !source
 						? 'no substrate source given'
 						: `${ entry.required ? 'required' : 'optional' } — not found in bundle at "${ entry.bundleSource }"`
@@ -127,20 +166,32 @@ export class VaultDeploy {
 			// case ) must report as incomplete or the maintenance read would call a partial vault healthy.
 			const isDir = fs.statSync( src ).isDirectory()
 			const gaps  = isDir ? VaultDeploy._missingUnder( src, dest ) : ( fs.existsSync( dest ) ? [] : [ entry.bundleSource ] )
+			// The drift measurement, taken WHETHER OR NOT this run intends to act on it: the repair preview
+			// has to be able to say "complete, and fifty of these are edited" without being a reset itself.
+			const drift = isDir
+				? VaultDeploy._differingUnder( src, dest, docRoot )
+				: ( fs.existsSync( dest ) && !VaultDeploy._matches( src, dest, docRoot ) ? [ entry.bundleSource ] : [] )
+
 			const item: DeployItem = {
-				kind:    'substrate',
-				path:    entry.vaultHome,
-				present: gaps.length === 0,
-				note:    gaps.length === 0 ? 'complete' : `${ gaps.length } file(s) missing: ${ gaps.slice( 0, 5 ).join( ', ' ) }${ gaps.length > 5 ? '…' : '' }`
+				kind:         'substrate',
+				path:         entry.vaultHome,
+				present:      gaps.length === 0,
+				missingFiles: gaps.length,
+				changed:      drift.length,
+				note:         gaps.length > 0
+					? `${ gaps.length } file(s) missing: ${ gaps.slice( 0, 5 ).join( ', ' ) }${ gaps.length > 5 ? '…' : '' }`
+					: drift.length > 0
+						? `complete — ${ drift.length } file(s) edited: ${ drift.slice( 0, 5 ).join( ', ' ) }${ drift.length > 5 ? '…' : '' }`
+						: 'complete'
 			}
 
-			if( gaps.length > 0 && write ) {
+			if( write && ( gaps.length > 0 || ( force && drift.length > 0 ) ) ) {
 				if( isDir ) {
 					fs.mkdirSync( dest, { recursive: true } )
-					VaultDeploy.fill( src, dest, docRoot )
+					VaultDeploy.fill( src, dest, docRoot, force )
 				} else {
 					fs.mkdirSync( path.dirname( dest ), { recursive: true } )
-					VaultDeploy._fillFile( src, dest, docRoot )
+					VaultDeploy._fillFile( src, dest, docRoot, force )
 				}
 			}
 			items.push( item )
@@ -167,7 +218,7 @@ export class VaultDeploy {
 	 * skip the excluded names, create directories as needed. The only change is that a text file is
 	 * read, retargeted and written rather than copied.
 	 */
-	static fill( source: string, dest: string, docRoot: string ): void {
+	static fill( source: string, dest: string, docRoot: string, force = false ): void {
 		// CREATE THE DESTINATION, because `cpSync( recursive )` did and this replaced it. Dropping that
 		// broke the skills install ( ENOENT on the first file ) while the vault install kept working —
 		// the vault caller happened to mkdir the destination itself, so only one of the two callers
@@ -181,10 +232,10 @@ export class VaultDeploy {
 
 			if( entry.isDirectory() ) {
 				fs.mkdirSync( to, { recursive: true } )
-				VaultDeploy.fill( from, to, docRoot )
+				VaultDeploy.fill( from, to, docRoot, force )
 				continue
 			}
-			VaultDeploy._fillFile( from, to, docRoot )
+			VaultDeploy._fillFile( from, to, docRoot, force )
 		}
 	}
 
@@ -196,14 +247,57 @@ export class VaultDeploy {
 	 * while rewriting a binary by decoding it as UTF-8 corrupts a file silently. The bundle is all
 	 * text today; the day it carries a font or an image, this stays correct without being revisited.
 	 */
-	private static _fillFile( source: string, dest: string, docRoot: string ): void {
-		if( fs.existsSync( dest ) ) return          // never overwrite — this fills, it does not reset
+	private static _fillFile( source: string, dest: string, docRoot: string, force = false ): void {
+		// Never overwrite — this FILLS. `force` is the one caller that means otherwise, and even it stops
+		// short of touching a file that already matches: rewriting identical bytes would move the mtime of
+		// every framework document in the vault, which is a lie told to anything watching the tree.
+		if( fs.existsSync( dest ) && ( !force || VaultDeploy._matches( source, dest, docRoot ) ) ) return
 
 		if( !TEXT_SUFFIXES.some( ( s ) => source.toLowerCase().endsWith( s ) ) ) {
 			fs.copyFileSync( source, dest )
 			return
 		}
 		fs.writeFileSync( dest, VaultLayout.retargetDocRoot( fs.readFileSync( source, 'utf-8' ), docRoot ), 'utf-8' )
+	}
+
+	/**
+	 * Is `dest` exactly what a fill would have written from `source`?
+	 *
+	 * Compared against the RETARGETED text rather than the bundle's own bytes, because that is what the
+	 * file was installed as — a vault at `_kcd` holds `_kcd/…` links, and calling those fifty documents
+	 * "edited" would make every non-default install report itself as wholly drifted on day one.
+	 */
+	private static _matches( source: string, dest: string, docRoot: string ): boolean {
+		try {
+			if( !TEXT_SUFFIXES.some( ( s ) => source.toLowerCase().endsWith( s ) ) ) {
+				return fs.readFileSync( source ).equals( fs.readFileSync( dest ) )
+			}
+			const want = VaultLayout.retargetDocRoot( fs.readFileSync( source, 'utf-8' ), docRoot )
+			return fs.readFileSync( dest, 'utf-8' ) === want
+		} catch {
+			// Unreadable counts as different: a file we cannot compare is one we cannot call clean.
+			return false
+		}
+	}
+
+	/** Every file under `source` that EXISTS under `dest` with different content, as source-relative paths.
+	 *  The measurement behind "what would a reset overwrite?" — the mirror of `_missingUnder`, and
+	 *  deliberately disjoint from it: a missing file is not a changed one. */
+	private static _differingUnder( source: string, dest: string, docRoot: string ): string[] {
+		const out: string[] = []
+		const walk = ( rel: string ): void => {
+			for( const entry of fs.readdirSync( path.join( source, rel ), { withFileTypes: true } ) ) {
+				if( COPY_EXCLUDE.includes( entry.name ) ) continue
+				const childRel = rel ? path.join( rel, entry.name ) : entry.name
+				if( entry.isDirectory() ) { walk( childRel ); continue }
+				const to = path.join( dest, childRel )
+				if( !fs.existsSync( to ) ) continue
+				if( !VaultDeploy._matches( path.join( source, childRel ), to, docRoot ) ) out.push( childRel.replace( /\\/g, '/' ) )
+			}
+		}
+		if( !fs.existsSync( source ) || !fs.existsSync( dest ) ) return out
+		walk( '' )
+		return out
 	}
 
 	/** Every file under `source` ( excluding the copy-excluded names ) with no counterpart under
@@ -231,7 +325,7 @@ export class VaultDeploy {
 		const rel     = VaultLayout.NAV_INDEX_FILE
 		const dest    = path.join( vault, rel )
 		const present = fs.existsSync( dest )
-		const item: DeployItem = { kind: 'file', path: rel, present, note: 'the vault entry map' }
+		const item: DeployItem = { kind: 'file', path: rel, present, missingFiles: present ? 0 : 1, changed: 0, note: 'the vault entry map' }
 		if( present || !write ) return item
 		fs.writeFileSync( dest, VaultDeploy._navIndexHtml( docRoot ), 'utf-8' )
 		return item
@@ -252,7 +346,7 @@ export class VaultDeploy {
 		const rel     = 'dev-utilities/commands.json'
 		const dest    = path.join( vault, rel )
 		const present = fs.existsSync( dest )
-		const item: DeployItem = { kind: 'file', path: rel, present, note: 'the command deck\'s launchers' }
+		const item: DeployItem = { kind: 'file', path: rel, present, missingFiles: present ? 0 : 1, changed: 0, note: 'the command deck\'s launchers' }
 		if( present || !write ) return item
 		fs.mkdirSync( path.dirname( dest ), { recursive: true } )
 		fs.writeFileSync( dest, '[]\n', 'utf-8' )

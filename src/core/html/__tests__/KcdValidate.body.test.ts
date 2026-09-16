@@ -71,3 +71,39 @@ describe( 'KcdValidate — the body rule', () => {
 		expect( report.ok ).toBe( true );
 	} );
 } );
+
+/**
+ * THE GUARD THAT WOULD HAVE CAUGHT BUG 17. `unaddressed-slot` only ever asked whether a row carried ANY
+ * field; a `rule` cell satisfied that and still projected nothing, so seventy-eight authored rules were
+ * invisible to every agent while validating clean. The question is now whether the READER can read it.
+ */
+describe( 'KcdValidate — a row nobody can read', () => {
+
+	const slot = ( cells: string ): string =>
+		doc( 'reference', 'row-shapes', `<h1>Row shapes</h1><section data-kcd-section="rules"><div data-kcd-table><div data-kcd-slot="rule">${ cells }</div></div></section>` );
+
+	it( 'refuses a row whose only field is one the reader never reads', () => {
+		const report = KcdValidate.validate( slot( '<span data-kcd-field="note" data-kcd-type="text">invisible</span>' ), { docRoot: '_Claude' } );
+
+		expect( report.errors.some( e => e.code === 'unread-slot' ) ).toBe( true );
+	} );
+
+	it( 'admits a `rule` cell — the shape author-reference prescribes', () => {
+		const report = KcdValidate.validate( slot( '<span data-kcd-field="rule" data-kcd-type="text">A rule.</span>' ), { docRoot: '_Claude' } );
+
+		expect( report.errors.some( e => e.code === 'unread-slot' ) ).toBe( false );
+	} );
+
+	it( 'admits the ordinary three-column row', () => {
+		const report = KcdValidate.validate( slot( '<span data-kcd-field="what" data-kcd-type="text">A thing.</span>' ), { docRoot: '_Claude' } );
+
+		expect( report.errors.some( e => e.code === 'unread-slot' ) ).toBe( false );
+	} );
+
+	/** The older, blunter fault still fires where it always did — the new check did not replace it. */
+	it( 'still refuses a row carrying no field at all', () => {
+		const report = KcdValidate.validate( slot( '<span>bare</span>' ), { docRoot: '_Claude' } );
+
+		expect( report.errors.some( e => e.code === 'unaddressed-slot' ) ).toBe( true );
+	} );
+} );
