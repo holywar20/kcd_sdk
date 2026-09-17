@@ -64,6 +64,38 @@ export const TERMINALS = {
 	/** The provider paused the turn and expects to be called again. Starmind does not resume yet, so what is
 	 *  in hand is a fragment — named rather than silently treated as an answer. */
 	paused:    { answered: true,  note: 'the provider paused this turn and expects to be resumed — the reply is partial' },
+	/**
+	 * THE AGENT ELECTED TO STOP — the only terminal in this table that is a DECISION rather than a report.
+	 *
+	 * Every other member describes how the STREAM ended: four are provider or wire facts, one is the house's
+	 * dispatch failing, one is a person interrupting. This one is the agent saying it cannot finish, by
+	 * calling `flag` — and it exists because a system trained hard to produce a completed task, given no
+	 * admissible way to finish, does not stop: it finds an inadmissible one. The honest exit is a near-absent
+	 * action in the weights, so the harness supplies it.
+	 *
+	 * ON THE ANSWERED ARM, and deliberately NOT `answered` itself. There is a message, the front end renders
+	 * it normally and there is no error path — so `answered: true` is simply true. But `answered` carries an
+	 * empty note, means "nothing went wrong that we noticed", and is what `asTerminal()` returns for an
+	 * unknown value precisely because it claims nothing. A flag landing there would be indistinguishable from
+	 * a clean finish — and VISIBILITY IS THE ONLY COUNTERWEIGHT this design has against the exit being
+	 * over-used. Friction on a safety exit is a bug; being seen is the control.
+	 */
+	flagged:   { answered: true,  note: 'the agent raised a flag — it could not finish, and this is its account of how far it got' },
+	/**
+	 * THE WORK IS BLOCKED — and that is a DIFFERENT CLAIM from `flagged`, which is why it is a different
+	 * member rather than a second name for one.
+	 *
+	 * `flagged` is the AGENT saying it cannot finish. This is the agent saying the TASK cannot proceed until
+	 * a person answers something — it raised a question on the board with `halted` set, and the board holds
+	 * the work while the question stands. A person triaging a queue wants to be able to tell which of the two
+	 * they are looking at: one of them is about the worker and the other is about the job.
+	 *
+	 * IT ENDS THE TURN, NOT THE TASK. What a halted turn means for the work is the board's reading of it,
+	 * exactly as it already is. Declaring and stopping used to be two acts here and only the first was a tool
+	 * call, so an agent that declared a block and then carried on regardless was the ordinary case. This is
+	 * the terminal that closes that.
+	 */
+	halted:    { answered: true,  note: 'the agent reported the work is blocked and cannot proceed until its question is answered' },
 	failed:    { answered: false, note: 'the dispatch failed' },
 	cancelled: { answered: false, note: 'stopped before it finished' }
 } as const;
