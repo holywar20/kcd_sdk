@@ -534,16 +534,17 @@ export const KcdContext = new class KcdContext {
 		return [ line1, line2, ...this.paramBlocks( artifact.body ) ].filter( Boolean ).join( '\n' );
 	}
 
-	/** The section names whose ROWS the dense form carries as data rather than prose. Params were ruled
-	 *  in as a document convention on 2026-08-17 and had no consumer until 2026-08-18 — a habit could
-	 *  declare a whitelist, and `run-command-list` did, but nothing ever put it in front of an agent, so
-	 *  the pole silently behaved as `run-command-ask` while reading as populated on disk.
+	/** The section names whose ROWS the dense form carries as data rather than prose. The trap this
+	 *  exists to prevent: a habit that declares rows the projection does not carry reads as populated
+	 *  on disk while behaving, to the agent, as though the section were empty.
 	 *
-	 *  PRIVATE vs PUBLIC is an EDIT boundary, never a read one. Both project. `private` means the agent
-	 *  does not author the rows on its own initiative ( each habit states its own churn guard ); it has
-	 *  always had to READ them, since a whitelist it cannot see is not a whitelist. A section marked
-	 *  `data-kcd-audience="human"` is still skipped, which is the one real way to withhold rows. */
-	PARAM_SECTIONS = [ 'private-habit-params', 'public-habit-params' ];
+	 *  A section marked `data-kcd-audience="human"` is still skipped, which is the one way to withhold
+	 *  rows — withholding is an audience question, never a section-name one.
+	 *
+	 *  There was a second, PRIVATE pole here until 2026-09-16, distinguished only by whether the agent
+	 *  could author the rows. It went with its sole consumer; the edit boundary it drew was prose in
+	 *  each habit's own rules, never anything this list enforced. */
+	PARAM_SECTIONS = [ 'public-habit-params' ];
 
 	/** Each params section as its own labelled block of rows — the label rides because a habit may carry
 	 *  both, and a rule that says "never edit the whitelist" needs the reader to know which set it means.

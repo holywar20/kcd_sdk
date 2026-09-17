@@ -237,7 +237,7 @@ export class KCDPrimitive {
 
 	/**
 	 * This artifact's FULL-body context cost — its whole projected block priced regardless of tuned state,
-	 * i.e. what it weighs at `suggested` mode. Distinct from `estimateTokens()`, which respects inclusion and
+	 * i.e. what it weighs at `load` mode. Distinct from `estimateTokens()`, which respects inclusion and
 	 * returns 0 when excluded: a composition card asks "what would this cost if it rode full-body", which is
 	 * this. ( The home for `Composition.contextTokens( primitive )`. )
 	 */
@@ -256,14 +256,14 @@ export class KCDPrimitive {
 	}
 
 	/**
-	 * This artifact's cost at a given slot mode — the ONE home for the off/on/suggested split, so every
+	 * This artifact's cost at a given slot mode — the ONE home for the off/on/load split, so every
 	 * composition row reads the same number the compile actually pays: `off` = 0, `on` = the routing row
-	 * ( `stubTokens` ), `suggested` = the full body ( `bodyTokens` ). The artifact-axis mirror of the tool
+	 * ( `stubTokens` ), `load` = the full body ( `bodyTokens` ). The artifact-axis mirror of the tool
 	 * axis' baked per-mode counts. ( The home for `Composition.habitModeTokens( node, mode, name, why )`. )
 	 */
 	modeTokens( mode: SlotMode, why = '' ): number {
 		if ( mode === 'off' ) return 0;
-		return mode === 'suggested' ? this.bodyTokens() : this.stubTokens( why );
+		return mode === 'load' ? this.bodyTokens() : this.stubTokens( why );
 	}
 
 	get included(): boolean { return this.isIncluded; }

@@ -153,12 +153,13 @@ export interface AddressEntry {
  * three-state, because a slot's mode is a `data-kcd-mode` attribute and splitting it is a document-format
  * break across every lens on disk. `LensObject.getToolPolicies` / `getToolSurfaces` spend the diagonal at
  * that one seam. References and habits still run on this natively.
- *   off       — excluded entirely; not dredged, not even shown as a routing row.
- *   on        — the default. Routing row only (what/where/why) — the agent looks it up when its
- *               When/trigger fires. Cheap: never fetched into the context-assembly graph.
- *   suggested — the target's full text is dredged and rides inline, no lookup required.
+ *   off  — excluded entirely; not dredged, not even shown as a routing row.
+ *   on   — the default. Routing row only (what/where/why) — the agent looks it up when its
+ *          When/trigger fires. Cheap: never fetched into the context-assembly graph.
+ *   load — the target's full text is dredged and rides inline, no lookup required.
+
  */
-export const SLOT_MODES = [ 'off', 'on', 'suggested' ] as const;
+export const SLOT_MODES = [ 'off', 'on', 'load' ] as const;
 export type SlotMode = typeof SLOT_MODES[number];
 
 /**

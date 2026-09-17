@@ -68,7 +68,7 @@ export interface CompileResult {
  *  `fixed` for a row that is not a slot at all — inherited or compiler-synthesized content that rides no
  *  matter what the lens authors ( the floor, the merged care band, the manifest, the structure ).
  *
- *  DISPLAY-ONLY, and deliberately NOT `SlotMode`. `SlotMode` is the core off/on/suggested currency the whole
+ *  DISPLAY-ONLY, and deliberately NOT `SlotMode`. `SlotMode` is the core off/on/load currency the whole
  *  composition UI is built on; this type is consumed only by `lensView` and the CLI chart it feeds, so a new
  *  value here cannot reach the slotting surfaces. */
 export type SlotState = SlotMode | 'empty' | 'fixed';

@@ -59,6 +59,30 @@ export interface ModelDescriptor {
 	 */
 	billing?: 'subscription' | 'metered';
 	/**
+	 * WHO OWNS THE CONVERSATION — the connection's own fact, declared once on a connector's seed and
+	 * read wherever a surface has to behave differently because Starmind is not the one composing.
+	 *
+	 * `'managed'` means the provider assembles the prompt, caches its reading of the conversation on
+	 * its side, and keeps the transcript; Starmind hands over a turn and receives an answer. Absent (or
+	 * `'owned'`) means the ordinary arrangement every other connector has: Starmind composes the
+	 * context and replays it whole each turn. Absent is the SAFE default — a connector that forgets to
+	 * declare is treated as ordinary, which is merely today's behaviour, where the reverse default
+	 * would break every normal model.
+	 *
+	 * NOT `tier`, and the difference is the whole reason this exists. `tier: 'frontier'` is true of the
+	 * metered Anthropic connector too, and that one composes and replays like any other — on the
+	 * interface side it has more in common with a remote endpoint than with the subscription CLI. A
+	 * membership list named after the tier groups the wrong two things, which is exactly what four
+	 * renderer files were doing before this field ( 2026-09-17 ).
+	 *
+	 * ONE PROPERTY, TWO QUESTIONS, AND THEY CO-OCCUR TODAY. Most readers are asking "is there a context
+	 * of ours to show / count / compose"; the model-swap warning is asking the narrower "does the
+	 * provider cache its reading server-side, so a swap discards it". Only `claude_code_max` answers
+	 * yes to either, so one field serves both. The day a connector owns the conversation WITHOUT
+	 * caching it, this splits — and the reader that needs the narrower fact is the one to move.
+	 */
+	conversation?: 'managed' | 'owned';
+	/**
 	 * Working tier — how heavy the model is / where it runs. Orthogonal to provider:
 	 * a 'remote' connector may front a remote-tier self-host OR a frontier endpoint,
 	 * so tier is declared, not derived. Widgets constrain their model choice by it.

@@ -68,11 +68,11 @@ export const KcdEdit = new class KcdEdit {
 	}
 
 	/** A fresh `<div data-kcd-slot="<kind>">` ( what · where · why ), `data-kcd-mode` gating auto-load:
-	 *  `suggested` = rides inline ( Included ), `on` = routing row only ( Conditional ). `kind` is the
+	 *  `load` = rides inline ( Included ), `on` = routing row only ( Conditional ). `kind` is the
 	 *  explicit slot role ( `reference` / `habit` — protocol §3 ), stamped so a newly-added slot carries the
 	 *  same kind the rest of the corpus does ( never a bare `data-kcd-slot`, which the validator rejects ). */
 	buildSlot( name: string, vaultHref: string, included: boolean, kind: string, habitClass?: string ): HtmlEl {
-		const attrs: Record<string, string> = { 'data-kcd-slot': kind, 'data-kcd-mode': included ? 'suggested' : 'on' };
+		const attrs: Record<string, string> = { 'data-kcd-slot': kind, 'data-kcd-mode': included ? 'load' : 'on' };
 		if( habitClass ) attrs[ 'data-kcd-habit-class' ] = habitClass;
 		return this.el( 'div', attrs, [
 			this.el( 'span', { 'data-kcd-field': 'what',  'data-kcd-type': 'text' }, [ this.text( name ) ] ),
@@ -93,13 +93,13 @@ export const KcdEdit = new class KcdEdit {
 		return HtmlTree.innerHtml( root );
 	}
 
-	/** Set a slot's `data-kcd-mode` gate: `included` ⇒ `suggested` ( full text inline ), else `on`
+	/** Set a slot's `data-kcd-mode` gate: `included` ⇒ `load` ( full text inline ), else `on`
 	 *  ( a routing row ). Matched by where-href, so it serves the reference move AND the habit mode toggle. */
 	setMode( body: string, path: string, included: boolean ): string | null {
 		const root = HtmlTree.parse( body );
 		const slot = this.findSlot( root, path );
 		if( !slot ) return null;
-		slot.attrs[ 'data-kcd-mode' ] = included ? 'suggested' : 'on';
+		slot.attrs[ 'data-kcd-mode' ] = included ? 'load' : 'on';
 		return HtmlTree.innerHtml( root );
 	}
 
@@ -167,7 +167,7 @@ export const KcdEdit = new class KcdEdit {
 		} );
 	}
 
-	buildToolSlot( toolName: string, mode: 'on' | 'suggested' ): HtmlEl {
+	buildToolSlot( toolName: string, mode: 'on' | 'load' ): HtmlEl {
 		return this.el( 'div', { 'data-kcd-slot': 'tool', 'data-kcd-mode': mode }, [
 			this.el( 'span', { 'data-kcd-field': 'what', 'data-kcd-type': 'text' }, [ this.text( toolName ) ] ),
 			this.el( 'span', { 'data-kcd-field': 'why',  'data-kcd-type': 'text' }, [ this.text( mode ) ] ),
@@ -176,9 +176,9 @@ export const KcdEdit = new class KcdEdit {
 
 	/** Set ( or clear ) a tool's mode on the lens's Tools table. `toolName` is the tool's `group.tool` identity,
 	 *  matched and written verbatim. `off` REMOVES the row ( a lens carries only the tools it contributes — off
-	 *  is absence ); `on`/`suggested` replace the row's mode, minting the section on first use. The agent's own
+	 *  is absence ); `on`/`load` replace the row's mode, minting the section on first use. The agent's own
 	 *  tool policies still override this at compile. */
-	setTool( body: string, toolName: string, mode: 'off' | 'on' | 'suggested' ): string | null {
+	setTool( body: string, toolName: string, mode: 'off' | 'on' | 'load' ): string | null {
 		const root = HtmlTree.parse( body );
 		if( mode === 'off' ) {
 			const table = this.toolTable( root );

@@ -196,7 +196,7 @@ export const SHAPES: Record<string, TypeShape> = {
 	},
 
 	analyzer: {
-		purpose: 'A read-anywhere, write-one-report agent.',
+		purpose: 'A read-anywhere, write-one-report SKILL — not an actor of its own.',
 		open: true,
 		sections: [
 			{ name: 'know',         tier: 'expected', hint: 'What it is allowed to read.' },

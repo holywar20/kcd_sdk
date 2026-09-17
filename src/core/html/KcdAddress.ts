@@ -14,6 +14,8 @@
 
 import { HtmlTree } from './HtmlTree';
 import type { HtmlEl } from './HtmlTree';
+import { SLOT_MODES } from '../../primitives/types';
+import type { SlotMode } from '../../primitives/types';
 
 export type FieldValidator = ( v: string ) => boolean;
 
@@ -33,9 +35,10 @@ export const KcdAddress = new class KcdAddress {
 	SLOT_FIELDS  = [ 'what', 'where', 'why' ];
 	PARAM_FIELDS = [ 'name', 'type', 'default', 'description' ];
 	/** The one idiom every routable artifact ( reference, habit, contract, plan, anything else a
-	 *  slot can point at ) shares — same three states MCP tool exposure already uses. Absent on a
-	 *  slot ⇒ 'on', the default. See PolicyEntry / SlotMode in primitives/types.ts. */
-	MODES        = [ 'off', 'on', 'suggested' ];
+	 *  slot can point at ) shares. Absent on a slot ⇒ 'on', the default. DERIVED from `SLOT_MODES`
+	 *  rather than restated: these were two independent literals until 2026-09-16, so the set the
+	 *  validator graded against could drift from the set the parser read. */
+	MODES: string[] = [ ...SLOT_MODES ];
 	/** The §10 SEED modes — a completely separate vocabulary that happens to share the
 	 *  `data-kcd-mode` attribute with slots above. `prepend` maintains a `<!-- kcd:begin/end -->`
 	 *  block inside a host entry file; `create-only` writes the whole file and then never touches it
@@ -152,6 +155,22 @@ export const KcdAddress = new class KcdAddress {
 	/** This element's audience, default `both` ( protocol §5 — the dual-extraction strip control ). */
 	audienceOf( el: HtmlEl ): string { return HtmlTree.get( el, 'data-kcd-audience' ) ?? 'both'; }
 	isHumanOnly( el: HtmlEl ): boolean { return this.audienceOf( el ) === 'human'; }
+
+	/**
+	 * A raw `data-kcd-mode` resolved against the closed slot set — `null` for absent AND for anything
+	 * that is not a mode. Telling those two apart is the caller's business: the validator must not
+	 * complain about an absent attribute, the parser must default it to `on`.
+	 *
+	 * THE ONLY READER, and that is the point. KcdParse and KcdValidate each held their own idea of the
+	 * accepted set and fell in OPPOSITE directions on the same input — the parser demoted an
+	 * unrecognised mode to `on` with no error at all, while the validator raised a hard `bad-mode` on
+	 * it. A document could therefore pass one head and be quietly rewritten by the other. Reading
+	 * through one function makes that disagreement unrepresentable.
+	 */
+	readMode( raw: string | undefined ): SlotMode | null {
+		if ( !raw ) return null;
+		return this.MODES.includes( raw ) ? raw as SlotMode : null;
+	}
 
 	/**
 	 * A section's CROSS-ARTIFACT fusion key ( context-optimization plan, Phase 2 ) — deliberately a

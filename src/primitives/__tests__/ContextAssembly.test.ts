@@ -26,8 +26,8 @@ const LENS_HTML = `<!DOCTYPE html>
 <p>Its identity lede.</p>
 <section data-kcd-region="know">
 <section data-kcd-section="references">
-<div data-kcd-slot="reference" data-kcd-mode="suggested"><span data-kcd-field="what" data-kcd-type="text">Reference A</span><a data-kcd-field="where" data-kcd-type="path" href="ref-a.html">a</a><span data-kcd-field="why" data-kcd-type="text">reason A</span></div>
-<div data-kcd-slot="reference" data-kcd-mode="suggested"><span data-kcd-field="what" data-kcd-type="text">Reference B</span><a data-kcd-field="where" data-kcd-type="path" href="ref-b.html">b</a><span data-kcd-field="why" data-kcd-type="text">reason B</span></div>
+<div data-kcd-slot="reference" data-kcd-mode="load"><span data-kcd-field="what" data-kcd-type="text">Reference A</span><a data-kcd-field="where" data-kcd-type="path" href="ref-a.html">a</a><span data-kcd-field="why" data-kcd-type="text">reason A</span></div>
+<div data-kcd-slot="reference" data-kcd-mode="load"><span data-kcd-field="what" data-kcd-type="text">Reference B</span><a data-kcd-field="where" data-kcd-type="path" href="ref-b.html">b</a><span data-kcd-field="why" data-kcd-type="text">reason B</span></div>
 </section>
 </section>
 <section data-kcd-region="care">
@@ -39,7 +39,7 @@ const LENS_HTML = `<!DOCTYPE html>
 </body></html>
 `;
 
-// Two references the lens slots at `suggested`. Under LINKS-ONLY dredge their bodies ( "From Reference
+// Two references the lens slots at `load`. Under LINKS-ONLY dredge their bodies ( "From Reference
 // A/B." ) never ride — they surface only as routing rows in the lens's own References table. The bodies
 // stay in the fixture so a regression that re-introduced full-text dredge would surface them.
 const refHtml = ( slug: string, label: string ) => `<!DOCTYPE html>
@@ -179,7 +179,8 @@ describe( 'LensObject.getContextBlocks + ContextAssembler — Phase 2 integratio
 		};
 		const lens = LensObject.load( path.join( ROOT, 'off-lens.html' ), { projectRoot: ROOT, read: readOff, depth: 2 } );
 
-		// Neither mode ever dredges (fetches) its target in normal, non-eager assembly.
+		// This fixture is loaded non-eager, which gates the dredge off entirely — so neither mode fetches
+		// its target here. That is the LOADER, not the mode; see the settled-mode note further down.
 		expect( lens.getNodes().length ).toBe( 0 );
 
 		const stub = lens.stubBlock();
@@ -188,13 +189,20 @@ describe( 'LensObject.getContextBlocks + ContextAssembler — Phase 2 integratio
 	} );
 } );
 
-// ── TRANSITIONAL ( Bryan, 2026-07-12, ruling corrected ): the INTENT is that `on` = deck pointer
-// ( routing row ) while `suggested` = an implicit injection whose body rides ( a "this matters" highlight
-// the user operates ) — see LensObject.getContextBlocks' corrected model. The current `dredgeFrom` does
-// NOT yet realize that for `suggested`; dredge is being reworked and is not canonical for habits. The
-// assertions below pin the CURRENT ( transitional ) behavior so a change is visible, NOT the end-state.
-// The one path that already rides a full body today is a session INJECT ( `addInjected` — a deliberate
-// paste of context ), which projects through the same dense form as any other injected habit.
+// ── SLOT MODE, SETTLED ( ruled 2026-07-12, corrected the same day; the transitional note this replaces
+// retired 2026-09-17 ). `on` = a deck pointer, where the routing row is the slot's whole contribution;
+// `load` = an implicit injection whose body rides — the "this matters" highlight the user operates.
+// `dredgeFrom` realizes both, so the assertions below pin the END STATE, not a way-station.
+//
+// WHAT THE MODE RULE RIDES ON IS THE LOADER, and reading one for the other is what kept the old note
+// alive past its subject. A non-eager lens dredges NOTHING, so `on` and `load` are indistinguishable
+// there — a routing row each and no body between them. Everything that COMPILES loads eager ( see
+// `LensLoadOptions.eager` ), and that is where the two modes part company. Both halves are asserted
+// below: a test that only ever loaded lazily reports the loader's silence as the mode's meaning, which
+// is how `Vault.buildAgent.test.ts` came to compare an eager compile against a lazy one for six weeks.
+//
+// A session INJECT ( `addInjected` — a deliberate paste of context ) rides a full body under either
+// loader, and projects through the same dense form as any other injected habit.
 
 const PROJECT_ROOT = path.resolve( __dirname, '../../../..' );   // kcd_sdk/src/primitives/__tests__ → repo root
 const HABITS_DIR   = path.join( PROJECT_ROOT, '_Claude/habits' );
@@ -203,7 +211,7 @@ const HABITS_DIR   = path.join( PROJECT_ROOT, '_Claude/habits' );
 // `KcdParse.policy()` no longer cares which region carried the link (mode alone gates dredging), but
 // the fixture keeps a Know-region placement anyway — SlotResolver only cares about a block's
 // `habitClass`/`sourceLayer`, not which region carried the link, so this exercises the identical path.
-const slotLensHtml = ( mode: 'on' | 'suggested' ) => `<!DOCTYPE html>
+const slotLensHtml = ( mode: 'on' | 'load' ) => `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Slot Fixture Lens</title></head>
 <body>
 <article data-kcd="lens">
@@ -215,68 +223,85 @@ const slotLensHtml = ( mode: 'on' | 'suggested' ) => `<!DOCTYPE html>
 </dl>
 <section data-kcd-region="know">
 <section data-kcd-section="references">
-<div data-kcd-slot="reference"${ mode === 'suggested' ? ' data-kcd-mode="suggested"' : '' } data-kcd-habit-class="log-session"><span data-kcd-field="what" data-kcd-type="text">log-session-liberal</span><a data-kcd-field="where" data-kcd-type="path" href="_Claude/habits/log-session/log-session-liberal.html">log-session-liberal</a><span data-kcd-field="why" data-kcd-type="text">default</span></div>
+<div data-kcd-slot="reference"${ mode === 'load' ? ' data-kcd-mode="load"' : '' } data-kcd-habit-class="log-action"><span data-kcd-field="what" data-kcd-type="text">log-action</span><a data-kcd-field="where" data-kcd-type="path" href="_Claude/habits/log-action/log-action.html">log-action</a><span data-kcd-field="why" data-kcd-type="text">default</span></div>
 </section>
 </section>
 </article>
 </body></html>
 `;
 
-describe( 'habit slot dredge is links-only — no mode rides full text; only a session inject does', () => {
-	it( 'default mode (on): neither log-session-liberal (dredged) nor log-session-never (injected) contributes full text to the wire', () => {
+describe( 'habit slot dredge follows MODE once the lens is loaded the way a compile loads it', () => {
+	it( 'on mode, eagerly loaded: the habit IS fetched and its body still never rides — the inject is what carries one', () => {
 		const readReal: ReaderFn = ( absPath ) => {
 			if ( absPath.replace( /\\/g, '/' ).endsWith( 'slot-lens.html' ) ) return slotLensHtml( 'on' );
 			return fs.readFileSync( absPath, 'utf-8' );
 		};
 
 		const lens = LensObject.load( path.join( PROJECT_ROOT, 'slot-lens.html' ), {
-			projectRoot: PROJECT_ROOT, read: readReal, depth: 2
+			projectRoot: PROJECT_ROOT, read: readReal, depth: 2, eager: true
 		} );
 
-		// Dredged alone: `on` mode never fetches the target at all — its full text never appears.
+		// EAGER, so the target IS fetched and the object exists — `on` needs it for the Atlas graph and the
+		// reader drawer. What `on` withholds is inclusion: the fetched habit is marked not-included, so the
+		// routing row is its whole contribution and its full text never appears.
+		expect( lens.getNodes().length ).toBe( 1 );
 		const beforeInject = lens.serializeForContext();
-		expect( beforeInject ).not.toMatch( /breadcrumb a future session reads/ );
+		expect( beforeInject ).not.toMatch( /WRITE THE FINDING, NOT THE ACTIVITY/ );
 
 		// Inject the "never" pole too — same habit-class, higher specificity (injected > lens) — makes
 		// no difference to the LENS's own on-mode slot; injection is a separate, deliberate act.
-		const neverHabitPath = path.join( HABITS_DIR, 'log-session/log-session-never.html' );
+		const neverHabitPath = path.join( HABITS_DIR, 'log-action/log-action-never.html' );
 		const neverHabit = fs.readFileSync( neverHabitPath, 'utf-8' );
 		lens.addInjected( KCDPrimitive.fromHtml( neverHabit, neverHabitPath , '_Claude') );
 
-		// addInjected is itself always a "suggested" act (the GUI "drop context" gesture) — the
+		// addInjected is itself always a "load" act (the GUI "drop context" gesture) — the
 		// injected habit's OWN body now rides as its DENSE four-field form ( KcdContext.projectHabit ),
 		// not a raw dump, same as any other injected habit. What's proven here is that the LENS's
 		// `on`-mode dredge stays silent while the injected habit's directive rides.
 		const afterInject = lens.serializeForContext();
-		expect( afterInject ).toContain( 'do nothing; write no line to' );
-		expect( afterInject ).not.toMatch( /breadcrumb a future session reads/ );
+		expect( afterInject ).toContain( 'do nothing; record no entry' );
+		expect( afterInject ).not.toMatch( /WRITE THE FINDING, NOT THE ACTIVITY/ );
 
 		const slots = SlotResolver.describe( lens.getContextBlocks() );
-		const resolution = slots.find( s => s.habitClass === 'log-session' );
+		const resolution = slots.find( s => s.habitClass === 'log-action' );
 		expect( resolution?.winner.sourceLayer ).toBe( 'injected' );
 	} );
 
-	it( 'TRANSITIONAL: suggested habit is still links-only today ( intent is it rides — pending the dredge rework )', () => {
+	it( 'load mode, eagerly loaded: the habit body RIDES — and stays links-only under a non-eager load', () => {
 		const readReal: ReaderFn = ( absPath ) => {
-			if ( absPath.replace( /\\/g, '/' ).endsWith( 'slot-lens.html' ) ) return slotLensHtml( 'suggested' );
+			if ( absPath.replace( /\\/g, '/' ).endsWith( 'slot-lens.html' ) ) return slotLensHtml( 'load' );
 			return fs.readFileSync( absPath, 'utf-8' );
 		};
 
-		const lens = LensObject.load( path.join( PROJECT_ROOT, 'slot-lens.html' ), {
-			projectRoot: PROJECT_ROOT, read: readReal, depth: 2
+		const load = ( eager: boolean ) => LensObject.load( path.join( PROJECT_ROOT, 'slot-lens.html' ), {
+			projectRoot: PROJECT_ROOT, read: readReal, depth: 2, eager
 		} );
 
-		// Nothing dredged: the habit's full body never rides, but its what/where/why row survives.
-		expect( lens.getNodes().length ).toBe( 0 );
-		const ctx = lens.serializeForContext();
-		expect( ctx ).not.toMatch( /breadcrumb a future session reads/ );
-		expect( ctx ).toContain( 'log-session-liberal' );
-		expect( ctx ).toContain( '_Claude/habits/log-session/log-session-liberal.html' );
+		// EAGER — the loader every compile uses. This is the one case where a slot's body actually rides:
+		// the habit is dredged AND marked included, so its full directive joins the context.
+		const eager = load( true );
+		expect( eager.getNodes().length ).toBe( 1 );
+		const eagerCtx = eager.serializeForContext();
+		expect( eagerCtx ).toMatch( /WRITE THE FINDING, NOT THE ACTIVITY/ );
+
+		// NON-EAGER — links-only, and NOT because the mode says so: the whole dredge is gated off, so there
+		// is no fetched object for any mode to include. Asserted beside its pair, because on its own this
+		// reads as `load` meaning nothing — which is exactly the reading that outlived the dredge rework.
+		const lazy = load( false );
+		expect( lazy.getNodes().length ).toBe( 0 );
+		const lazyCtx = lazy.serializeForContext();
+		expect( lazyCtx ).not.toMatch( /WRITE THE FINDING, NOT THE ACTIVITY/ );
+
+		// The routing row survives under both — that is what a mode never takes away.
+		for ( const ctx of [ eagerCtx, lazyCtx ] ) {
+			expect( ctx ).toContain( 'log-action' );
+			expect( ctx ).toContain( '_Claude/habits/log-action/log-action.html' );
+		}
 	} );
 } );
 
-// A lens with ONE `suggested` slot pointing at a plan. Same shape as slotLensHtml, but the target is a
-// plan path — the point being that `suggested` ( which DOES ride full text for a habit or reference ) must
+// A lens with ONE `load` slot pointing at a plan. Same shape as slotLensHtml, but the target is a
+// plan path — the point being that `load` ( which DOES ride full text for a habit or reference ) must
 // still NOT ride full text for a plan: plans are link-only in assembled context ( Bryan, 2026-07-12 ).
 const planSlotLensHtml = ( planHref: string ) => `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Plan Slot Fixture Lens</title></head>
@@ -284,13 +309,13 @@ const planSlotLensHtml = ( planHref: string ) => `<!DOCTYPE html>
 <article data-kcd="lens">
 <dl data-kcd-frontmatter>
 <dt>name</dt><dd data-kcd-field="name" data-kcd-type="slug">plan-slot-fixture-lens</dd>
-<dt>description</dt><dd data-kcd-field="description" data-kcd-type="text">A lens fixture proving a suggested plan slot stays a routing link.</dd>
+<dt>description</dt><dd data-kcd-field="description" data-kcd-type="text">A lens fixture proving a load-mode plan slot stays a routing link.</dd>
 <dt>type</dt><dd data-kcd-field="type" data-kcd-type="enum">lens</dd>
 <dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>
 </dl>
 <section data-kcd-region="know">
 <section data-kcd-section="references">
-<div data-kcd-slot="reference" data-kcd-mode="suggested"><span data-kcd-field="what" data-kcd-type="text">context-optimization plan</span><a data-kcd-field="where" data-kcd-type="path" href="${ planHref }">context-optimization</a><span data-kcd-field="why" data-kcd-type="text">the plan this lens tracks</span></div>
+<div data-kcd-slot="reference" data-kcd-mode="load"><span data-kcd-field="what" data-kcd-type="text">context-optimization plan</span><a data-kcd-field="where" data-kcd-type="path" href="${ planHref }">context-optimization</a><span data-kcd-field="why" data-kcd-type="text">the plan this lens tracks</span></div>
 </section>
 </section>
 </article>
@@ -472,8 +497,8 @@ describe( 'Know/Care/Do labels are stripped from compiled context — real deplo
 	} );
 } );
 
-describe( 'plan slots are link-only — a plan never rides full text, even at `suggested`', () => {
-	it( 'a suggested plan slot is not dredged into `nodes`; the plan survives as a routing row, and the plan file is never even read', () => {
+describe( 'plan slots are link-only — a plan never rides full text, even at `load`', () => {
+	it( 'a load-mode plan slot is not dredged into `nodes`; the plan survives as a routing row, and the plan file is never even read', () => {
 		const planHref = '_Claude/plans/context-optimization.html';
 		const planAbs  = path.join( PROJECT_ROOT, planHref ).replace( /\\/g, '/' );
 		let planWasRead = false;

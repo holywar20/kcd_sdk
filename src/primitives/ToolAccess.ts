@@ -20,9 +20,13 @@
  * the agent has asked for it. That difference is what buys hundreds of tools at low cost beside a small
  * pre-selected set — the extra round trip to fetch a shape is the design, not a missing feature.
  *
- * NOT `suggested`, which is the word this axis carried first and the one `SLOT_MODES` still carries for
- * references and habits. It named our MOTIVE — we are suggesting this tool — rather than what the setting
- * does; `preload` says when it happens and what it costs.
+ * NOT `suggested`, which is the word this axis carried first. It named our MOTIVE — we are suggesting this
+ * tool — rather than what the setting does; `preload` says when it happens and what it costs.
+ *
+ * AND NOT `load` either, though the slot three-state took that word on 2026-09-16 and there was a standing
+ * ruling to bring this axis with it. Reversed on the day ( Bryan ): `preload` is the better word here
+ * because it says WHEN, which is the whole of what this axis decides. The two axes reading differently is
+ * the honest outcome — they ask different questions.
  *
  * MOOT FOR A TOOL THAT IS NOT HELD. There is no cost question to answer about a thing that is not there,
  * and a control must not offer one.

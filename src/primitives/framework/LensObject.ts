@@ -29,7 +29,7 @@ export interface LensLoadOptions {
 	depth?: number;
 	/**
 	 * Dredge the children at all, or not. Named for a display axis, but wired as the gate on the WHOLE
-	 * dredge: `false` skips every child, including the `suggested` ones whose bodies ride the compiled
+	 * dredge: `false` skips every child, including the `load` ones whose bodies ride the compiled
 	 * context. A non-eager lens is its own prose plus routing rows — no habit bodies, no habit-class
 	 * contention to resolve, no child artifact types to read.
 	 *
@@ -170,11 +170,11 @@ export class LensObject extends KCDPrimitive {
 		for ( const entry of node.getPolicy() ) {
 			if ( entry.type !== 'internal' ) continue;
 			// Dredge follows a slot's MODE ( Bryan, 2026-07-12, corrected 2026-07-12 — the first pass made
-			// EVERY fetched child not-included, which silently stripped `suggested` of its whole meaning:
-			// toggling a lens reference On↔Suggested changed the UI but never the compiled context ). `off`
+			// EVERY fetched child not-included, which silently stripped `load` of its whole meaning:
+			// toggling a lens reference On↔Load changed the UI but never the compiled context ). `off`
 			// drops the slot entirely; `on` still fetches ( eager display needs the object either way — the
 			// Atlas graph, the reader drawer — but is marked not-included below, so it rides only as the
-			// routing ROW `Agent.compile`'s manifest already carries ); `suggested` is marked INCLUDED, so its
+			// routing ROW `Agent.compile`'s manifest already carries ); `load` is marked INCLUDED, so its
 			// full text joins `dredged` in `getContextBlocks()` below — the one case where a slot's body
 			// actually rides the wire. Plans are the sole exception that outlives mode entirely ( see the
 			// carve-out a few lines down ).
@@ -206,9 +206,9 @@ export class LensObject extends KCDPrimitive {
 				continue;
 			}
 
-			// `suggested` rides full-body; `on` fetches for display ( the Atlas graph, the reader drawer )
+			// `load` rides full-body; `on` fetches for display ( the Atlas graph, the reader drawer )
 			// but is excluded from `getContextBlocks()` — the routing row is its whole contribution.
-			child.setIncluded( entry.mode === 'suggested' );
+			child.setIncluded( entry.mode === 'load' );
 
 			out.push( ...this.dredgeFrom( child, remaining - 1, visited ) );
 		}
@@ -268,7 +268,7 @@ export class LensObject extends KCDPrimitive {
 	 * spent HERE, at the one seam between the two shapes, rather than leaving every downstream reader to
 	 * work out which vocabulary it is holding.
 	 *
-	 * `off` → a subtraction. `on` → allowed, one manifest line. `suggested` → allowed, full schema preloaded.
+	 * `off` → a subtraction. `on` → allowed, one manifest line. `load` → allowed, full schema preloaded.
 	 * The cost half is only meaningful for a tool the lens actually supplies, so a subtracted tool
 	 * contributes no surface at all rather than a surface nothing will read.
 	 */
@@ -280,7 +280,7 @@ export class LensObject extends KCDPrimitive {
 	getToolSurfaces(): Record<string, Surface> {
 		return Object.fromEntries( Object.entries( this.toolModes )
 			.filter( ( [ , mode ] ) => mode !== 'off' )
-			.map( ( [ id, mode ] ) => [ id, mode === 'suggested' ? 'preload' : 'manifest' ] ) );
+			.map( ( [ id, mode ] ) => [ id, mode === 'load' ? 'preload' : 'manifest' ] ) );
 	}
 
 	getRole(): KCDRole { return 'lens'; }
@@ -297,9 +297,9 @@ export class LensObject extends KCDPrimitive {
 	 */
 	/**
 	 * A lens's region-block set for the compiled context. The MODEL ( ruling corrected, Bryan 2026-07-12,
-	 * superseding the overzealous "links-only for `suggested`" framing ): a slot's mode is a
+	 * superseding the overzealous "links-only for `load`" framing ): a slot's mode is a
 	 * suggestion surface, NOT a fetch policy — `off` excludes; `on` is the DECK POINTER ( a routing ROW
-	 * only, ~90% of habits live here ); `suggested` is an IMPLICIT INJECTION — the target's body rides,
+	 * only, ~90% of habits live here ); `load` is an IMPLICIT INJECTION — the target's body rides,
 	 * a deliberate "this one matters" highlight the user operates. A session-INJECTED node is the same
 	 * force by another door ( retagged `injected` ). A habit body that rides projects to the dense
 	 * four-field form ( `KcdContext.projectHabit` ), never a raw file dump. Routing rows render from this
@@ -322,14 +322,14 @@ export class LensObject extends KCDPrimitive {
 	}
 
 	/** The "Available on request" stub — every `on`-mode internal link this lens's policy names (the
-	 *  routing-row case, any artifact type), plus any `suggested` link the current dredge depth
+	 *  routing-row case, any artifact type), plus any `load` link the current dredge depth
 	 *  didn't reach. One synthetic block, folded into `getContextBlocks()` so the unified assembler
 	 *  sees it like any other contribution instead of `serializeForContext()` special-casing it.
 	 *  `off`-mode links never appear here — the user excluded them entirely, not just deferred them.
 	 *  Silently omitted (not thrown) with no projectRoot — a display nicety, not something that
 	 *  should crash a context call from an unloaded lens.
 	 *
-	 *  Dedupe is against CONTRIBUTING paths ( `.included`, i.e. `suggested` content already rendered
+	 *  Dedupe is against CONTRIBUTING paths ( `.included`, i.e. `load` content already rendered
 	 *  full-body elsewhere ), not merely FETCHED paths — Bryan, 2026-07-13: an `on`-mode habit is
 	 *  fetched too ( `dredgeFrom` needs its `habit-class` regardless of mode ) but contributes nothing
 	 *  to `getContextBlocks()` while excluded; the old "already loaded ⇒ skip" filter caught that

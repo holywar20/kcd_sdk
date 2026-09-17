@@ -71,8 +71,8 @@ describe( 'Glob.matches', () => {
 		} );
 
 		it( 'matches an exact path with no wildcards at all', () => {
-			expect( Glob.matches( 'habits/run-command/run-command-list.html',
-			                      'habits/run-command/run-command-list.html' ) ).toBe( true );
+			expect( Glob.matches( 'habits/run-command/run-command-judge.html',
+			                      'habits/run-command/run-command-judge.html' ) ).toBe( true );
 		} );
 	} );
 } );

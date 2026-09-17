@@ -12,7 +12,7 @@
  * bridge whole via serialize / fromSerialized, the same trinity as Agent.
  */
 
-import { Transcript, type Turn, type TurnEntry, type WireMessage, type WireOptions, type TranscriptTurn, type RetentionPolicy, type CompactionPolicy, type ReasoningPolicy, type ToolsPolicy, type ChatPolicy, type LimitsPolicy, type SessionPolicies, type SessionCompaction, type Grant, isGrant, grantSubject, grantKind, grantLevel, frameToolResultStub, frameFork, KEEP_TOOL_RESULT_TURNS } from './TurnEntry';
+import { Transcript, type Turn, type TurnEntry, type WireMessage, type WireOptions, type TranscriptTurn, type CompactionPolicy, type ReasoningPolicy, type ToolsPolicy, type ChatPolicy, type LimitsPolicy, type SessionPolicies, type SessionCompaction, type Grant, isGrant, grantSubject, grantKind, grantLevel, frameToolResultStub, frameFork, KEEP_TOOL_RESULT_TURNS } from './TurnEntry';
 import { type GrantRef } from './InjectedItem';
 import type { Agent } from '../agent/Agent';
 import type { SlotRow } from '../core/html/KcdContext';
@@ -82,7 +82,7 @@ export interface SerializedSession {
 	/** Every POLICY acting on this session's context, by name — what rides the next request and whether
 	 *  the transcript compacts itself. PERSISTED ( unlike the transcript itself ): these are session
 	 *  CONFIGURATION the user sets deliberately, so reopening a session restores the policies it was left
-	 *  on. Absent on an older wire/row, as is a BARE legacy retention policy — both hydrate through
+	 *  on. Absent on an older wire/row, as is the legacy bare-policy shape — both hydrate through
 	 *  `Session.policiesFrom`, which is the one place the old shape is understood. */
 	policies?: SessionPolicies;
 	/** WHY this session was opened, as the surface that opened it said it — see `SessionBrief`. PERSISTED,
@@ -140,7 +140,6 @@ export interface SessionOptions {
  *  compacts itself until the user turns that on. Both defaults are deliberately inert: a fresh session
  *  hides nothing and rewrites nothing. */
 const DEFAULT_POLICIES: SessionPolicies = {
-	retention:  { kind: 'all' },
 	compaction: { enabled: false, threshold: 120_000 },
 	reasoning:  { effort: 'medium', mode: 'chain' },
 	tools:      { enabled: true },
@@ -329,20 +328,18 @@ export class Session {
 	 * Hydrate a policy bag from anything a wire / row might hold — the ONE place the legacy shape is
 	 * understood, so every other reader can assume the container.
 	 *
-	 * Three inputs land here: the container itself, a BARE legacy retention policy ( `{ kind: … }`, what
-	 * sessions stored before compaction existed — it becomes the `retention` entry ), and nothing at all.
-	 * Deliberately forgiving in the same spirit as the service-side parse: an unreadable policy must never
-	 * make a session's history unreachable, and every default is inert.
+	 * Two inputs land here: the container itself, and nothing at all. A BARE legacy shape ( `{ kind: … }` )
+	 * used to become the `retention` entry; that policy is gone ( 2026-09-16 ), so the shape is now simply
+	 * unreadable and falls to defaults like any other. Deliberately forgiving in the same spirit as the
+	 * service-side parse: an unreadable policy must never make a session's history unreachable, and every
+	 * default is inert.
 	 */
 	static policiesFrom( raw: unknown ): SessionPolicies {
 		const v = ( raw ?? null ) as Record<string, unknown> | null;
 		if ( !v || typeof v !== 'object' ) return { ...DEFAULT_POLICIES };
-		// the bare legacy shape — a retention policy stored before there was a bag to put it in
-		if ( typeof v[ 'kind' ] === 'string' ) {
-			return { retention: v as RetentionPolicy, compaction: { ...DEFAULT_POLICIES.compaction }, reasoning: { ...DEFAULT_POLICIES.reasoning }, tools: { ...DEFAULT_POLICIES.tools }, chat: { ...DEFAULT_POLICIES.chat }, limits: { ...DEFAULT_POLICIES.limits } };
-		}
+		// A stored `retention` entry ( or the bare legacy `{ kind: … }` that predates the bag ) is simply
+		// ignored from here: the key is dropped on the next write and nothing reads it.
 		return {
-			retention:  ( v[ 'retention' ]  as RetentionPolicy  ) ?? { ...DEFAULT_POLICIES.retention  },
 			compaction: ( v[ 'compaction' ] as CompactionPolicy ) ?? { ...DEFAULT_POLICIES.compaction },
 			reasoning:  ( v[ 'reasoning' ]  as ReasoningPolicy  ) ?? { ...DEFAULT_POLICIES.reasoning  },
 			tools:      ( v[ 'tools' ]      as ToolsPolicy      ) ?? { ...DEFAULT_POLICIES.tools      },
@@ -565,13 +562,14 @@ export class Session {
 	 *  idle from a `finally`, so a failure can't strand a session lit. */
 	setTurnStatus( status: TurnStatus ): void { this.turnStatus = status; }
 
-	/** The transcript as it will actually RIDE — retention first ( which turns survive, read off each
+	/** The transcript as it will actually RIDE — `windowed()` first ( which turns survive, read off each
 	 *  turn's own `include` flag ), compaction second ( the summary put in front of what survived ).
 	 *
 	 *  The order no longer carries the weight it used to. Compaction ran last to stop a narrow retention
-	 *  from smuggling a covered turn back in — impossible now, because a covered turn was marked
-	 *  `include: false` once by `compactThrough()` and `windowed()` has already dropped it before
-	 *  `compacted()` is reached. The sequence is what reads naturally, not a rule holding a bug shut.
+	 *  window from smuggling a covered turn back in — impossible now, and doubly so since that window was
+	 *  removed: a covered turn was marked `include: false` once by `compactThrough()` and `windowed()` has
+	 *  already dropped it before `compacted()` is reached. The sequence reads naturally, it is not a rule
+	 *  holding a bug shut.
 	 *
 	 *  Private and SHARED, because wireMessages() and estimateTokens() are the two readers that must never
 	 *  disagree about what rides — the moment they compose the policies separately, the gauge starts lying
@@ -579,12 +577,12 @@ export class Session {
 	 *  third reader now, and it asks the same question of the same projection for the same reason.
 	 *
 	 *  Neither step edits the transcript: both build a new one, and the itinerary still shows every turn
-	 *  that ever happened. Note the asymmetry in what re-widening buys, though — a retention change hands
-	 *  back the turns it dropped, while a compacted turn is gone from the wire for good. It stays in the
-	 *  account of what happened; it is simply no longer context. */
+	 *  that ever happened. Nothing either step drops comes back now that the turn window is gone: a failed
+	 *  turn and a compacted one are both out of the wire for good. They stay in the account of what
+	 *  happened; they are simply no longer context. */
 	private _projected(): Transcript {
 		return this.transcript
-			.windowed( this.policies.retention )
+			.windowed()
 			.compacted( this.compactions );
 	}
 
@@ -768,7 +766,7 @@ export class Session {
 	 * `Transcript.wireMessages`, so an entry kind added there reaches both by construction and neither can
 	 * grow its own idea of what an attachment or an image looks like.
 	 *
-	 * NOT windowed: a retention policy decides what to REPLAY, and this projects a turn that is happening
+	 * NOT windowed: `windowed()` decides what to REPLAY, and this projects a turn that is happening
 	 * now. Compaction is likewise not applied — there is nothing to summarise in a single turn.
 	 */
 	wireTurn( turn: Turn, opts?: WireOptions ): WireMessage[] {

@@ -23,7 +23,7 @@ const FIXTURE = `<!DOCTYPE html>
 <section data-kcd-section="references">
 <div data-kcd-table>
 <div data-kcd-head><span>What</span><span>Where</span><span>Why</span></div>
-<div data-kcd-slot="reference" data-kcd-mode="suggested">
+<div data-kcd-slot="reference" data-kcd-mode="load">
 <span data-kcd-field="what" data-kcd-type="text">A reference</span>
 <a data-kcd-field="where" data-kcd-type="path" href="_Claude/references/x.html">x</a>
 <span data-kcd-field="why" data-kcd-type="text">Because it matters.</span>
@@ -249,7 +249,7 @@ describe( 'KcdContext.projectBlocks — region-block decomposition (Phase 2)', (
 	} );
 } );
 
-// A lens whose Do region carries a Tools section: three explicitly-stamped tool slots ( on / suggested /
+// A lens whose Do region carries a Tools section: three explicitly-stamped tool slots ( on / load /
 // off ) plus one BARE slot ( no data-kcd-slot value ) that must still resolve to `tool` by position.
 const TOOLS_FIXTURE = `<!DOCTYPE html>
 <html lang="en">
@@ -272,7 +272,7 @@ const TOOLS_FIXTURE = `<!DOCTYPE html>
 <div data-kcd-table>
 <div data-kcd-head><span>Tool</span><span>Mode</span></div>
 <div data-kcd-slot="tool" data-kcd-mode="on"><span data-kcd-field="what" data-kcd-type="text">memory.recall</span><span data-kcd-field="why" data-kcd-type="text">on</span></div>
-<div data-kcd-slot="tool" data-kcd-mode="suggested"><span data-kcd-field="what" data-kcd-type="text">memory.learn</span><span data-kcd-field="why" data-kcd-type="text">suggested</span></div>
+<div data-kcd-slot="tool" data-kcd-mode="load"><span data-kcd-field="what" data-kcd-type="text">memory.learn</span><span data-kcd-field="why" data-kcd-type="text">load</span></div>
 <div data-kcd-slot="tool" data-kcd-mode="off"><span data-kcd-field="what" data-kcd-type="text">sm_file.grep</span><span data-kcd-field="why" data-kcd-type="text">off</span></div>
 <div data-kcd-slot data-kcd-mode="on"><span data-kcd-field="what" data-kcd-type="text">sm_file.write</span><span data-kcd-field="why" data-kcd-type="text">on</span></div>
 </div>
@@ -291,7 +291,7 @@ const TOOLS_FIXTURE = `<!DOCTYPE html>
 describe( 'KcdParse / KcdContext — tool-kind slots ( explicit data-kcd-slot="tool" + bare-slot fallback )', () => {
 	it( 'toolModes keys on the KIND, not the section name — explicit `tool` slots AND a bare tools-section slot both resolve; mode `off` drops out', () => {
 		const artifact = KcdParse.build( HtmlTree.parse( TOOLS_FIXTURE ), 'tools.html' );
-		expect( artifact.toolModes ).toEqual( { 'memory.recall': 'on', 'memory.learn': 'suggested', 'sm_file.write': 'on' } );
+		expect( artifact.toolModes ).toEqual( { 'memory.recall': 'on', 'memory.learn': 'load', 'sm_file.write': 'on' } );
 		// sm_file.grep is mode `off` → contributes nothing.
 		expect( artifact.toolModes[ 'sm_file.grep' ] ).toBeUndefined();
 	} );

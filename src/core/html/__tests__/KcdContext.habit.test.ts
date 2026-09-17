@@ -27,7 +27,7 @@ const ROWS = `<div data-kcd-slot="table-data"><span data-kcd-field="what" data-k
 const WITH_PARAMS = `<article data-kcd="habit">
 	<section data-kcd-section="why"><h3>Why</h3><p>about to run any shell command</p></section>
 	<section data-kcd-section="action"><h3>Action</h3><p>match it against the whitelist</p></section>
-	<section data-kcd-section="private-habit-params"><h3>Private habit params</h3>
+	<section data-kcd-section="public-habit-params"><h3>Public habit params</h3>
 		<p>Human-authored prose that is NOT a row, and must not leak into the block.</p>
 		<div data-kcd-table>
 		<div data-kcd-head><span>Command</span><span>Why it qualifies</span></div>
@@ -60,27 +60,27 @@ describe( 'KcdContext.projectHabit — the dense four-field directive', () => {
 		expect( out ).not.toContain( 'human-only noise' );
 	} );
 
-	// Params were a document convention with no consumer from 2026-08-17 to 2026-08-18: `run-command-list`
-	// told the agent to match against a whitelist that no projection carried, so the pole behaved as
-	// `run-command-ask` while reading as populated on disk. These cases pin the injection that closed it.
+	// Params were a document convention with no consumer from 2026-08-17 to 2026-08-18: a habit could
+	// point at a whitelist that no projection carried, so it read as populated on disk while behaving,
+	// to the agent, as though the section were empty. These cases pin the injection that closed it.
 	it( 'params rows ride the dense form as a labelled third block', () => {
-		const out = KcdContext.projectHabit( habit( 'run-command-list', WITH_PARAMS ) );
+		const out = KcdContext.projectHabit( habit( 'params-habit', WITH_PARAMS ) );
 
 		expect( out.split( '\n' ) ).toEqual( [
-			'run-command-list — when about to run any shell command, execute match it against the whitelist.',
+			'params-habit — when about to run any shell command, execute match it against the whitelist.',
 			'↳ a list goes stale where a judgement drifts. · literal form is literal',
-			'↳ private-habit-params:',
+			'↳ public-habit-params:',
 			'- npm run typecheck — reads types, writes nothing',
 			'- netstat -ano — a read-only listing of sockets',
 		] );
 	} );
 
-	// PRIVATE is an edit boundary, not a read one — a whitelist the agent cannot see is not a whitelist.
-	// The one real way to withhold rows is the audience marker, which every other section already honours.
+	// Withholding rows is an AUDIENCE question, never a section-name one — a whitelist the agent cannot
+	// see is not a whitelist. The audience marker is the one real lever, and every other section honours it.
 	it( 'a params section marked human-only is withheld, like any other human-only section', () => {
-		const out = KcdContext.projectHabit( habit( 'x', WITH_PARAMS.replace( 'data-kcd-section="private-habit-params"', 'data-kcd-section="private-habit-params" data-kcd-audience="human"' ) ) );
+		const out = KcdContext.projectHabit( habit( 'x', WITH_PARAMS.replace( 'data-kcd-section="public-habit-params"', 'data-kcd-section="public-habit-params" data-kcd-audience="human"' ) ) );
 
-		expect( out ).not.toContain( 'private-habit-params:' );
+		expect( out ).not.toContain( 'public-habit-params:' );
 		expect( out ).not.toContain( 'netstat' );
 	} );
 
@@ -90,7 +90,7 @@ describe( 'KcdContext.projectHabit — the dense four-field directive', () => {
 		const out = KcdContext.projectHabit( habit( 'x', WITH_PARAMS.replace( ROWS, '' ) ) );
 
 		expect( out.split( '\n' ) ).toHaveLength( 2 );
-		expect( out ).not.toContain( 'private-habit-params:' );
+		expect( out ).not.toContain( 'public-habit-params:' );
 	} );
 
 	it( 'a habit with no params section is unchanged — two lines, exactly as before', () => {

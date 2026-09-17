@@ -9,8 +9,8 @@ import { KcdValidate } from '../KcdValidate';
  * NOT about forbidding extra sections. They pin the two shapes where the authored document and the
  * projected one disagree without anything reporting it, both found in the deployed corpus on
  * 2026-08-18: `author-script` and `author-reference` had written their rules as house faux-tables
- * ( seven and six rules respectively, reaching no agent ), and `run-command-list` told the agent to
- * check a whitelist that lives in a section the projection drops.
+ * ( seven and six rules respectively, reaching no agent ), and a whitelist habit pointed the agent at
+ * a section the projection drops.
  */
 function habit( name: string, body: string ): string {
 	return `<!DOCTYPE html>
@@ -104,8 +104,8 @@ describe( 'KcdValidate — a projected field may not defer to a section that is 
 	// reported as dropped, or the warning trains authors to delete a working reference.
 	it( 'an action naming its own params section is silent — params ride the projection', () => {
 		const report = KcdValidate.validate( habit( 'whitelist-pointer', `
-			<section data-kcd-section="action"><h3>Action</h3><p>check the command against private-habit-params · whitelist below</p></section>
-			<section data-kcd-section="private-habit-params"><h3>Private habit params</h3><p>ships empty</p></section>` ) , { docRoot: '_Claude' });
+			<section data-kcd-section="action"><h3>Action</h3><p>check the command against public-habit-params · whitelist below</p></section>
+			<section data-kcd-section="public-habit-params"><h3>Public habit params</h3><p>ships empty</p></section>` ) , { docRoot: '_Claude' });
 
 		expect( codes( report ) ).not.toContain( 'habit-nonprojecting-ref' );
 	} );

@@ -80,9 +80,12 @@ describe( 'Session.projectedAttachments', () => {
 		expect( projectedText( session ) ).toContain( 'a.ts' );
 	} );
 
-	it( 'drops a file whose turn fell out of the retention window', () => {
+	// Re-pointed from the retention window to a FAILED turn ( 2026-09-16 ): the turn window was removed,
+	// and a failed turn is now the only thing that drops a turn out of `windowed()`. The property under
+	// test is unchanged — a file on a turn that does not ride is still attached.
+	it( 'drops a file whose turn does not ride, because that turn FAILED', () => {
 		const session = sessionWith( fileEntry( 'a.ts' ), fileEntry( 'b.ts' ) );
-		session.setPolicy( 'retention', { kind: 'lastN', n: 1 } );
+		session.transcript.failTurn( 'turn-1' );
 
 		// It is still ATTACHED — the gutter must show it, or there is no way to reach it — but it does not
 		// ride, because its turn does not.
@@ -109,7 +112,7 @@ describe( 'Session.projectedAttachments', () => {
 		// The summary stands in for that turn now. Re-sending its file would pay for the same history
 		// twice — the exact double-count the single-home attachment model exists to make impossible.
 		expect( session.projectedAttachments().map( ( a ) => a.name ) ).toEqual( [ 'b.ts' ] );
-		// And here the two lists AGREE, unlike the retention case above: a compacted turn is one-way, so its
+		// And here the two lists AGREE, unlike the failed-turn case above: a compacted turn is one-way, so its
 		// chip leaves the gutter too rather than advertising context the model no longer has.
 		expect( session.attachments().map( ( a ) => a.name ) ).toEqual( [ 'b.ts' ] );
 	} );

@@ -48,7 +48,7 @@ const LENS_HTML = `<!DOCTYPE html>
 `;
 
 /** Two tools from one server, so the manifest's per-server grouping renders rather than falling into
- *  the unnamed fallback bucket. One rides `on` ( a manifest line ), one `suggested` ( a full schema ). */
+ *  the unnamed fallback bucket. One rides `on` ( a manifest line ), one `load` ( a full schema ). */
 const TOOLS: ToolDef[] = [
 	// IDENTITIES ARE REQUIRED NOW. A def with no `group.tool` is not held — allowances key on it, and
 	// admitting one because it lacks the field everything else is keyed by would make missing metadata a

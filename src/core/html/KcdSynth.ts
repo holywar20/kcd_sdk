@@ -35,7 +35,7 @@ export interface SynthRow {
 	/** A vault-root-relative path. Emitted as a real `href` so the parser resolves it as a link. */
 	where?: string;
 	why?:   string;
-	/** `off` | `on` | `suggested`. Absent ⇒ the slot's default. */
+	/** `off` | `on` | `load`. Absent ⇒ the slot's default. */
 	mode?:  string;
 	/** Composable-rule carrier; at most one slot per class per file ( §6 ). */
 	habitClass?: string;

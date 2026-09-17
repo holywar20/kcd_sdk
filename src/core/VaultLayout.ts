@@ -18,8 +18,20 @@ import type { ArtifactType } from '../primitives/types'
  * indexed — absence is the safe default, which is what keeps the whitelist meaningful.
  */
 
-/** The two deployment layers left once the substrate moved into the package: `agent` = the
- *  Know+Care+Do artifacts an agent is built from; `data` = everything a project produces. */
+/**
+ * The two deployment layers left once the substrate moved into the package: `agent` = the
+ * Know+Care+Do artifacts an agent is built FROM; `data` = everything a project produces.
+ *
+ * `agent` NAMES THE LAYER, NEVER THE ARTIFACT. Nothing in this folder is an agent: a lens is a
+ * personality, a habit is a behaviour fragment, and an analyzer or generator is a SKILL — internal
+ * names for kinds of thing we do, and at the end of the day just skills ( Bryan, 2026-09-16 ). The
+ * two `purpose` strings below used to call them agents outright, which is what this note replaces;
+ * it cost a todo built on the premise that the vault held a second kind of actor needing its own
+ * runnable variant and a manifest-handing mechanism.
+ *
+ * Nothing reads `layer` — it is a grouping label for readers and for the deploy scaffold's ordering,
+ * which is exactly why a wrong word in it went unchallenged.
+ */
 export type VaultLayer = 'agent' | 'data'
 
 /** One directory of the canonical layout. */
@@ -70,11 +82,11 @@ const LAYOUT: readonly LayoutEntry[] = [
 	},
 	{
 		dir: 'analyzers', type: 'analyzer', layer: 'agent', indexed: true,
-		purpose: 'Read-anywhere, write-one-report agents.'
+		purpose: 'Read-anywhere, write-one-report SKILLS. Not a second kind of actor — see the note on `VaultLayer`.'
 	},
 	{
 		dir: 'generators', type: 'generator', layer: 'agent', indexed: true,
-		purpose: 'Manifest-driven write agents — broad write authority, no judgment of their own.'
+		purpose: 'Manifest-driven write SKILLS — broad write authority, no judgment of their own.'
 	},
 	{
 		dir: 'habits', type: 'habit', layer: 'agent', indexed: true,

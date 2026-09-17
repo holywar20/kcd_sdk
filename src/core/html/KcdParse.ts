@@ -182,7 +182,7 @@ export const KcdParse = new class KcdParse {
 	// ── Policy ( every region — one dredge idiom for reference, habit, contract, anything routable ) ──
 	// In the md world this was LensObject parsing the `## Know` markdown table, know-only. A Do-region
 	// habit/contract slot now feeds the SAME policy list — `mode` alone decides what rides ( off /
-	// on-routing-row / suggested-full-text ), so no artifact type needs its own carve-out downstream.
+	// on-routing-row / load-full-text ), so no artifact type needs its own carve-out downstream.
 	policy( slots: ParsedSlot[] ): PolicyEntry[] {
 		const out: PolicyEntry[] = [];
 		for ( const s of slots ) {
@@ -224,7 +224,10 @@ export const KcdParse = new class KcdParse {
 			where,
 			why:        cells.why   ?? '',
 			kind:       HtmlTree.get( slot, 'data-kcd-slot' ) || inferSlotKind( section, where ),
-			mode:       ( rawMode === 'off' || rawMode === 'suggested' ) ? rawMode : 'on',
+			// Absent ⇒ `on`, the documented default. An unrecognised mode lands there too, but only
+			// ever on a path that SKIPPED validation — `bad-mode` is a hard error and a failing
+			// document yields no object model, so `parse()` cannot deliver one here.
+			mode:       KcdAddress.readMode( rawMode ) ?? 'on',
 			habitClass: HtmlTree.get( slot, 'data-kcd-habit-class' ),
 			region,
 			section

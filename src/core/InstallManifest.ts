@@ -66,7 +66,7 @@ const MANIFEST: readonly ManifestEntry[] = [
 	},
 	{
 		bundleSource: 'analyzers/_analyzer_base.html', vaultHome: 'analyzers/_analyzer_base.html', required: true,
-		purpose: 'The shared analyzer contract every read-anywhere, write-one-report agent extends.'
+		purpose: 'The shared analyzer contract every read-anywhere, write-one-report SKILL extends.'
 	},
 	{
 		bundleSource: 'generators', vaultHome: 'generators', required: true,

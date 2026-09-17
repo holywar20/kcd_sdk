@@ -21,7 +21,7 @@ export class HabitObject extends KCDPrimitive {
 
 	getRole() { return 'do' as const; }
 
-	/** This habit's own `why` section — the SAME trigger prose the dense `suggested` form folds
+	/** This habit's own `why` section — the SAME trigger prose the dense `load` form folds
 	 *  into line one, read standalone so a lens's Why cell can default to it ( `mode:habit` ) without
 	 *  fetching the full body into context. A cheap parse of a section already in memory ( this habit
 	 *  was fetched to learn its `habit-class` regardless of mode ) — not a second dredge. */

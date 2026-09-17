@@ -1,6 +1,5 @@
 import { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
 import { Assert } from '../core/Assert';
-import { type SlotMode } from '../primitives/types';
 import { type AccessLevel, type InjectedKind } from './InjectedItem';
 import { type ReasoningEffort } from '../agent/Model';
 
@@ -397,32 +396,6 @@ export interface Turn {
 	terminal: TerminalKind;
 }
 
-/**
- * Which turns ride the wire on the NEXT request — the MODE, not the membership. The membership lives on
- * the turns themselves ( `Turn.include` ); this says how those flags get written and how the projection
- * reads them.
- *
- * `all` — every included turn · `lastN` — the trailing N of them ( a turn already IS a prompt plus
- * everything that answered it, so this needs no exchange-grouping scaffolding ) · `manual` — every
- * included turn, with the flags handed to the user to tune per turn.
- *
- * The three are EXCLUSIVE, and switching between them is what CLEARS the flags back to what the mode
- * says ( skipping compacted turns, which never come back ). That is the whole reason this stays a mode
- * rather than becoming a free-composing lens over per-turn flags: without an exclusive switch, forty
- * turns of hand-tuning needs a reset control to escape, and per-turn state accumulates in a shape the
- * user can't see.
- *
- * `manual` deliberately carries NO payload. It used to name turn ids, which is what let the renderer's
- * half-turn ids ( `${traceId}-u` ) reach main's whole-turn ids and window the wire down to nothing. A
- * mode that names no one cannot name the wrong one.
- *
- * Changing a policy still never deletes history: the transcript keeps every turn, and the flags decide
- * only what the next `wireMessages()` projects.
- */
-export type RetentionPolicy =
-	| { kind: 'all' }
-	| { kind: 'lastN'; n: number }
-	| { kind: 'manual' };
 
 /**
  * Whether a session compacts itself, and when. The second POLICY — and the first one an AGENT drives
@@ -479,7 +452,6 @@ export type LimitsPolicy = { maxRounds: number };
 export type ChatPolicy = { enabled: boolean };
 
 export type SessionPolicies = {
-	retention:  RetentionPolicy;
 	compaction: CompactionPolicy;
 	reasoning:  ReasoningPolicy;
 	tools:      ToolsPolicy;
@@ -522,16 +494,23 @@ export const KEEP_TOOL_RESULT_TURNS = 3;
  * is regenerated on every reload ). `fromTurnId` is what the pass actually READ, which diverges the
  * moment a second compaction reads the first one plus what followed; it feeds display, never the window.
  *
- * `mode` is the SlotMode three-state, and `'off'` is the one that matters: an inert compaction stays in
- * the timeline as history, and its summary stops riding to the wire.
+ * `mode` is a two-state, and `'off'` is the one that carries the meaning: an inert compaction stays in
+ * the timeline as history, and its summary stops riding to the wire. It was typed `SlotMode` until
+ * 2026-09-16 — incidental sharing, never a shared axis, and it made the slot three-state's rename reach
+ * a column that has no dredge question to answer ( Bryan: compaction is session-level ).
  *
  * It is NOT an undo, and this block said it was until 2026-08-10. Under the flag model the span the
- * summary covered was marked `compacted: true` + `include: false` by `compactThrough()` and PERSISTED;
- * neither `compacted()` nor `resetWindow()` ever re-includes a compacted turn ( see both, which say so
- * outright ). So turning a compaction off drops the summary AND leaves its span dropped — a deliberate
+ * summary covered was marked `compacted: true` + `include: false` by `compactThrough()` and PERSISTED,
+ * and nothing re-includes a compacted turn ( the writers that could have are gone with the turn window ).
+ * So turning a compaction off drops the summary AND leaves its span dropped — a deliberate
  * "discard this whole stretch", not a recovery. Nothing here deletes a turn from the RECORD; `turnRows()`
  * still shows every one. What is gone is their place in the context sent to the model.
  */
+/** Whether a compaction's summary rides. `off` = inert, history only. No third state: every reader in
+ *  both processes tests `=== 'off'` and nothing else. */
+export const COMPACTION_MODES = [ 'off', 'on' ] as const;
+export type CompactionMode = typeof COMPACTION_MODES[number];
+
 export interface SessionCompaction {
 	id:            string;
 	sessionId:     string;
@@ -540,7 +519,7 @@ export interface SessionCompaction {
 	throughTurnId: string;
 	summary:       string;
 	model:         string;
-	mode:          SlotMode;
+	mode:          CompactionMode;
 	tokensIn:      number;
 	tokensOut:     number;
 }
@@ -1041,21 +1020,21 @@ export class Transcript {
 	}
 
 	/**
-	 * This transcript narrowed to the turns a policy admits — a PURE query returning a NEW Transcript
-	 * over the kept turns. Nothing is mutated and nothing is dropped from the original: the policy
-	 * decides what rides the next request, it does not edit history ( the standing ruling ). Callers
-	 * project the result ( `wireMessages()` / `estimateTokens()` ); the unwindowed original still answers
-	 * `rows()`, because the inspector's itinerary shows everything that happened.
+	 * This transcript narrowed to the turns that may ride — a PURE query returning a NEW Transcript over
+	 * the kept turns. Nothing is mutated and nothing is dropped from the original: this decides what rides
+	 * the next request, it does not edit history ( the standing ruling ). Callers project the result
+	 * ( `wireMessages()` / `estimateTokens()` ); the unwindowed original still answers `rows()`, because
+	 * the inspector's itinerary shows everything that happened.
+	 *
+	 * IT TAKES NO POLICY ANY MORE ( 2026-09-16 ). The user-facing turn window — `all` / `lastN` / `manual`
+	 * — was removed, so the only thing left that can clear `include` is a turn that did NOT end ok. This
+	 * is therefore the FAILED-TURN FILTER now, and it is load-bearing exactly as it was before: a failed
+	 * turn is written `include: 0`, and letting one back onto the wire replays an orphaned tool-call whose
+	 * result never arrived, which invalidates the conversation for every turn after it. Do not "simplify"
+	 * this away because the window is gone — the window was never the only thing it was doing.
 	 */
-	windowed( policy: RetentionPolicy ): Transcript {
-		const included = this.turns.filter( ( t ) => t.include );
-		// lastN — the trailing n of the INCLUDED turns, so "last 5" is five turns that actually ride rather
-		// than five slots a compaction already emptied. n <= 0 windows to nothing rather than silently
-		// meaning "all".
-		if ( policy.kind === 'lastN' ) return new Transcript( policy.n <= 0 ? [] : included.slice( -policy.n ) );
-		// `all` and `manual` read identically here — they differ in who WROTE the flags ( the mode switch
-		// recomputes them; manual hands them to the user ), never in how the projection reads them.
-		return new Transcript( included );
+	windowed(): Transcript {
+		return new Transcript( this.turns.filter( ( t ) => t.include ) );
 	}
 
 	/**
@@ -1197,39 +1176,10 @@ export class Transcript {
 		return turn;
 	}
 
-	// ── The window flags ( every write to `include` goes through one of these two ) ──
-
-	/**
-	 * Flip ONE turn's window flag — the manual toggle's write. Returns false when the id names no turn, and
-	 * when it names a COMPACTED or FAILED one: both are history and nothing re-includes either. That refusal
-	 * lives HERE, beside the flag pair, rather than in whichever surface happens to offer the control — an
-	 * invariant a caller has to remember is one a second caller will forget.
-	 */
-	setInclude( turnId: string, include: boolean ): boolean {
-		const turn = this.turns.find( ( t ) => t.id === turnId );
-		if ( !turn || turn.compacted || turn.failed ) return false;
-		turn.include = include;
-		return true;
-	}
-
-	/**
-	 * Reset the window to what a MODE says — the mode switch's CLEAR, and the reason there is no "clear
-	 * window" button anywhere in the UI.
-	 *
-	 * `keep` null opens everything back up ( `all` / `lastN`, whose rules take over at projection ). A set
-	 * FREEZES exactly those ids ( entering `manual`, seeded from the window the user can currently see, so
-	 * the switch itself changes nothing until they toggle something ).
-	 *
-	 * COMPACTED and FAILED turns are never touched, in either direction. That exemption is what lets forty
-	 * turns of hand-tuning be escaped in one click without also undoing a compaction the user paid a model
-	 * turn for, or re-arming a turn whose tool-call never got its result.
-	 */
-	resetWindow( keep: Set<string> | null ): void {
-		for ( const turn of this.turns ) {
-			if ( turn.compacted || turn.failed ) continue;
-			turn.include = keep ? keep.has( turn.id ) : true;
-		}
-	}
+	// ── The window flag ──
+	// `setInclude` and `resetWindow` lived here and are GONE ( 2026-09-16 ): both existed to serve the
+	// user-facing turn window, and with that removed nothing writes `include` except the orchestrator
+	// marking a turn that did not end ok. The flag is written once, at the turn's end, and never edited.
 
 	// ── Projection: to the WIRE ────────────────────────────────────────────────
 
@@ -1247,8 +1197,8 @@ export class Transcript {
 	 * is preceded by a USER message ( the prior round's tool-results, or the turn's user text ), so the
 	 * thinking entry always OPENS a fresh assistant message.
 	 *
-	 * No windowing here: it projects whatever turns are bound. The policy that decides WHICH turns ride
-	 * ( RetentionPolicy ) is applied by the caller binding only the in-window set — a Phase 3 seam.
+	 * No windowing here: it projects whatever turns are bound. Which turns those are is decided by the
+	 * caller binding only the set `windowed()` admits.
 	 *
 	 * `opts.toolResults` STUBS results older than the last N turns — the cheapest context-engineering lever
 	 * ( operate on the transcript, don't just append ). The full text stays on the entry for the inspector,

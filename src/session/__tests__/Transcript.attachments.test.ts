@@ -210,14 +210,16 @@ describe( 'the gutter list — what is still IN CONTEXT', () => {
 		expect( t.turnRows()[ 0 ].rows.some( ( r ) => r.text.includes( 'gone.ts' ) ) ).toBe( true );
 	} );
 
-	it( 'does NOT hide a file the retention window merely narrowed past', () => {
+	it( 'does NOT hide a file whose turn merely stopped riding', () => {
 		const t = new Transcript();
 		t.append( fileEntry( 'a.ts' ), t.openTurn( 'turn-1', 0 ) );
 		t.append( fileEntry( 'b.ts' ), t.openTurn( 'turn-2', 1 ) );
+		t.failTurn( 'turn-1' );
 
-		// Compaction is the line, not the window. Retention is a policy the user can widen back, so hiding on
-		// it would make chips flicker in and out as the window slides.
-		expect( t.windowed( { kind: 'lastN', n: 1 } ).allTurns() ).toHaveLength( 1 );
+		// Compaction is the line, not the projection. `windowed()` drops a failed turn from the WIRE; the
+		// file it carried is still reachable in the gutter, and hiding it there would make chips vanish for
+		// a reason the user never asked for.
+		expect( t.windowed().allTurns() ).toHaveLength( 1 );
 		expect( t.attachments().map( ( a ) => a.name ) ).toEqual( [ 'a.ts', 'b.ts' ] );
 	} );
 } );

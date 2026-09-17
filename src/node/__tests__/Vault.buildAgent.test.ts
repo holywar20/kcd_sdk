@@ -31,17 +31,37 @@ describe( 'Vault.buildAgent — the dumb-agent factory', () => {
 
 		const built = v.buildAgent( [ LENS, SECOND ] )
 
-		// The hand-built comparison: the same lens objects, in the same order, floor last — assembled
-		// directly through Agent.create with no factory involved.
+		// The hand-built comparison: the same lens objects, loaded the SAME WAY, in the same order, floor
+		// last — assembled directly through Agent.create with no factory involved.
+		//
+		// EAGER here too, and it is not boilerplate ( ruled 2026-09-17 ). The LOADER is part of what the
+		// factory does: `buildAgent` dredges eagerly because anything that compiles must ( see
+		// `LensLoadOptions.eager` ), so a lazy hand-build compares eager against lazy and reports a loader
+		// difference as an engine one — which is the opposite of what this test is for. It is also the wrong
+		// comparison to want: a non-eager lens dredges nothing, so a `load`-mode slot contributes only its
+		// routing row and loses the whole meaning the 2026-09-12 ruling gave it. The lazy form read clean
+		// only while no lens in the corpus carried a `load` row; the floor's js-style-guide row is what
+		// surfaced the asymmetry, as ~15KB of style guide present on one side and absent on the other.
 		const byHand = Agent.create( {
 			lenses: [
-				v.loadLens( v.lensPath( LENS ) ),
-				v.loadLens( v.lensPath( SECOND ) ),
-				v.loadLens( InstallManifest.BASE_LENS ),
+				v.loadLens( v.lensPath( LENS ),   { eager: true } ),
+				v.loadLens( v.lensPath( SECOND ), { eager: true } ),
+				v.loadLens( InstallManifest.BASE_LENS, { eager: true } ),
 			],
 		} )
 
 		expect( built.compile() ).toBe( byHand.compile() )
+	} )
+
+	it( 'dredges EAGERLY — the loader is part of the factory, not a detail of the caller', () => {
+		const built = vault().buildAgent( [ LENS, SECOND ] )
+
+		// Said outright rather than left to the equivalence test above, which can only catch a lazy factory
+		// while some lens in the corpus happens to carry a `load`-mode row. A non-eager load returns a lens
+		// with NO children at all, so this is the difference in one assertion: the factory hands back dredged
+		// lenses, which is what gives a `load` slot a body to ride and what keeps this face compiling the same
+		// object Starmind does ( every Starmind load path passes eager — see `Agents`).
+		for ( const lens of built.lenses ) expect( lens.getNodes().length ).toBeGreaterThan( 0 )
 	} )
 
 	it( 'carries the named lenses in order, with the floor appended LAST', () => {

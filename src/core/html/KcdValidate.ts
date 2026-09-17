@@ -262,8 +262,14 @@ export const KcdValidate = new class KcdValidate {
 				else if ( !named.some( n => KcdAddress.ROW_FIELDS.includes( n ) ) )
 					err( 'unread-slot', `slot:${ kind }`, `slot row carries only fields the reader never reads ( ${ named.filter( Boolean ).join( ', ' ) } ) — it renders for a human and projects NOTHING to an agent. A row is read from { ${ KcdAddress.ROW_FIELDS.join( ' | ' ) } }` );
 				const mode = HtmlTree.get( el, 'data-kcd-mode' );
-				if ( mode && !KcdAddress.MODES.includes( mode ) )
-					err( 'bad-mode', `mode:${ mode }`, `mode must be one of { ${ KcdAddress.MODES.join( ' | ' ) } }` );
+				if ( mode && KcdAddress.readMode( mode ) === null ) {
+					// `suggested` is named because it is the ONE wrong value a real vault is likely to hold:
+					// it was this attribute's third state until 2026-09-16, and a vault deployed into another
+					// project may never have been swept. Without the hint the symptom is a discarded document
+					// — the whole file, so usually the auto-loaded floor lens — and no clue which word to fix.
+					const hint = mode === 'suggested' ? ' — `suggested` became `load` on 2026-09-16; this document predates the sweep' : '';
+					err( 'bad-mode', `mode:${ mode }`, `mode must be one of { ${ KcdAddress.MODES.join( ' | ' ) } }${ hint }` );
+				}
 			}
 
 			// SEED mode — the same attribute, an entirely different closed set, and until now unchecked.
@@ -379,7 +385,7 @@ export const KcdValidate = new class KcdValidate {
 		if ( !names.has( 'action' ) && !names.has( 'rules' ) )
 			warn( 'habit-no-behavior', 'section', 'a habit has neither an `action` nor a `rules` section — nothing to do' );
 		if ( !names.has( 'explanation' ) )
-			warn( 'habit-no-explanation', 'section:explanation', 'a habit has no `explanation` — the dense suggested form will carry no rationale' );
+			warn( 'habit-no-explanation', 'section:explanation', 'a habit has no `explanation` — the dense load form will carry no rationale' );
 	
 		this.checkHabitProjection( article, names, err, warn );
 	}
@@ -405,11 +411,11 @@ export const KcdValidate = new class KcdValidate {
 	 *     incidental ( a section called `header` and the English word "header" ), and the fix is an
 	 *     editorial judgement — inline the content, or drop the pointer — not a mechanical rewrite.
 	 */
-	// The four narrative fields plus the two params sections, whose ROWS ride as data ( `paramBlocks` ).
+	// The four narrative fields plus the params section, whose ROWS ride as data ( `paramBlocks` ).
 	// Params joined this set on 2026-08-18, when the compiler was taught to inject them — before that a
 	// habit could point at its own whitelist and the pointer was dead. Keep this in step with
 	// `KcdContext.PARAM_SECTIONS`: a section that projects must never be reported as dropped.
-	PROJECTED_SECTIONS = new Set( [ 'why', 'action', 'explanation', 'rules', 'private-habit-params', 'public-habit-params' ] );
+	PROJECTED_SECTIONS = new Set( [ 'why', 'action', 'explanation', 'rules', 'public-habit-params' ] );
 	
 	checkHabitProjection( article: HtmlEl, names: Set<string>, err: Emit, warn: Emit ): void {
 		const sections = HtmlTree.collect( article, el => KcdAddress.isSection( el ) );

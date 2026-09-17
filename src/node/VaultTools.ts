@@ -631,7 +631,7 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 														what:  { type: 'string', description: 'The label.' },
 														where: { type: 'string', description: 'Vault-root-relative path (_Claude/...), emitted as a real link.' },
 														why:   { type: 'string', description: 'When or why this row applies.' },
-														mode:  { type: 'string', description: 'off | on | suggested.' },
+														mode:  { type: 'string', description: 'off | on | load.' },
 													},
 													required: [ 'what' ],
 												},
