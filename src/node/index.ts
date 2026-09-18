@@ -19,9 +19,10 @@ export {
 } from './VaultUtilities';
 export { VaultDeploy, type DeployReport, type DeployItem, type DeployItemKind, type DeployOptions } from './VaultDeploy';
 export { VaultSnapshot, type SnapshotInfo } from './VaultSnapshot';
+export { NavIndex, type NavIndexEntry, type NavIndexResult } from './NavIndex';
 export {
 	VaultTools, VAULT_TOOL_OPS,
-	type VaultToolOp, type VaultToolNames, type VaultToolSpec, type VaultToolInvoke, type VaultToolsOptions,
+	type VaultToolOp, type VaultToolNames, type VaultToolSpec, type VaultToolInvoke, type VaultBatchStep, type VaultToolsOptions,
 } from './VaultTools';
 export {
 	Survey,

@@ -167,8 +167,9 @@ const CONTROL = /[\u0000-\u001F\u007F]/;
 
 /** Shell metacharacters. INERT, because nothing here ever reaches a shell — refused anyway. They cost an
  *  author nothing to avoid, and the day somebody adds a `shell: true` in a hurry this list is the thing
- *  that was already standing there. */
-const SHELLISH = /['"`;&|<>$()]/;
+ *  that was already standing there. `%` and `^` are cmd.exe's own — variable expansion and its escape — and
+ *  are here on the same terms rather than on a live threat. */
+const SHELLISH = /['"`;&|<>$()%^]/;
 
 /** No argument may pass itself off as a flag. This is the injection that survives having no shell at all:
  *  `-rf`, `--config=…`, `--exec`. An author who genuinely wants a flag writes it as a literal part. */

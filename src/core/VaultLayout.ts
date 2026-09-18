@@ -64,6 +64,11 @@ export interface LayoutEntry {
 	 *  that belongs there could never be written. Collapsing the two questions into one equality check is
 	 *  what made a valid on-disk document impossible to save back. */
 	accepts?: readonly ArtifactType[]
+	/** Where this directory's documents are DRAFTED before they land here — a path under ephemeral space
+	 *  where `*` matches any one folder ( one per lens ). The directory's nav-index lists what it finds
+	 *  there as ADDRESSES in a section of their own: a draft authorizes nothing, and a link into ephemeral
+	 *  space asserts an occupancy the vault cannot promise ( protocol §1.1 ). */
+	drafts?: string
 	/** The one-line description the generated reference publishes. */
 	purpose: string
 }
@@ -114,7 +119,7 @@ const LAYOUT: readonly LayoutEntry[] = [
 		purpose: 'The registered tool tier — draft/ (unapproved) and deployed/ (approved), with a registry.'
 	},
 	{
-		dir: 'plans', type: 'plan', layer: 'data', indexed: true,
+		dir: 'plans', type: 'plan', layer: 'data', indexed: true, drafts: 'work/*/plans',
 		purpose: 'Promoted plans that authorize action, plus the plans_complete/ and plans_deferred/ buckets beneath.'
 	},
 	{

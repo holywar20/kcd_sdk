@@ -103,6 +103,15 @@ export interface AskerRef {
 	traceId:   string;
 }
 
+/**
+ * The gate's answer for ONE step of a composite call — a batch — by position.
+ *
+ * `null` is a step the gate did not judge, because its name is no sibling's; the tool answers that one
+ * itself, and it is never a pass. A composite reached with no verdicts at all refuses every step: the only
+ * way to a list here is through the gate, so its absence means the call went round it.
+ */
+export type StepVerdict = { ok: true } | { ok: false; refusal: string } | null;
+
 export const Authorization = {
 
 	/**
@@ -129,20 +138,37 @@ export const Authorization = {
 		grants:     readonly GrantRef[],
 		projectId?: string,
 		access?:    readonly AccessEntry[],
-		asker?:     AskerRef
+		asker?:     AskerRef,
+		steps?:     readonly StepVerdict[]
 	): Record<string, unknown> | null {
 		// IDENTITY is what makes an asker, not the trace. A block whose every identity field is null names
 		// nobody, and would be a second spelling of the absence the missing key already says. An asker
 		// counts as something to say, so an ungranted call still carries who is behind it — which is what
 		// lets a callee stop and ask a NAMED person rather than refusing flat.
 		const named = !!( asker && ( asker.agentId || asker.agentName ) );
-		if ( grants.length === 0 && !projectId && !access && !named ) return null;
+		if ( grants.length === 0 && !projectId && !access && !named && !steps ) return null;
 		const own: Record<string, unknown> = {};
 		if ( grants.length ) own[ 'grants' ] = grants;
 		if ( projectId )     own[ 'projectId' ] = projectId;
 		if ( access )        own[ 'access' ] = access;
 		if ( named )         own[ 'asker' ] = asker;
+		if ( steps )         own[ 'steps' ] = steps;
 		return { starmind: own };
+	},
+
+	/** The receiving end of a composite call's verdicts — NULL when the envelope carries none, which the
+	 *  composite reads as nothing judged. An entry that is not a well-formed verdict reads as unjudged. */
+	stepsOnCall( meta?: Record<string, unknown> ): StepVerdict[] | null {
+		const own = ( meta?.[ 'starmind' ] ?? {} ) as { steps?: unknown };
+		if ( !Array.isArray( own.steps ) ) return null;
+		const out: StepVerdict[] = [];
+		for ( const raw of own.steps as unknown[] ) {
+			const v = ( typeof raw === 'object' && raw !== null ? raw : {} ) as Record<string, unknown>;
+			if ( v[ 'ok' ] === true )                                          out.push( { ok: true } );
+			else if ( v[ 'ok' ] === false && typeof v[ 'refusal' ] === 'string' ) out.push( { ok: false, refusal: v[ 'refusal' ] as string } );
+			else                                                                out.push( null );
+		}
+		return out;
 	},
 
 	/** The receiving end. UNDEFINED when the envelope named nobody — the inspector's Run button, a bare
