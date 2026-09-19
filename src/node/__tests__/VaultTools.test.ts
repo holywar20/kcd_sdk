@@ -193,7 +193,7 @@ describe( 'VaultTools — writes report what they touched', () => {
 	} );
 } );
 
-describe( 'VaultTools — batch runs the FACE\'s dispatch and stops at the first failure', () => {
+describe( 'VaultTools — batch runs the FACE\'s dispatch, every call, one result each', () => {
 
 	const invoke = ( t: VaultTools ) => async ( name: string, args: Record<string, unknown> ): Promise<ToolResult> => {
 		const op = ( Object.keys( NAMES ) as VaultToolOp[] ).find( ( o ) => NAMES[ o ] === name );
@@ -201,26 +201,52 @@ describe( 'VaultTools — batch runs the FACE\'s dispatch and stops at the first
 		return t[ op ]( args );
 	};
 
+	type Step = { tool: string; ok: boolean; output: string };
+	const steps = ( r: Record<string, unknown> ): Step[] => r[ 'results' ] as Step[];
+
 	it( 'completes a read sequence in order', async () => {
 		const t = tools();
 		const r = json( await t.batch( { calls: [ { tool: 'find', args: { groupBy: 'type' } }, { tool: 'read', args: { path: 'references/patterns/alpha.html' } } ] }, invoke( t ) ) );
-		expect( ( r[ 'completed' ] as { tool: string }[] ).map( c => c.tool ) ).toEqual( [ 'find', 'read' ] );
-		expect( r[ 'failed' ] ).toBeNull();
-		expect( r[ 'remaining' ] ).toEqual( [] );
+		expect( steps( r ).map( s => [ s.tool, s.ok ] ) ).toEqual( [ [ 'find', true ], [ 'read', true ] ] );
 	} );
 
-	it( 'reports the failing step with what remained, and never throws', async () => {
+	it( 'runs the calls AFTER a failure — a batch is not a transaction — and never throws', async () => {
 		const t = tools();
-		const r = json( await t.batch( { calls: [ { tool: 'find' }, { tool: 'does-not-exist' }, { tool: 'read' } ] }, invoke( t ) ) );
-		expect( ( r[ 'completed' ] as unknown[] ) ).toHaveLength( 1 );
-		expect( r[ 'failed' ] ).toEqual( { index: 1, tool: 'does-not-exist', error: 'Unknown tool: does-not-exist' } );
-		expect( r[ 'remaining' ] ).toEqual( [ 'read' ] );
+		const r = json( await t.batch( { calls: [ { tool: 'find' }, { tool: 'does-not-exist' }, { tool: 'read', args: { path: 'references/patterns/alpha.html' } } ] }, invoke( t ) ) );
+		expect( steps( r ).map( s => [ s.tool, s.ok ] ) ).toEqual( [ [ 'find', true ], [ 'does-not-exist', false ], [ 'read', true ] ] );
+		expect( steps( r )[ 1 ]!.output ).toBe( 'Unknown tool: does-not-exist' );
 	} );
 
-	it( 'refuses to nest itself, under this face\'s own name', async () => {
+	it( 'carries a step\'s reply VERBATIM, and hands the face each call\'s position', async () => {
+		const t    = tools();
+		const seen: number[] = [];
+		const reply = 'refused — "x.y" is turned off, in words a model reads\n  with its whitespace';
+		const r    = json( await t.batch( { calls: [ { tool: 'find' }, { tool: 'read' } ] }, async ( _name, _args, index ) => {
+			seen.push( index );
+			return { content: [ { type: 'text', text: reply } ], isError: true };
+		} ) );
+		expect( seen ).toEqual( [ 0, 1 ] );
+		for ( const step of steps( r ) ) expect( step ).toMatchObject( { ok: false, output: reply } );
+	} );
+
+	it( 'reports a throwing face as that one step\'s failure, and runs the rest', async () => {
 		const t = tools();
-		const r = json( await t.batch( { calls: [ { tool: 'run', args: { calls: [] } } ] }, invoke( t ) ) );
-		expect( r[ 'failed' ] ).toEqual( { index: 0, tool: 'run', error: 'run cannot be nested' } );
+		const r = json( await t.batch( { calls: [ { tool: 'find' }, { tool: 'read', args: { path: 'references/patterns/alpha.html' } } ] }, async ( name, args, index ) => {
+			if ( index === 0 ) throw new Error( 'the face fell over' );
+			return invoke( t )( name, args );
+		} ) );
+		expect( steps( r )[ 0 ] ).toEqual( { tool: 'find', ok: false, output: 'the face fell over' } );
+		expect( steps( r )[ 1 ]!.ok ).toBe( true );
+	} );
+
+	it( 'reports a nested batch and a nameless call as failed steps, under this face\'s own name', async () => {
+		const t = tools();
+		const r = json( await t.batch( { calls: [ { tool: 'run', args: { calls: [] } }, {}, { tool: 'find' } ] }, invoke( t ) ) );
+		expect( steps( r ).slice( 0, 2 ) ).toEqual( [
+			{ tool: 'run', ok: false, output: 'run cannot be nested' },
+			{ tool: '',    ok: false, output: 'call is missing a "tool" name' },
+		] );
+		expect( steps( r )[ 2 ]!.ok ).toBe( true );
 	} );
 } );
 

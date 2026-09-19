@@ -2,6 +2,8 @@ import * as path from 'path';
 import { Vault } from './Vault';
 import { VaultUtilities } from './VaultUtilities';
 import { Survey } from './Survey';
+import { NavIndex } from './NavIndex';
+import type { NavIndexResult } from './NavIndex';
 import { KCDPrimitive } from '../primitives';
 import type { SerializedArtifact } from '../primitives';
 import { KcdContext, KcdEmit, KcdValidate, KcdShapes, KcdSynth, VaultLayout } from '../core';
@@ -49,26 +51,39 @@ export interface VaultToolSpec {
 	example?:    Record<string, unknown>;
 }
 
-/** A face's own dispatch, handed to `batch` — how THIS face runs a sibling by name. `index` is the step's
- *  position in `calls`, which is how a face finds the gate's verdict on that step ( bug-report-16 ). */
+/** A face's own dispatch, handed to `batch` — how THIS face runs a sibling by name. `index` is the call's
+ *  position in the batch, which a face that judged every call beforehand keys its verdicts by. */
 export type VaultToolInvoke = ( name: string, args: Record<string, unknown>, index: number ) => Promise<ToolResult>;
+
+/** One call's outcome in a batch. `output` is the step's own reply, verbatim — a refusal included. */
+export interface VaultBatchStep {
+	tool:   string;
+	ok:     boolean;
+	output: string;
+}
 
 export interface VaultToolsOptions {
 	/** Where the stylesheet sits relative to the vault root — `KcdEmit.cssHrefFor`'s second argument.
 	 *  Absent means the vault's own `kcd.css`. */
 	cssVaultRel?: string;
 	/** Told after a write LANDS, with the absolute path of every file it touched — the artifact written,
-	 *  moved or removed, and every referrer a heal rewrote. A host holding an index invalidates off it. */
+	 *  moved or removed, every referrer a heal rewrote, and every folder nav-index the write rebuilt. A host
+	 *  holding an index invalidates off it. */
 	onWrite?:     ( paths: string[] ) => void;
 }
 
 export class VaultTools {
 
+	/** Folder nav-indexes are derived, not kept: every write rebuilds the ones it reached. */
+	private readonly navIndex: NavIndex;
+
 	constructor(
 		readonly vault: Vault,
 		private readonly names: VaultToolNames,
 		private readonly opts: VaultToolsOptions = {}
-	) {}
+	) {
+		this.navIndex = new NavIndex( vault, opts.cssVaultRel );
+	}
 
 	// ── What a tool says ──────────────────────────────────────────────────────
 
@@ -257,8 +272,8 @@ export class VaultTools {
 			}
 
 			const saved = this.vault.write( filePath, html );
-			this.wrote( [ this.vault.toAbs( filePath ) ] );
-			return VaultTools.result( { saved, warnings: [ ...report.warnings, ...advisories ] } );
+			const indexed = this.wrote( [ this.vault.toAbs( filePath ) ] );
+			return VaultTools.result( { saved, warnings: [ ...report.warnings, ...advisories ], ...VaultTools.indexed( indexed ) } );
 		} catch ( e ) {
 			return VaultTools.error( errorText( e ) );
 		}
@@ -271,8 +286,8 @@ export class VaultTools {
 			this.jail( from );
 			this.jail( to );
 			const plan = this.vault.move( from, to );
-			this.wrote( [ from, to, ...plan.edits.map( e => e.file ) ].map( p => this.vault.toAbs( p ) ) );
-			return VaultTools.result( plan );
+			const indexed = this.wrote( [ from, to, ...plan.edits.map( e => e.file ) ].map( p => this.vault.toAbs( p ) ) );
+			return VaultTools.result( { ...plan, ...VaultTools.indexed( indexed ) } );
 		} catch ( e ) {
 			return VaultTools.error( errorText( e ) );
 		}
@@ -283,8 +298,8 @@ export class VaultTools {
 		try {
 			this.jail( filePath );
 			const plan = this.vault.delete( filePath );
-			this.wrote( [ filePath, ...plan.edits.map( e => e.file ) ].map( p => this.vault.toAbs( p ) ) );
-			return VaultTools.result( plan );
+			const indexed = this.wrote( [ filePath, ...plan.edits.map( e => e.file ) ].map( p => this.vault.toAbs( p ) ) );
+			return VaultTools.result( { ...plan, ...VaultTools.indexed( indexed ) } );
 		} catch ( e ) {
 			return VaultTools.error( errorText( e ) );
 		}
@@ -293,35 +308,67 @@ export class VaultTools {
 	// ── Batch ─────────────────────────────────────────────────────────────────
 
 	/**
-	 * Run `calls` in order through the FACE's own dispatch, stopping at the first failure. The batch touches
-	 * nothing itself; every dispatched call runs its own op, jail included. A face passes `invoke` because
-	 * only the face knows how a name resolves to a sibling on it.
+	 * Run `calls` in order through the FACE's own dispatch. The batch touches nothing itself; every
+	 * dispatched call runs its own op, jail included. A face passes `invoke` because only the face knows how
+	 * a name resolves to a sibling on it.
+	 *
+	 * The folder nav-indexes are rebuilt ONCE, when the batch ends, over everything its calls touched — held
+	 * per vault, so it holds even on a face that builds a fresh engine for every sibling call.
 	 */
 	async batch( args: Record<string, unknown>, invoke: VaultToolInvoke ): Promise<ToolResult> {
-		const calls = Array.isArray( args[ 'calls' ] ) ? args[ 'calls' ] as Array<Record<string, unknown>> : [];
-		const completed: Array<{ tool: string; output: string }> = [];
+		this.navIndex.defer();
+		let result: ToolResult;
+		let indexed: NavIndexResult = { written: [], skipped: [] };
+		try {
+			result = await this.runBatch( args, invoke );
+		} finally {
+			try { indexed = this.navIndex.flush(); } catch { /* the calls landed; an index is not worth losing them */ }
+			if ( indexed.written.length ) this.notify( indexed.written.map( p => this.vault.toAbs( p ) ) );
+		}
+
+		const extra = VaultTools.indexed( indexed );
+		if ( !Object.keys( extra ).length ) return result;
+		try {
+			return VaultTools.result( { ...JSON.parse( textOf( result ) ) as Record<string, unknown>, ...extra } );
+		} catch {
+			return result;
+		}
+	}
+
+	/**
+	 * EVERY CALL RUNS — a batch is not a transaction ( Bryan, 2026-09-18 ). A step that fails or is refused
+	 * does not stop the ones after it, and nothing already applied is undone. One result per call, in order,
+	 * carrying the step's own reply verbatim, so the caller learns exactly which landed and why the others
+	 * did not, and decides for itself what a partial outcome means.
+	 */
+	private async runBatch( args: Record<string, unknown>, invoke: VaultToolInvoke ): Promise<ToolResult> {
+		const calls   = Array.isArray( args[ 'calls' ] ) ? args[ 'calls' ] as Array<Record<string, unknown>> : [];
+		const results: VaultBatchStep[] = [];
 
 		for ( let i = 0; i < calls.length; i++ ) {
 			const call     = calls[ i ] ?? {};
 			const tool     = typeof call[ 'tool' ] === 'string' ? call[ 'tool' ] as string : '';
 			const callArgs = ( call[ 'args' ] ?? {} ) as Record<string, unknown>;
 
-			const fail = ( error: string ) => VaultTools.result( {
-				completed,
-				failed:    { index: i, tool, error },
-				remaining: calls.slice( i + 1 ).map( c => typeof c?.[ 'tool' ] === 'string' ? c[ 'tool' ] : '?' ),
-			} );
+			if ( !tool ) {
+				results.push( { tool, ok: false, output: 'call is missing a "tool" name' } );
+				continue;
+			}
+			if ( tool === this.names.batch ) {
+				results.push( { tool, ok: false, output: `${ this.names.batch } cannot be nested` } );
+				continue;
+			}
 
-			if ( !tool )                     return fail( 'call is missing a "tool" name' );
-			if ( tool === this.names.batch ) return fail( `${ this.names.batch } cannot be nested` );
-
-			const result = await invoke( tool, callArgs, i );
-			if ( result.isError ) return fail( textOf( result ) );
-
-			completed.push( { tool, output: textOf( result ) } );
+			// A throwing face is a defect, but it is ONE step's defect — the calls after it still run.
+			try {
+				const result = await invoke( tool, callArgs, i );
+				results.push( { tool, ok: !result.isError, output: textOf( result ) } );
+			} catch ( err ) {
+				results.push( { tool, ok: false, output: err instanceof Error ? err.message : String( err ) } );
+			}
 		}
 
-		return VaultTools.result( { completed, failed: null, remaining: [] } );
+		return VaultTools.result( { results } );
 	}
 
 	// ── The guard ─────────────────────────────────────────────────────────────
@@ -374,13 +421,36 @@ export class VaultTools {
 		throw new Error( `Type mismatch at "${ writePath }": directory accepts ${ allowed }, artifact declares "${ declaredType }"${ hint }` );
 	}
 
-	/** Tell the host what landed. Never lets a listener cost the write that already happened. */
-	private wrote( absPaths: string[] ): void {
+	/**
+	 * After a write lands: rebuild every folder nav-index it reached, then tell the host about all of it in
+	 * one call. Neither an index nor a listener may cost the write that already happened.
+	 */
+	private wrote( absPaths: string[] ): NavIndexResult {
+		let indexed: NavIndexResult = { written: [], skipped: [] };
+		try {
+			indexed = this.navIndex.refresh( absPaths );
+		} catch {
+			// NavIndex reports its own failures as skipped; this is the net under that.
+		}
+		this.notify( [ ...absPaths, ...indexed.written.map( p => this.vault.toAbs( p ) ) ] );
+		return indexed;
+	}
+
+	/** Tell the host what landed. */
+	private notify( absPaths: string[] ): void {
 		try {
 			this.opts.onWrite?.( absPaths );
 		} catch {
 			// A host's index bookkeeping failing is the host's problem to notice; the write is done.
 		}
+	}
+
+	/** An index outcome folded into a write's result — present only when an index changed or was left alone. */
+	private static indexed( r: NavIndexResult ): Record<string, unknown> {
+		const out: Record<string, unknown> = {};
+		if ( r.written.length ) out[ 'indexed' ] = r.written;
+		if ( r.skipped.length ) out[ 'indexSkipped' ] = r.skipped;
+		return out;
 	}
 
 	// ── Envelopes ─────────────────────────────────────────────────────────────
@@ -720,22 +790,24 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 				{ tool: '{{get}}',   args: { path: 'lenses/mcp/mcp.html' } },
 			],
 		},
-		description: 'Run an ordered sequence of tool calls, stopping at the first failure.',
+		description: 'Run several tool calls in order, one result per call — not a transaction.',
 		doc:
 			'Execute `calls` — `[{ tool, args? }]` — IN ORDER through the server\'s internal dispatch, as a ' +
-			'single tool call, so an agent that stacks a few operations gets one round-trip. Stops at the ' +
-			'FIRST failure ( a step whose result is an error ). Returns `{ completed, failed, remaining }`: ' +
-			'`completed` is `[{ tool, output }]` for every step that succeeded ( output is that tool\'s own ' +
-			'result text ); `failed` is `{ index, tool, error }` or null; `remaining` is the tool names never ' +
-			'reached. A nested {{batch}} is rejected. This tool is only as destructive as the tools it ' +
-			'invokes — bundle heals ( move/delete ) and reads freely — but the sequence is NOT atomic: a ' +
-			'mid-sequence failure leaves the earlier steps applied.',
+			'single tool call, so an agent that stacks a few operations gets one round-trip. EVERY call runs: ' +
+			'a step that fails or is refused does not stop the steps after it, and nothing already applied is ' +
+			'undone — a batch is NOT a transaction. Returns `{ results }`, one `{ tool, ok, output }` per call ' +
+			'in the order given: `ok` says whether that step did its work, and `output` is that tool\'s own ' +
+			'reply, verbatim — a refusal included, so a step you are not permitted to run says which tool it ' +
+			'was. A later step runs even when one it depended on failed, so a call that needs an earlier ' +
+			'one\'s outcome belongs in a separate batch, sent after you have read the first. Each step is ' +
+			'judged exactly as the same call made directly would be. A nested {{batch}} is reported as a ' +
+			'failed step. This tool is only as destructive as the tools it invokes.',
 		inputSchema: {
 			type:       'object',
 			properties: {
 				calls: {
 					type:        'array',
-					description: 'Ordered tool calls; the batch stops at the first that fails.',
+					description: 'Ordered tool calls; each runs whatever happened to the one before it.',
 					items: {
 						type:       'object',
 						properties: {

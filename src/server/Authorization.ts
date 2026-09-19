@@ -104,14 +104,11 @@ export interface AskerRef {
 }
 
 /**
- * The gate's verdict on ONE step of a composite call, by position ( bug-report-16 ).
+ * The gate's answer for ONE step of a composite call — a batch — by position.
  *
- * A composite — a batch — runs its siblings in-process, beneath the gate, so clearing the composite says
- * nothing about what it will run. The gate judges each step as the call it would have been, and the verdicts
- * ride the envelope to the keystone, which runs only what cleared.
- *
- * NULL is its own answer: the step named no registered sibling, so nothing was judged. It is NOT a pass —
- * the keystone answers it with the sibling list rather than running anything.
+ * `null` is a step the gate did not judge, because its name is no sibling's; the tool answers that one
+ * itself, and it is never a pass. A composite reached with no verdicts at all refuses every step: the only
+ * way to a list here is through the gate, so its absence means the call went round it.
  */
 export type StepVerdict = { ok: true } | { ok: false; refusal: string } | null;
 
@@ -162,22 +159,17 @@ export const Authorization = {
 		return { starmind: own };
 	},
 
-	/**
-	 * The receiving end of `steps`. NULL when the envelope carried none — and also when it carried a list this
-	 * cannot read, because a composite refuses every step it holds without a verdict, and a malformed list
-	 * read leniently would be the one road to running a step unjudged.
-	 */
+	/** The receiving end of a composite call's verdicts — NULL when the envelope carries none, which the
+	 *  composite reads as nothing judged. An entry that is not a well-formed verdict reads as unjudged. */
 	stepsOnCall( meta?: Record<string, unknown> ): StepVerdict[] | null {
 		const own = ( meta?.[ 'starmind' ] ?? {} ) as { steps?: unknown };
 		if ( !Array.isArray( own.steps ) ) return null;
 		const out: StepVerdict[] = [];
-		for ( const raw of own.steps ) {
-			if ( raw === null ) { out.push( null ); continue; }
-			if ( typeof raw !== 'object' ) return null;
-			const v = raw as Record<string, unknown>;
-			if ( v[ 'ok' ] === true ) { out.push( { ok: true } ); continue; }
-			if ( v[ 'ok' ] === false && typeof v[ 'refusal' ] === 'string' ) { out.push( { ok: false, refusal: v[ 'refusal' ] as string } ); continue; }
-			return null;
+		for ( const raw of own.steps as unknown[] ) {
+			const v = ( typeof raw === 'object' && raw !== null ? raw : {} ) as Record<string, unknown>;
+			if ( v[ 'ok' ] === true )                                          out.push( { ok: true } );
+			else if ( v[ 'ok' ] === false && typeof v[ 'refusal' ] === 'string' ) out.push( { ok: false, refusal: v[ 'refusal' ] as string } );
+			else                                                                out.push( null );
 		}
 		return out;
 	},
