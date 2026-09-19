@@ -103,6 +103,18 @@ export interface AskerRef {
 	traceId:   string;
 }
 
+/**
+ * The gate's verdict on ONE step of a composite call, by position ( bug-report-16 ).
+ *
+ * A composite — a batch — runs its siblings in-process, beneath the gate, so clearing the composite says
+ * nothing about what it will run. The gate judges each step as the call it would have been, and the verdicts
+ * ride the envelope to the keystone, which runs only what cleared.
+ *
+ * NULL is its own answer: the step named no registered sibling, so nothing was judged. It is NOT a pass —
+ * the keystone answers it with the sibling list rather than running anything.
+ */
+export type StepVerdict = { ok: true } | { ok: false; refusal: string } | null;
+
 export const Authorization = {
 
 	/**
@@ -124,25 +136,50 @@ export const Authorization = {
 	 * nothing. Those are opposite instructions, and only the CALLER knows which it means — so the choice is
 	 * made at the call site and never inferred here. Collapsing them would silently restore whatever a
 	 * server's own configuration held at the moment a host meant to deny.
+	 *
+	 * `steps` rides here for the reason grants do: `_meta` is client-written, so a model cannot hand its own
+	 * batch a verdict. Absent on every call that is not a composite.
 	 */
 	assertOnCall(
 		grants:     readonly GrantRef[],
 		projectId?: string,
 		access?:    readonly AccessEntry[],
-		asker?:     AskerRef
+		asker?:     AskerRef,
+		steps?:     readonly StepVerdict[]
 	): Record<string, unknown> | null {
 		// IDENTITY is what makes an asker, not the trace. A block whose every identity field is null names
 		// nobody, and would be a second spelling of the absence the missing key already says. An asker
 		// counts as something to say, so an ungranted call still carries who is behind it — which is what
 		// lets a callee stop and ask a NAMED person rather than refusing flat.
 		const named = !!( asker && ( asker.agentId || asker.agentName ) );
-		if ( grants.length === 0 && !projectId && !access && !named ) return null;
+		if ( grants.length === 0 && !projectId && !access && !named && !steps ) return null;
 		const own: Record<string, unknown> = {};
 		if ( grants.length ) own[ 'grants' ] = grants;
 		if ( projectId )     own[ 'projectId' ] = projectId;
 		if ( access )        own[ 'access' ] = access;
 		if ( named )         own[ 'asker' ] = asker;
+		if ( steps )         own[ 'steps' ] = steps;
 		return { starmind: own };
+	},
+
+	/**
+	 * The receiving end of `steps`. NULL when the envelope carried none — and also when it carried a list this
+	 * cannot read, because a composite refuses every step it holds without a verdict, and a malformed list
+	 * read leniently would be the one road to running a step unjudged.
+	 */
+	stepsOnCall( meta?: Record<string, unknown> ): StepVerdict[] | null {
+		const own = ( meta?.[ 'starmind' ] ?? {} ) as { steps?: unknown };
+		if ( !Array.isArray( own.steps ) ) return null;
+		const out: StepVerdict[] = [];
+		for ( const raw of own.steps ) {
+			if ( raw === null ) { out.push( null ); continue; }
+			if ( typeof raw !== 'object' ) return null;
+			const v = raw as Record<string, unknown>;
+			if ( v[ 'ok' ] === true ) { out.push( { ok: true } ); continue; }
+			if ( v[ 'ok' ] === false && typeof v[ 'refusal' ] === 'string' ) { out.push( { ok: false, refusal: v[ 'refusal' ] as string } ); continue; }
+			return null;
+		}
+		return out;
 	},
 
 	/** The receiving end. UNDEFINED when the envelope named nobody — the inspector's Run button, a bare

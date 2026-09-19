@@ -49,8 +49,9 @@ export interface VaultToolSpec {
 	example?:    Record<string, unknown>;
 }
 
-/** A face's own dispatch, handed to `batch` — how THIS face runs a sibling by name. */
-export type VaultToolInvoke = ( name: string, args: Record<string, unknown> ) => Promise<ToolResult>;
+/** A face's own dispatch, handed to `batch` — how THIS face runs a sibling by name. `index` is the step's
+ *  position in `calls`, which is how a face finds the gate's verdict on that step ( bug-report-16 ). */
+export type VaultToolInvoke = ( name: string, args: Record<string, unknown>, index: number ) => Promise<ToolResult>;
 
 export interface VaultToolsOptions {
 	/** Where the stylesheet sits relative to the vault root — `KcdEmit.cssHrefFor`'s second argument.
@@ -314,7 +315,7 @@ export class VaultTools {
 			if ( !tool )                     return fail( 'call is missing a "tool" name' );
 			if ( tool === this.names.batch ) return fail( `${ this.names.batch } cannot be nested` );
 
-			const result = await invoke( tool, callArgs );
+			const result = await invoke( tool, callArgs, i );
 			if ( result.isError ) return fail( textOf( result ) );
 
 			completed.push( { tool, output: textOf( result ) } );
