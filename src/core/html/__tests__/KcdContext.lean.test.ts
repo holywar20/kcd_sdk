@@ -1,12 +1,12 @@
 /**
- * KcdContext.lean — the READ projection ( `kcd_get` ), which differs from the compile projection on
+ * KcdContext.lean — the READ projection ( `get_doc` ), which differs from the compile projection on
  * exactly one axis: air between blocks.
  *
  * What is locked here is the CONTRACT, not the prettiness: that NO tag survives ( markdown carries
  * the structure for a fraction of the tokens ), that the two whitespace exemptions hold ( a `pre`
  * and a real table keep their own ), that a slot row is never flattened into welded text, and — the
  * one with teeth — that `leanArtifact` drops `body` rather than shrinking it, because a stripped
- * body fed back to `kcd_save` would gut the document it claims to edit.
+ * body fed back to `save_doc` would gut the document it claims to edit.
  */
 
 import { describe, it, expect } from 'vitest';
@@ -65,8 +65,8 @@ describe( 'KcdContext.lean — whitespace', () => {
 	} );
 
 	it( 'suspends the collapse inside pre, fencing it so the example stays distinguishable', () => {
-		const html = '<pre>kcd_get { path: "root.html" }\n  depth: 2</pre>';
-		expect( KcdContext.lean( html ) ).toBe( '```\nkcd_get { path: "root.html" }\n  depth: 2\n```' );
+		const html = '<pre>get_doc { path: "root.html" }\n  depth: 2</pre>';
+		expect( KcdContext.lean( html ) ).toBe( '```\nget_doc { path: "root.html" }\n  depth: 2\n```' );
 	} );
 } );
 
@@ -145,7 +145,7 @@ describe( 'KcdContext.lean — policy shared with the compile path', () => {
 
 describe( 'KcdContext.leanArtifact', () => {
 
-	it( 'DROPS body rather than stripping it — a stripped body would gut the kcd_save round trip', () => {
+	it( 'DROPS body rather than stripping it — a stripped body would gut the save_doc round trip', () => {
 		const lean = KcdContext.leanArtifact( artifact( { body: '<section data-kcd-section="why"><p>a</p></section>' } ) );
 		expect( 'body' in lean ).toBe( false );
 	} );

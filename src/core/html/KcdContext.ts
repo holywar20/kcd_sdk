@@ -21,7 +21,7 @@
  * view a lone-artifact preview still wants — and shares the same tag-walking core.
  *
  * TWO PROJECTIONS, ONE WALK ( 2026-09-11 ). `lean()` / `leanArtifact()` are the READ path
- * ( `kcd_get` ): the same markdown `block()` emits, with the blank lines squeezed out and `body`
+ * ( `get_doc` ): the same markdown `block()` emits, with the blank lines squeezed out and `body`
  * dropped from the artifact entirely. NO TAGS SURVIVE either path — Bryan's ruling: "tags are a
  * filing mechanism that allows for the documentation to come down to the agent without all the
  * formatting ceremony on the wire", and a markdown `###` says what an `<h3>` says for a third the
@@ -333,7 +333,7 @@ export const KcdContext = new class KcdContext {
 	 * GONE.
 	 *
 	 * Dropping the body is not an extra economy tacked onto the strip — it is the half that makes the
-	 * strip safe. `body` is `kcd_save`'s edit payload ( kcd_get → mutate → kcd_save ), and a STRIPPED
+	 * strip safe. `body` is `save_doc`'s edit payload ( get_doc → mutate → save_doc ), and a STRIPPED
 	 * body handed back to that round trip would save a document with every `data-kcd-section` wrapper
 	 * missing: refused outright on a closed type, and on an open one landed as a gutted file. A field
 	 * that cannot survive the round trip must not be present wearing the name of the one that can, so
@@ -358,7 +358,7 @@ export const KcdContext = new class KcdContext {
 	 *  the densest `&mdash;` carrier in the vault. Decoding it is safe in this shape and in no
 	 *  neighbouring one for the same reason the shape already drops `body`: lean is the READ projection,
 	 *  never an edit payload. `full` keeps its frontmatter exactly as authored, because that one IS the
-	 *  payload `kcd_save` writes back. */
+	 *  payload `save_doc` writes back. */
 	leanFrontmatter( fm: Record<string, unknown> ): Record<string, unknown> {
 		const out: Record<string, unknown> = {};
 		for ( const [ k, v ] of Object.entries( fm ) )
@@ -604,7 +604,7 @@ export const KcdContext = new class KcdContext {
 	 * Named entities the vault actually authors, decoded ON THE WAY OUT to agent text and nowhere else.
 	 *
 	 * `HtmlTree.decode` deliberately does NOT know these ( it handles `&lt; &gt; &quot; &#39; &apos;
-	 * &#NNN; &amp;` and stops ), and it must not learn them. Every `kcd_save` re-parses and
+	 * &#NNN; &amp;` and stops ), and it must not learn them. Every `save_doc` re-parses and
 	 * re-serializes the body, so a `decode` wider than `escapeText` corrodes the entities it does not
 	 * own — `&mdash;` came back as `&amp;mdash;` the last time that symmetry was broken, and
 	 * `HtmlTree.entities.test.ts` pins the seam shut.

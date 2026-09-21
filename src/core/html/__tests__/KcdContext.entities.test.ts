@@ -2,9 +2,9 @@
  * The PROJECTION-side entity decode — the other end of the seam `HtmlTree.entities.test.ts` locks.
  *
  * `HtmlTree.decode` knows five entities and must never learn a sixth: it is one half of a round trip
- * ( parse → serialize ) that every `kcd_save` runs, and widening it corrodes the entities it does not
+ * ( parse → serialize ) that every `save_doc` runs, and widening it corrodes the entities it does not
  * own. So the vault's ~1,600 authored `&mdash;` / `&rdquo;` / `&rarr;` runs reached agents as LITERAL
- * TEXT, several tokens each, reading as noise in every compiled context and every `kcd_get`.
+ * TEXT, several tokens each, reading as noise in every compiled context and every `get_doc`.
  *
  * The decode therefore lives HERE, on the way out to agent text, where nothing is written back. What
  * this file locks is both halves of that claim: that agent-facing text comes out decoded on every path
@@ -95,7 +95,7 @@ describe( 'KcdContext — entity decode, read path', () => {
 		expect( lean.frontmatter ).toEqual( { name: 'x', description: 'a — b', tags: [ 'one → two' ], schemaVersion: 2 } );
 	} );
 
-	it( 'does NOT touch the caller\'s artifact — the full read is the kcd_save payload and stays authored', () => {
+	it( 'does NOT touch the caller\'s artifact — the full read is the save_doc payload and stays authored', () => {
 		const a = artifact( { frontmatter: { name: 'x', description: 'a &mdash; b' } } );
 		KcdContext.leanArtifact( a );
 		expect( a.frontmatter[ 'description' ] ).toBe( 'a &mdash; b' );
@@ -105,7 +105,7 @@ describe( 'KcdContext — entity decode, read path', () => {
 describe( 'KcdContext — the disk seam is unmoved', () => {
 
 	// The whole reason the table lives on this side. If this ever fails, the decode leaked into the
-	// parse → serialize pass `kcd_save` runs, and documents are being corroded on every edit.
+	// parse → serialize pass `save_doc` runs, and documents are being corroded on every edit.
 	it( 'leaves the HtmlTree round trip exactly as it was — entities survive a save untouched', () => {
 		const html = '<p>a &mdash; b &rsquo; c &nbsp; d</p>';
 		expect( HtmlTree.innerHtml( HtmlTree.parse( html ) ) ).toBe( html );

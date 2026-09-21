@@ -466,6 +466,18 @@ export type ToolsPolicy = { enabled: boolean };
  * A ceiling, not a budget. It exists because termination otherwise depends on exactly one condition —
  * the model's own stop reason — and a model that keeps asking for tools without answering runs until
  * something outside it intervenes. Nothing outside it did.
+ *
+ * AND THIS IS WHERE A RAIL UNIT'S THRESHOLD GOES, WHEN ONE EVER HAS TO VARY ( Bryan, 2026-09-20 ). Every
+ * unit on the rail prices itself off a constant beside its own prose — `RAFT_AFTER`, `NEAR_REPEAT`,
+ * `STALL_LAPS`, `KEEP_TOOL_RESULT_TURNS` — and the question was whether they want a home or one setting
+ * each. They want this one: it is already the per-session record of what bounds a turn, and the raft
+ * already reads `maxRounds` off it.
+ *
+ * DELIBERATELY STILL ONE FIELD. Naming the destination is not an instruction to move anything. Nothing on
+ * the rail is mistuned, for the uncomfortable reason that nothing has been tuned — so a table of four knobs
+ * nobody writes to would be four more places a number can be wrong, and a state to carry for no reader. A
+ * threshold moves here when something real needs it to differ between two sessions, and the rest follow it
+ * or do not.
  */
 export type LimitsPolicy = { maxRounds: number };
 
@@ -513,7 +525,9 @@ export const MIN_COMPACTION_TURNS = 4;
  *
  * Three is small on purpose: a large default hides whether the mechanism works at all. Setting it absurdly
  * high is the one-line way to turn stubbing off. The per-session POLICY that was scoped to replace this
- * ( per-entry-reduction Phase 3 ) is declined — one number is a constant, not a table.
+ * ( per-entry-reduction Phase 3 ) is declined — one number is a constant, not a table. That decline stands;
+ * what changed on 2026-09-20 is only where it would land IF it ever stops being a constant — `LimitsPolicy`
+ * above, with the rest of the rail, rather than a policy of its own beside it.
  */
 export const KEEP_TOOL_RESULT_TURNS = 3;
 
@@ -827,12 +841,18 @@ export function frameFolder( path: string ): string {
 }
 
 /**
- * A TOOL grant's reference form — the one-line manifest entry.
+ * A TOOL grant's reference form — what its entry says on every turn after the one that injected it. The
+ * same shape as `framePointer` and `frameFolder`, and it names the call for the reason `frameFolder` gives.
  *
- * The whole/reference split lands exactly on `ToolMode`'s existing two states: whole is `suggested` ( the
- * full surface — name, description, input schema ), reference is `on` ( name plus a blurb, with the server
- * spawned lazily on first invoke ). So an injected tool needs no framing vocabulary of its own; it rides
- * the surface once and decays to the line the manifest already knows how to write.
+ * WHAT DECAYS HERE IS THE ACCOUNT, NOT THE TOOL. The entry is the record that a person handed this tool
+ * over; whether the agent may call it is the authorization's question ( `Session.grants()` ), and a grant
+ * keeps it authorized for as long as the grant stands. So this line carries no schema and no description.
+ * It only has to say the grant is still in force — the whole surface rode once, on the turn it was given
+ * ( `frameToolSurface` ).
+ *
+ * IT RESEMBLES THE SURFACE AXIS AND IS NOT IT. `manifest` against `preload` decides how much of a HELD tool
+ * the prompt carries; this decides what the conversation's record of a GRANT says. Each has its own framing
+ * because they report different things: the manifest's line describes a capability, this one an event.
  */
 export function frameTool( server: string, name: string ): string {
 	return `[available tool — ${ server }.${ name } — granted to you; call it when you need it]`;
@@ -895,9 +915,10 @@ export function frameFolderListing( path: string, entries: { name: string; isDir
 	return `[injected folder — ${ path }]\n${ lines.join( '\n' ) }`;
 }
 
-/** A TOOL grant's WHOLE form — the full surface, which is exactly what `ToolMode`'s `suggested` injects.
- *  Framed as a grant rather than as a suggestion because that is what it is: the agent is being given
- *  something it did not have, not being nudged toward something it did. */
+/** A TOOL grant's WHOLE form — name, description and input schema, on the turn the grant was made; every
+ *  turn after, the entry rides as `frameTool`'s one line. Framed as a grant rather than as a suggestion
+ *  because that is what it is: the agent is being given something it did not have, not being nudged
+ *  toward something it did. */
 export function frameToolSurface( server: string, name: string, description: string, schema: unknown ): string {
 	return `[injected tool — ${ server }.${ name } — granted to you by the user]\n${ description }\n${ JSON.stringify( schema ) }`;
 }
@@ -1649,7 +1670,7 @@ export class Transcript {
 	 * computing it once and consulting it three times is what stops `estimateTokens()` from reporting a saving
 	 * `wireMessages()` is not taking, and the itinerary from marking a row the wire sent whole.
 	 *
-	 * PUBLIC for that third reader alone. `Session._resultStubs()` calls it on the PROJECTION and hands the
+	 * PUBLIC for that third reader alone. `Session.resultStubs()` calls it on the PROJECTION and hands the
 	 * answer down to the itinerary, which runs over the WHOLE transcript and therefore cannot compute this
 	 * itself: counting "the last N" over every turn there ever was answers a different question.
 	 *

@@ -340,7 +340,7 @@ describe( 'a rule row — a What by another name ( bug 17 )', () => {
 	/**
 	 * THE REGRESSION, stated as what was actually wrong: this projected two bare bullets, because `readSlot`
 	 * returned only what/where/why and a `rule` cell fell on the floor. The page rendered correctly for a
-	 * human and `kcd_health` passed clean, which is how it survived across seven documents.
+	 * human and `validate_docs` passed clean, which is how it survived across seven documents.
 	 */
 	it( 'projects its text, where it used to project a bare bullet', () => {
 		const out = KcdContext.project( KcdParse.parse( RULES, 'r.html', '_Claude' ) );

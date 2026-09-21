@@ -1,8 +1,8 @@
 /**
  * InstallManifest — what a fresh vault needs from the kit's bundled substrate, and where it lands.
  *
- * "Canonical is not deployed": the framework library's master copy lives in the installed PACKAGE
- * ( `daedalus/substrate/` ), never inside a project's own vault. A vault used to carry its own
+ * "Canonical is not deployed": the framework library's master copy lives in the substrate the host
+ * app ships, never inside a project's own vault. A vault used to carry its own
  * `kcd/` mirror of that master — this table is what replaced it. `VaultDeploy` walks these rows to
  * fill a new vault; `VaultUtilities.reset` walks them the other direction, to find one deployed
  * path's canonical counterpart in the bundle.
@@ -19,7 +19,7 @@
  *  framework's own floor — a vault missing one cannot function as a KCD project. `optional` rows are
  *  filled when present in the bundle but their absence is not a defect. */
 export interface ManifestEntry {
-	/** Path relative to the bundle's substrate root ( `daedalus/substrate/` ). */
+	/** Path relative to the substrate root. */
 	bundleSource: string
 	/** Vault-relative target — below the docRoot. */
 	vaultHome: string
@@ -54,7 +54,7 @@ const MANIFEST: readonly ManifestEntry[] = [
 	},
 	{
 		bundleSource: 'lenses/lens-crafter', vaultHome: 'lenses/lens-crafter', required: true,
-		purpose: 'The authoring lens. REQUIRED, not a nicety: the bundled kcd-configure skill defers all lens-authoring taste to it ( `kcd_compile { lenses: ["lens-crafter"] }` ) before writing anything, so a vault without it leaves the one shipped skill compiling nothing at the exact step where it starts producing value. Shipped as a directory so the lens keeps its `{name}/{name}.html` + `context/` anatomy.'
+		purpose: 'The authoring lens. REQUIRED, not a nicety: a new vault\'s entry document sends its first session to compile it ( `!lens-crafter` ) before any lens is written, so a vault without it fails at the exact step where it starts producing value. Shipped as a directory so the lens keeps its `{name}/{name}.html` + `context/` anatomy.'
 	},
 	{
 		bundleSource: 'lenses/house', vaultHome: 'lenses/house', required: true,
@@ -94,11 +94,11 @@ const MANIFEST: readonly ManifestEntry[] = [
 	},
 	{
 		bundleSource: 'root.html', vaultHome: 'root.html', required: true,
-		purpose: 'THE ENTRY DOCUMENT — the first thing every session reads, and what the generated CLAUDE.md points at. Required in the strongest sense: `root-context.html` instructs the agent to open it three times over, so a vault without it hands every new user a broken first instruction. It was missing entirely until 2026-07-26. Shipped as a starting point and meant to be edited; `lens-index` splices its Lenses table.'
+		purpose: 'THE ENTRY DOCUMENT — the first thing every session reads, and what the generated CLAUDE.md points at. Required in the strongest sense: `root-context.html` instructs the agent to open it three times over, so a vault without it hands every new user a broken first instruction. It was missing entirely until 2026-07-26. Shipped as a starting point and meant to be edited.'
 	},
 	{
 		bundleSource: 'root-context.html', vaultHome: 'root-context.html', required: true,
-		purpose: 'The host-seed carrier — CLAUDE.md / AGENTS.md / GEMINI.md are generated from this.'
+		purpose: 'The host-seed carrier — the root entry file ( CLAUDE.md ) is generated from this.'
 	},
 	{
 		bundleSource: 'kcd.css', vaultHome: 'kcd.css', required: true,

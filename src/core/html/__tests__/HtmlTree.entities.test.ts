@@ -7,7 +7,7 @@ import { KcdEmit } from '../KcdEmit';
  * defect this file locks down was them disagreeing. `decode` knows a handful of entities and passes
  * every other one through as literal text; escaping used to add `&amp;` to every `&` unconditionally,
  * so `&mdash;` came back out of a parse → serialize pass as `&amp;mdash;` and rendered as literal text
- * to the reader. Every `kcd_save` runs that pass ( `KcdEmit.spliceFrontmatter` ), so any edit to a
+ * to the reader. Every `save_doc` runs that pass ( `KcdEmit.spliceFrontmatter` ), so any edit to a
  * document corroded the entities it never touched.
  *
  * The acceptance question is therefore not "does escaping work" but "do the two halves agree" — which
@@ -89,7 +89,7 @@ describe( 'HtmlTree — entity round trip', () => {
 } );
 
 /**
- * The defect's real blast radius: `KcdEmit.emit` is what every `kcd_save` runs, and it re-parses and
+ * The defect's real blast radius: `KcdEmit.emit` is what every `save_doc` runs, and it re-parses and
  * re-serializes the whole body to splice fresh frontmatter in. Both save paths — body passthrough and
  * content synthesis — land here, so this is the assertion that matters to a reader of the corpus.
  */
@@ -144,7 +144,7 @@ describe( 'KcdEmit — entities survive a save', () => {
  * nothing ever gets visibly worse, so nothing prompts anyone to look.
  *
  * The blast radius is not cosmetic. Protocol §10 seed payloads are MARKDOWN inside
- * `<script type="text/kcd-md">`, `>` is markdown's blockquote character, and `daedalus seed` extracts
+ * `<script type="text/kcd-md">`, `>` is markdown's blockquote character, and the seed emit extracts
  * those payloads with a regex straight off disk — so an escape written here lands verbatim in a real
  * project's CLAUDE.md. Worse, the WHOLE BODY is re-serialized on every save, so corrupting the payloads
  * never required touching them: editing a neighbouring table was enough.

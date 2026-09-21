@@ -28,7 +28,7 @@ ${ body }</article>
 `;
 }
 
-const TOOL_ROW = '<div data-kcd-slot="tool" data-kcd-mode="on"><span data-kcd-field="what" data-kcd-type="text">daedalus.kcd_get</span><span data-kcd-field="why" data-kcd-type="text">on</span></div>';
+const TOOL_ROW = '<div data-kcd-slot="tool" data-kcd-mode="on"><span data-kcd-field="what" data-kcd-type="text">sm_documentation.get_doc</span><span data-kcd-field="why" data-kcd-type="text">on</span></div>';
 
 const TOOLS_TABLE = `<div data-kcd-table>
 <div data-kcd-head><span>Tool</span><span>Mode</span></div>

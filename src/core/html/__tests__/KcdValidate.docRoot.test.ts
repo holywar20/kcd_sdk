@@ -12,7 +12,7 @@ import { KcdValidate } from '../KcdValidate';
  *   a stale link into `_Claude/work/` WAS reported   ( right verdict, wrong reason — the file's
  *                                                      actual defect is that it names the wrong vault )
  *
- * It reached writes as well as reports, because `kcd_save` validates before it lands a file. So a
+ * It reached writes as well as reports, because `save_doc` validates before it lands a file. So a
  * non-default vault refused legal documents and accepted illegal ones.
  *
  * BOTH DIRECTIONS ARE PINNED HERE. A test that only proved the link IS caught would pass against the

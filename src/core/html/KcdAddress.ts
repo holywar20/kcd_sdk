@@ -65,7 +65,7 @@ export const KcdAddress = new class KcdAddress {
 	 * It is here, beside `SLOT_KINDS`, because the alternative is what shipped: `readSlot` knew three names,
 	 * the validator checked only that SOME field existed, and a `rule` cell satisfied the validator while
 	 * projecting nothing. Seventy-eight authored rules across seven documents were invisible to every agent
-	 * that loaded them, on pages that rendered correctly for a human and passed `kcd_health` clean. One list,
+	 * that loaded them, on pages that rendered correctly for a human and passed `validate_docs` clean. One list,
 	 * read by both, is what stops a field name being legal to write and impossible to read.
 	 */
 	ROW_FIELDS   = [ 'what', 'where', 'why', 'rule' ];

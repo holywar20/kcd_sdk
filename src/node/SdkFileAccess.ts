@@ -393,7 +393,7 @@ export class SdkFileAccess {
 	 */
 	async grepText( root: string, query: string, opts: GrepScanOptions = {}, token: SearchToken = { cancelled: false } ): Promise<GrepScan> {
 		const rows: GrepRow[] = []
-		if( !query || token.cancelled ) return { rows, searched: 0, capped: false, cancelled: token.cancelled }
+		if( !query || token.cancelled ) return { rows, searched: 0, capped: false, cancelled: token.cancelled, candidates: 0, nearMisses: 0 }
 
 		// Fold the needle ONCE here rather than per line. Every comparison below is against this value,
 		// so a caller passing `caseInsensitive` never pays for the fold in the inner loop.
@@ -407,9 +407,13 @@ export class SdkFileAccess {
 		const maxFile  = opts.maxPerFile ?? GREP_FILE_CAP
 
 		const stack: string[] = [ root ]
-		let   visited  = 0
-		let   searched = 0
-		let   capped   = false
+		let   visited    = 0
+		let   searched   = 0
+		let   capped     = false
+		// The two numbers that make an EMPTY result interpretable — see `GrepScan`. Counted at the glob
+		// filter, which is the only place that can tell "nothing here" from "nothing your pattern kept".
+		let   candidates = 0
+		let   nearMisses = 0
 
 		// THE YIELD BUDGET, weighted, because the two axes cost wildly different amounts. Visiting a
 		// directory entry is one readdir hit already in hand; opening a file is a syscall, a decode and
@@ -433,7 +437,7 @@ export class SdkFileAccess {
 				budget  += 1
 				if( visited > GREP_WALK_CAP ) {
 					this._warn( 'grep_walk_capped', { root, query, cap: GREP_WALK_CAP } )
-					return { rows, searched, capped: true, cancelled: false }
+					return { rows, searched, capped: true, cancelled: false, candidates, nearMisses }
 				}
 
 				const full = join( dir, d.name )
@@ -453,7 +457,16 @@ export class SdkFileAccess {
 				// file is dropped from the candidate list rather than read and then withheld.
 				if( noise && Noise.skipsFile( d.name ) ) continue
 				if( !TextTypes.isText( full ) ) continue
-				if( filter && !Glob.matches( relative( root, full ).split( sep ).join( '/' ), filter ) ) continue
+				candidates += 1
+				if( filter ) {
+					const rel = relative( root, full ).split( sep ).join( '/' )
+					if( !Glob.matches( rel, filter ) ) {
+						// A miss the BASENAME would have caught is the caller reading this grammar as
+						// filename matching. Counted here so the refusal can name the fix.
+						if( Glob.matches( d.name, filter ) ) nearMisses += 1
+						continue
+					}
+				}
 				if( Blacklist.excludes( full, deny ) ) continue
 
 				let size: number
@@ -483,18 +496,18 @@ export class SdkFileAccess {
 				// the answer is already known to be partial.
 				if( rows.length >= maxRows ) {
 					this._warn( 'grep_truncated', { root, query, cap: maxRows } )
-					return { rows, searched, capped: true, cancelled: false }
+					return { rows, searched, capped: true, cancelled: false, candidates, nearMisses }
 				}
 
 				if( budget >= GREP_YIELD_BUDGET ) {
 					budget = 0
 					await _tick()
-					if( token.cancelled ) return { rows, searched, capped, cancelled: true }
+					if( token.cancelled ) return { rows, searched, capped, cancelled: true, candidates, nearMisses }
 				}
 			}
 		}
 
-		return { rows, searched, capped, cancelled: false }
+		return { rows, searched, capped, cancelled: false, candidates, nearMisses }
 	}
 
 	/** The fast path: ask a real, already-live Everything instance instead of walking disk. Returns

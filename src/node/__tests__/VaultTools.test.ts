@@ -8,9 +8,9 @@ import type { VaultToolNames, VaultToolOp } from '../VaultTools';
 import type { ToolResult } from '../../server/McpServer';
 
 /**
- * VaultTools — the one engine behind the Daedalus server and Starmind's `sm_documentation` keystones.
+ * VaultTools — the one engine behind Starmind's `sm_documentation` keystones.
  *
- * Two faces call these ops under different names, so what is worth pinning is what a FACE cannot get
+ * A face calls these ops under its own names, so what is worth pinning is what a FACE cannot get
  * wrong by construction: the jail runs inside every path-taking op ( no face can skip it ), a refusal
  * names the sibling AS THIS FACE CALLS IT, a write reports what it touched, and the prose renders the
  * same on every face except for the names. Every assertion on a refusal reads its TEXT — the message is
@@ -116,6 +116,53 @@ describe( 'VaultTools — reads', () => {
 		expect( census ).toEqual( [ { type: 'reference', count: 2 } ] );
 	} );
 
+	/**
+	 * THE SILENT DROP — a document on disk that no query returns, and nothing says why.
+	 *
+	 * A file that fails to parse is absent from the scan, which is correct. Being absent from the ANSWER
+	 * with no signal is not: it reads identically to "no such document", so a reader hunting a file that
+	 * is right there learns nothing and has no way to learn it. That cost a real agent twenty minutes
+	 * over `_lens-base.html`, found in the end by falling back to a raw file glob.
+	 */
+	describe( 'a document it cannot parse', () => {
+
+		beforeEach( () => { put( '_Claude/references/patterns/broken.html', '<not an artifact at all' ); } );
+
+		it( 'names it above the results instead of leaving absence as the only clue', () => {
+			const said = text( tools().query( {} ) );
+
+			expect( said ).toContain( 'could not be parsed' );
+			expect( said ).toContain( 'references/patterns/broken.html' );
+			// The reader is pointed at the tool that says WHY, under this face's own name for it.
+			expect( said ).toContain( 'check' );
+		} );
+
+		it( 'still answers the query — the note leads the results, it does not replace them', () => {
+			const said = text( tools().query( {} ) );
+			const refs = JSON.parse( said.slice( said.indexOf( '[' ) ) ) as { path: string }[];
+
+			expect( refs.map( r => r.path ).sort() ).toEqual( [ 'references/patterns/alpha.html', 'references/patterns/beta.html' ] );
+		} );
+
+		it( 'reports it under a glob that reaches it, and stays quiet under one that does not', () => {
+			expect( text( tools().query( { glob: 'references/**' } ) ) ).toContain( 'broken.html' );
+			expect( text( tools().query( { glob: 'lenses/**' } ) ) ).not.toContain( 'could not be parsed' );
+		} );
+
+		it( 'reports it even under a type or text filter, which it could not have been measured against', () => {
+			// Both filters need a parsed document. Applying them to one that has none would be inventing an
+			// answer — and this is exactly the search where the silence misleads most.
+			expect( text( tools().query( { type: 'lens' } ) ) ).toContain( 'broken.html' );
+			expect( text( tools().query( { text: 'nothing matches this' } ) ) ).toContain( 'broken.html' );
+		} );
+	} );
+
+	it( 'answers a clean query with the bare array it always did, and no preamble', () => {
+		// The advisory is a fact about the query rather than a row of it, so a vault with nothing wrong
+		// pays nothing for the feature — not a wrapper, not a header, not a token.
+		expect( text( tools().query( { type: 'reference' } ) ).trimStart().startsWith( '[' ) ).toBe( true );
+	} );
+
 	it( 'links sees the backlink beta declares onto alpha', () => {
 		const r = json( tools().links( { path: 'references/patterns/alpha.html' } ) );
 		expect( ( r[ 'inbound' ] as { path: string }[] ).map( l => l.path ) ).toEqual( [ 'references/patterns/beta.html' ] );
@@ -162,6 +209,70 @@ describe( 'VaultTools — writes report what they touched', () => {
 		expect( text( r ) ).toContain( 'write refused "references/domain/x.html": artifact failed validation' );
 		expect( existsSync( join( root, '_Claude', 'references', 'domain', 'x.html' ) ) ).toBe( false );
 		expect( wrote ).toEqual( [] );
+	} );
+
+	/** An artifact that validates, for the cases that need a write to be REACHED. */
+	const authored = ( name: string, overview: string ): Record<string, unknown> => ( {
+		type:        'reference',
+		frontmatter: { name, description: 'Authored by content.', type: 'reference', status: 'active' },
+		content:     { sections: { why: 'when a test needs a write to land', overview } },
+	} );
+	const alpha = (): string => readFileSync( join( root, '_Claude', 'references', 'patterns', 'alpha.html' ), 'utf-8' );
+
+	it( 'save with create refuses a path that already holds a document, and lands nothing', () => {
+		// bug-report-20. Two filers took "one past the highest on disk" from one listing, and the second write
+		// replaced the first unseen. `create` makes the write exclusive: the loser is refused, not merged away.
+		const before = alpha();
+		const r = tools().save( { path: 'references/patterns/alpha.html', create: true, artifact: authored( 'alpha', 'The second filer.' ) } );
+		expect( r.isError ).toBe( true );
+		expect( text( r ) ).toContain( 'write refused "references/patterns/alpha.html": it already exists' );
+		expect( text( r ) ).toContain( 'omit `create`' );
+		expect( alpha() ).toBe( before );
+		expect( wrote ).toEqual( [] );
+	} );
+
+	it( 'save with create files a path that holds nothing yet', () => {
+		const r = tools().save( { path: 'references/domain/delta.html', create: true, artifact: authored( 'delta', 'The first filer.' ) } );
+		expect( r.isError ).toBeUndefined();
+		expect( readFileSync( join( root, '_Claude', 'references', 'domain', 'delta.html' ), 'utf-8' ) ).toContain( 'The first filer.' );
+	} );
+
+	it( 'save without create still replaces — an edit is an overwrite by design', () => {
+		const r = tools().save( { path: 'references/patterns/alpha.html', artifact: authored( 'alpha', 'Edited in place.' ) } );
+		expect( r.isError ).toBeUndefined();
+		expect( alpha() ).toContain( 'Edited in place.' );
+	} );
+
+	it( 'saves an artifact read at full and sent straight back as body, one passage altered', () => {
+		// bug-report-25 claimed this EDIT path was unusable. It is the report's own reproduction, frontmatter block
+		// stripped from the body as the schema asks, and it lands with the edit intact.
+		const read = json( tools().get( { path: 'references/patterns/alpha.html', full: true } ) );
+		const body = String( read[ 'body' ] );
+		const stripped = body.slice( body.indexOf( '</dl>' ) + '</dl>'.length ).replace( 'The target.', 'The altered target.' );
+
+		const r = tools().save( { path: 'references/patterns/alpha.html', artifact: { type: read[ 'type' ], frontmatter: read[ 'frontmatter' ], body: stripped } } );
+		expect( r.isError, text( r ) ).toBeUndefined();
+		expect( alpha() ).toContain( 'The altered target.' );
+		expect( alpha() ).toContain( 'data-kcd-field="name"' );
+	} );
+
+	it( 'refuses an artifact with no frontmatter BY NAME on the edit path, instead of leaking a TypeError', () => {
+		const r = tools().save( { path: 'references/patterns/alpha.html', artifact: { type: 'reference', body: '<h1>alpha</h1>' } } );
+		expect( r.isError ).toBe( true );
+		expect( text( r ) ).toContain( 'write refused "references/patterns/alpha.html": `artifact.frontmatter` must be an object' );
+		expect( text( r ) ).toContain( 'this call carried none' );
+		expect( text( r ) ).not.toContain( 'Cannot convert' );
+		expect( wrote ).toEqual( [] );
+	} );
+
+	it( 'refuses the same way on the authoring path, and names what arrived when it is not an object', () => {
+		const missing = tools().save( { path: 'references/domain/x.html', artifact: { type: 'reference', content: { sections: { why: 'x' } } } } );
+		expect( text( missing ) ).toContain( '`artifact.frontmatter` must be an object' );
+
+		const asMarkup = tools().save( { path: 'references/domain/x.html', artifact: { type: 'reference', frontmatter: '<dl data-kcd-frontmatter></dl>', body: '<h1>x</h1>' } } );
+		expect( text( asMarkup ) ).toContain( 'this call carried a string' );
+		expect( text( asMarkup ) ).toContain( 'read with `full: true`' );
+		expect( existsSync( join( root, '_Claude', 'references', 'domain', 'x.html' ) ) ).toBe( false );
 	} );
 
 	it( 'move heals the referrer and reports the moved file AND the referrer to the host', () => {
@@ -270,34 +381,5 @@ describe( 'VaultTools.spec — one copy of the prose, rendered per face', () => 
 	it( 'throws on a token that names no op, so an authoring slip cannot ship as prose', () => {
 		const partial = { ...NAMES, links: '' } as VaultToolNames;
 		expect( () => VaultTools.spec( 'get', partial ) ).toThrow( /has no name on this face/ );
-	} );
-
-	/**
-	 * THE DAEDALUS WIRE MUST NOT MOVE. That face's committed snapshot is what every host advertises while
-	 * the server is dormant, and moving the prose into the SDK was meant to change what a tool DOES about
-	 * nothing and what it SAYS about nothing. Skipped when the sibling checkout is not beside this one —
-	 * Daedalus is its own repository — so the SDK suite stays runnable on its own.
-	 */
-	it( 'renders the Daedalus face byte-identical to its committed tool snapshot', () => {
-		const snapshot = resolve( __dirname, '../../../../daedalus/tools.snapshot.json' );
-		if ( !existsSync( snapshot ) ) return;
-
-		const DAEDALUS: VaultToolNames = {
-			query: 'kcd_query', get: 'kcd_get', links: 'kcd_links', health: 'kcd_health', compile: 'kcd_compile',
-			survey: 'kcd_survey', save: 'kcd_save', move: 'kcd_move', delete: 'kcd_delete', batch: 'kcd_batch',
-		};
-		const tools = ( JSON.parse( readFileSync( snapshot, 'utf-8' ) ) as { tools: Record<string, unknown>[] } ).tools;
-		expect( tools.map( t => t[ 'name' ] ) ).toEqual( VAULT_TOOL_OPS.map( op => DAEDALUS[ op ] ) );
-
-		for ( const op of VAULT_TOOL_OPS ) {
-			const spec = VaultTools.spec( op, DAEDALUS );
-			const shipped = tools.find( t => t[ 'name' ] === DAEDALUS[ op ] )!;
-			expect( shipped[ 'description' ], op ).toEqual( spec.description );
-			expect( shipped[ 'doc' ],         op ).toEqual( spec.doc );
-			expect( shipped[ 'inputSchema' ], op ).toEqual( spec.inputSchema );
-			expect( shipped[ 'annotations' ], op ).toEqual( spec.annotations );
-			// `example` on the wire may be borrowed from the first verify spec, which lives on the face.
-			if ( spec.example ) expect( shipped[ 'example' ], op ).toEqual( spec.example );
-		}
 	} );
 } );

@@ -2,8 +2,8 @@
  * KcdShapes — the per-TYPE document shape, as data ( parser-family, protocol §2/§4 ).
  *
  * THE PROBLEM THIS SOLVES. A KCD document's shape has been written down three times and never once
- * in a form code can read: the eight scaffolds in `daedalus/templates/` ( prose, for a human to copy,
- * and `data-kcd="template"` is EXEMPT from validation ), the contracts' body-section prose, and the
+ * in a form code can read: the per-type template scaffolds ( prose, for a human to copy, and
+ * `data-kcd="template"` is EXEMPT from validation ), the contracts' body-section prose, and the
  * primitives' doc-comments. `KcdValidate` enforces the GRAMMAR ( a section must be named and
  * non-empty, a slot must carry a kind ) but not the SHAPE ( a plan has a Goal ) — its one type-aware
  * pass is `checkHabit`, hand-written for a single type. So a plan with no Goal, no Phases and no
@@ -93,8 +93,8 @@ export interface ShapeAudit {
 const SCAFFOLD_NOTE = 'scaffold-note';
 
 /**
- * The table. Every entry is derived from the type's own template in `daedalus/templates/` plus the
- * corpus as authored — not invented here. A type absent from this table is UNGOVERNED rather than
+ * The table. Every entry is derived from the type's own template scaffold plus the corpus as
+ * authored — not invented here. A type absent from this table is UNGOVERNED rather than
  * malformed: `audit` reports `known: false` and finds nothing, so adding a type is additive and a
  * missing entry can never manufacture an error.
  */

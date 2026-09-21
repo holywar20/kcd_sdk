@@ -2,8 +2,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { LensObject, Glob, KcdExcise, VaultLayout, Agent, InstallManifest, KcdEmit } from '../core';
 import type { ArtifactRef, ArtifactType } from '../core';
-import { scan } from '../scanner';
-import type { ScannedFile } from '../scanner';
+import { scan, scanReport } from '../scanner';
+import type { ScannedFile, ScanReport } from '../scanner';
 import { inferProjectRoot, loadLensFromDisk } from './io';
 
 /**
@@ -233,6 +233,18 @@ export class Vault {
 	}
 
 	/**
+	 * The same scan, carrying the paths it could not parse.
+	 *
+	 * For a reader that has to tell "no such document" from "a document that is there and unreadable".
+	 * `scan()` cannot: the drop leaves no trace in its result, so every caller of it reports absence for
+	 * both. Where `documentPaths()` gives a whole-vault sweep something to grade, this gives an ordinary
+	 * READ the same honesty at no extra walk.
+	 */
+	scanReport(): ScanReport {
+		return scanReport( this.root, this.docRoot );
+	}
+
+	/**
 	 * How many artifacts this vault holds — a COUNT, not a scan.
 	 *
 	 * Walks the same `VaultLayout` indexed directories the real index walks and counts `.html` files
@@ -330,11 +342,14 @@ export class Vault {
 		return fs.readFileSync( this.toAbs( vaultRelative ), 'utf-8' );
 	}
 
-	/** Write content to a vault path ( creating parent dirs ); returns the vault-relative path written. */
-	write( vaultRelative: string, content: string ): string {
+	/** Write content to a vault path ( creating parent dirs ); returns the vault-relative path written.
+	 *  `exclusive` makes it a CREATE, refused by the open itself when the path exists ( throws `EEXIST` ) —
+	 *  atomic, so two writers racing for one name cannot both land, which a prior existence check could not
+	 *  promise. */
+	write( vaultRelative: string, content: string, opts: { exclusive?: boolean } = {} ): string {
 		const abs = this.toAbs( vaultRelative );
 		fs.mkdirSync( path.dirname( abs ), { recursive: true } );
-		fs.writeFileSync( abs, content, 'utf-8' );
+		fs.writeFileSync( abs, content, { encoding: 'utf-8', flag: opts.exclusive ? 'wx' : 'w' } );
 		return this.toVaultRel( abs );
 	}
 
@@ -562,7 +577,7 @@ export class Vault {
 	 *
 	 * `CLAUDE.md` is the first document every agent reads, it is markdown so the artifact scan never
 	 * sees it, and its prose sits BELOW the `kcd:end` marker so the seeder cannot reach it either. It
-	 * carried a dead architecture claim and three broken links for weeks while `kcd_health` reported
+	 * carried a dead architecture claim and three broken links for weeks while `validate_docs` reported
 	 * 0 issues across 0 files and was correct, because it never looked.
 	 *
 	 * An explicit list, never a project walk: a heal that can rewrite arbitrary files outside the vault

@@ -49,15 +49,55 @@ const JS_FRONTMATTER_RE = /^\/\*---\r?\n([\s\S]*?)\r?\n---\s*\*\/\r?\n?([\s\S]*)
 // Inline links in a `.js` comment body: [text](href). Deliberately simple.
 const LINK_RE = /\[([^\]]*)\]\(([^)]+)\)/g;
 
+/** A scan, plus the files it had to drop to produce one. */
+export interface ScanReport {
+	files: ScannedFile[];
+	/** Vault-relative paths of `.html` files that could not be parsed as artifacts, in walk order.
+	 *
+	 *  THIS LIST IS THE WHOLE REASON THIS SHAPE EXISTS. A file that fails to parse is absent from
+	 *  `files`, and absence is indistinguishable from "no such document" at every caller — so a reader
+	 *  hunting a document that IS on disk is told nothing at all and has no way to learn otherwise. The
+	 *  drop is correct; being silent about it is not. */
+	faults: string[];
+}
+
+/** Every artifact under `root`, parsed. The drops are discarded — see `scanReport` to keep them. */
 export function scan( root: string, docRoot: string, opts?: ScanOptions ): ScannedFile[] {
+	return scanReport( root, docRoot, opts ).files;
+}
+
+/**
+ * `scan`, reporting what it could not parse.
+ *
+ * ONE WALK, not two. The obvious way to learn what a scan dropped is to walk the tree again and diff,
+ * and it is wrong twice over: it doubles the IO on a hot read path, and the two walks do not cover the
+ * same set ( `documentPaths` takes indexed directories and root files; this takes the whole root ), so
+ * the difference between them is not the failure set and never was.
+ *
+ * A `filter` narrows `files` and NOT `faults`. The filter reads `relativePath`, which a fault still
+ * has — but a caller filtering is asking which documents match, and a document that cannot be parsed
+ * cannot be said to match or not match. Reporting it either way would be a claim; reporting it always
+ * is the honest one, and the caller can narrow the list itself.
+ */
+export function scanReport( root: string, docRoot: string, opts?: ScanOptions ): ScanReport {
 	const absRoot = path.resolve( root );
 	const topDirs = opts?.includeDirs ? new Set( opts.includeDirs ) : null;
-	const files   = walkFiles( absRoot, topDirs );
+	const walked  = walkFiles( absRoot, topDirs );
 
-	return files
-		.map( absPath => parseFile( absPath, absRoot, docRoot ) )
-		.filter( ( f ): f is ScannedFile => f !== null )
-		.filter( f => !opts?.filter || f.relativePath.includes( opts.filter ) );
+	const files:  ScannedFile[] = [];
+	const faults: string[]      = [];
+
+	for ( const absPath of walked ) {
+		const parsed = parseFile( absPath, absRoot, docRoot );
+		if ( !parsed ) {
+			faults.push( path.relative( absRoot, absPath ).replace( /\\/g, '/' ) );
+			continue;
+		}
+		if ( opts?.filter && !parsed.relativePath.includes( opts.filter ) ) continue;
+		files.push( parsed );
+	}
+
+	return { files, faults };
 }
 
 /** `topDirs`, when non-null, gates ONLY the immediate subdirectories of the scan root ( `atRoot` ) — a

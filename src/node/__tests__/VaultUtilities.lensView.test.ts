@@ -4,10 +4,10 @@ import { Vault } from '../Vault'
 import { VaultUtilities } from '../VaultUtilities'
 
 /**
- * `VaultUtilities.lensView` — the composition chart behind `daedalus show`.
+ * `VaultUtilities.lensView` — the composition chart of a compiled object.
  *
  * What this view is FOR: seeing what an object is built from, file by file, so the edit-then-inspect loop
- * works from the command line. So the assertions here are about composition, not about text: every file
+ * has something to inspect. So the assertions here are about composition, not about text: every file
  * carries a real cost, inheritance is visible, and the rows still reconcile against the compile.
  */
 

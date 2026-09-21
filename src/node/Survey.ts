@@ -429,8 +429,8 @@ export class Survey {
 			const segs = r === '.' ? [ 'root' ] : r.split( '/' );
 
 			// Widen leftwards through the path until the id is unique: two components both called
-			// `daedalus` become `daedalus` and `mcp-daedalus`, which says WHICH one — where a numeric
-			// suffix ( `daedalus-2` ) only says "there was another".
+			// `server` become `server` and `api-server`, which says WHICH one — where a numeric
+			// suffix ( `server-2` ) only says "there was another".
 			let id = 'component';
 			for ( let take = 1; take <= segs.length; take++ ) {
 				id = segs.slice( segs.length - take ).map( safe ).filter( Boolean ).join( '-' ) || 'component';

@@ -108,8 +108,8 @@ export abstract class StarmindServer {
 	 *
 	 * ── NOTHING PER-SESSION MAY BE FOLDED IN HERE. READ THIS BEFORE OVERRIDING. ──
 	 * Three servers once did exactly that — the file server folded in its readable ROOT PATHS, the browser
-	 * its enabled origins, Daedalus its vault root and census — each to save an agent a discovery call. All
-	 * three were removed, and the reason is structural rather than stylistic: a server doc is per-SERVER,
+	 * its enabled origins, the KCD server its vault root and census — each to save an agent a discovery
+	 * call. All three were removed, and the reason is structural rather than stylistic: a server doc is per-SERVER,
 	 * and one copy of a server now answers for SEVERAL SESSIONS at once. There is no call in scope here, so
 	 * there is no way to know whose doc is being asked for, and any workspace state folded in is whichever
 	 * one resolved last. That is not a leak of configuration; it is one session's paths handed to another.

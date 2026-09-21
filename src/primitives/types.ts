@@ -175,7 +175,8 @@ export interface PolicyEntry {
 	section?: string;
 }
 
-/** Reads raw file content for an absolute path. Server-side only; never crosses the MCP boundary. */
+/** Reads raw file content for an absolute path. Throws `PendingRead` for a document it does not have yet;
+ *  any other throw means the document is not there. Never crosses the MCP boundary. */
 export type ReaderFn = (absPath: string) => string;
 
 export interface SerializedArtifact {
@@ -214,9 +215,15 @@ export interface SerializedLens extends SerializedArtifact {
 	 *  per-tool by the agent's own maps. Absent on a lens with no Tools table. Unlike references/habits,
 	 *  a tool is not a dredged node, so it rides here rather than in `nodes`. */
 	toolModes?: Record<string, SlotMode>;
+	/** Set on a lens that crosses as its RECORD alone — no content and no nodes, only what a reader needs to read
+	 *  it on access. The receiver rebuilds it with `LensObject.lazy` and hands it a reader. */
+	lazy?: boolean;
+	/** The vault root a record's lens reads against, and that vault's folder name — see `LensLoadOptions`. */
+	projectRoot?: string;
+	docRoot?: string;
 }
 
-/** Flat map of path → artifact. Only dirty objects contribute. Atomic unit for kcd_save. */
+/** Flat map of path → artifact. Only dirty objects contribute. Atomic unit for save_doc. */
 export type WriteMap = Record<string, SerializedArtifact>;
 
 export interface ArtifactRef {

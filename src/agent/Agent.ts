@@ -305,6 +305,30 @@ export type AgentEnvironment = {
 	hostPrompt?:     string;
 	rootContext?:    string;
 	toolDefs?:       ToolDef[];
+	/**
+	 * WHAT EACH OF THOSE DEFS COSTS, FOR THIS RUN — the host's answer, and it outranks the agent's own.
+	 *
+	 * Bound beside `toolDefs` because it is the same kind of fact: what the run was handed, not what the
+	 * agent is. Its absence is why a surface used to be an agent-wide live setting — one Agent object serves
+	 * many sessions, so a session that chose to preload a tool could not say so without saying it for every
+	 * other session of that agent at the same instant. The host resolves it per run now and binds the
+	 * answer here.
+	 *
+	 * IT IS THE PAPERS' ANSWER, AND NOT WHAT THE REQUEST CARRIES. A host can put a tool on the wire for a
+	 * reason that is not its surface — a person granted it, say — so a mark read off this map would call a
+	 * tool deferred while the request is holding it. That is `runDeferred`'s question, bound beside this.
+	 */
+	runSurfaces?:    Record<string, Surface>;
+	/**
+	 * WHAT THIS RUN DEFERS — the ids it may call that its request does NOT carry, and so exactly the tools
+	 * the manifest marks `[schema on request]`. Bound by the host from the SAME subtraction that decides
+	 * whether the search door rides, so the prompt and the request cannot disagree about which tools need
+	 * fetching: the mark and the door are one fact with two readers.
+	 *
+	 * ABSENT ON A COMPOSITION SURFACE, which has no request to subtract from — the mark falls back to the
+	 * surface there, which is the best answer available without a run.
+	 */
+	runDeferred?:    readonly string[];
 	searchTool?:     string;
 	contributions?:  Contribution[];
 	attachments?:    string;
@@ -370,6 +394,15 @@ export class Agent {
 	/** The lenses' contribution on the COST axis, overlaid the same way and INDEPENDENTLY: an agent that
 	 *  tightens a lens's tool has said nothing about what that tool costs. */
 	composedToolSurfaces: Record<string, Surface> = {};
+
+	/** THE RUN'S surfaces, bound per turn by the host ( `AgentEnvironment.runSurfaces` ) and never persisted.
+	 *  Empty on a composition surface, which has no run to answer for. */
+	runSurfaces: Record<string, Surface> = {};
+
+	/** THE RUN'S deferred set, bound per turn by the host ( `AgentEnvironment.runDeferred` ) and never
+	 *  persisted. NULL — not empty — until a host binds one: empty means "this run defers nothing", and the
+	 *  manifest must be able to tell that apart from "there is no run to ask". */
+	runDeferred: readonly string[] | null = null;
 
 	/**
 	 * The agent's OWN base habits as LOADED objects ( the `agent` source layer at composition ). Disk is
@@ -615,6 +648,17 @@ export class Agent {
 	/** One function, many purposes: the bridge wire form, the save form, the reconstruction source.
 	 *  Ships base strings + serialized lenses only — composed{X} is rebuilt on arrival. */
 	serializeForWire(): SerializedAgent {
+		return { ...this.serializeOwn(), lenses: this.lenses.map( ( l ) => l.serializeForWire() ) };
+	}
+
+	/** The agent's RECORD — its own fields, and each lens as a record the receiver reads on access. The wire
+	 *  form for a receiver that compiles for itself: it carries none of what the lenses say. */
+	serializeRecord(): SerializedAgent {
+		return { ...this.serializeOwn(), lenses: this.lenses.map( ( l ) => l.serializeRecord() ) };
+	}
+
+	/** Every field of the agent but its lenses — what both wire forms share. */
+	private serializeOwn(): Omit<SerializedAgent, 'lenses'> {
 		return {
 			id:             this.id,
 			projectId:      this.projectId,
@@ -623,7 +667,6 @@ export class Agent {
 			color:          this.color,
 			model:          this.model,
 			systemPrompt:   this.systemPrompt,
-			lenses:         this.lenses.map( ( l ) => l.serializeForWire() ),
 			baseHabits:     [ ...this.baseHabits ],
 			baseReferences: [ ...this.baseReferences ],
 			basePlans:      [ ...this.basePlans ],
@@ -680,6 +723,8 @@ export class Agent {
 		if ( env.hostPrompt  !== undefined ) this.hostPrompt  = env.hostPrompt;
 		if ( env.rootContext !== undefined ) this.rootContext = env.rootContext;
 		if ( env.toolDefs    !== undefined ) this.toolDefs    = env.toolDefs;
+		if ( env.runSurfaces !== undefined ) this.runSurfaces = env.runSurfaces;
+		if ( env.runDeferred !== undefined ) this.runDeferred = env.runDeferred;
 		if ( env.searchTool  !== undefined ) this.searchTool  = env.searchTool;
 		if ( env.contributions !== undefined ) this.contributions = env.contributions;
 		if ( env.attachments !== undefined ) this.attachments = env.attachments;
@@ -716,12 +761,18 @@ export class Agent {
 		return held;
 	}
 
-	/** What one held tool COSTS — the same lens-then-agent overlay on the other axis, resolved per tool
-	 *  because that is how every reader asks. INDEPENDENT of the allowance overlay, deliberately: an agent
-	 *  that tightens a lens's tool to `ask` has said nothing about what that tool costs, and an override is
-	 *  only ever a difference. `manifest` is the answer when nobody has said otherwise. */
+	/**
+	 * What one held tool COSTS — the same lens-then-agent overlay on the other axis, resolved per tool because
+	 * that is how every reader asks. INDEPENDENT of the allowance overlay, deliberately: an agent that tightens
+	 * a lens's tool to `ask` has said nothing about what that tool costs, and an override is only ever a
+	 * difference. `manifest` is the answer when nobody has said otherwise.
+	 *
+	 * THE RUN'S OWN ANSWER COMES FIRST, when a host has bound one. That is the papers the turn is going out
+	 * under, resolved for THIS session rather than for the agent object several sessions share; the two layers
+	 * below it are what a COMPOSITION surface reads, where there is no run to ask. See `runSurfaces`.
+	 */
 	toolSurfaceFor( id: string ): Surface {
-		return this.toolSurfaces[ id ] ?? this.composedToolSurfaces[ id ] ?? 'manifest';
+		return this.runSurfaces[ id ] ?? this.toolSurfaces[ id ] ?? this.composedToolSurfaces[ id ] ?? 'manifest';
 	}
 
 	/**
@@ -1181,6 +1232,15 @@ export class Agent {
 	// agent's own bound environment, so ONE zero-arg call answers "what is my context" and both the renderer
 	// preview and ( Phase 5 ) the send path read the SAME method — no second door, no drift by construction.
 
+	/** The documents this agent's lenses are still waiting on — empty once its compile is complete, and always
+	 *  empty in main, whose reader is disk. A caller shows a pending state while it is not, and composes again
+	 *  once it is. */
+	pending(): string[] {
+		const out: string[] = [];
+		for ( const lens of this.lenses ) out.push( ...lens.pending() );
+		return out;
+	}
+
 	/**
 	 * THE compiled context for this agent's live wire — `compiledBlocks()` with the bound environment folded
 	 * in as real blocks: the model root context LEADS ( `before` ), each package's injection sorts into its band,
@@ -1451,7 +1511,15 @@ export class Agent {
 			? `Everything you hold is listed here. A tool marked ${ MARK } is not callable yet: call ${ this.searchTool } with its exact name, or with a server's name for all of that server's tools, then call it. A tool you already have never stands in for one you have not fetched.`
 			: `Everything you hold is listed here. A tool marked ${ MARK } is not in your callable set yet — ask for its schema, then call it.`;
 
-		const deferred = ( t: ToolDef ): boolean => this.toolSurfaceFor( t.id! ) === 'manifest';
+		// THE RUN'S ANSWER WHEN THERE IS ONE, and it is not the surface. A host can put a tool on the request
+		// for a reason no surface records — a person granted it on this session, say — and a mark read off the
+		// surface told the model that tool was not callable yet, and to fetch it through a search tool the
+		// request was not even carrying. The host binds what the request actually defers; only a composition
+		// surface, with no request to ask, falls back to the surface.
+		const runDeferred = this.runDeferred;
+		const deferred = ( t: ToolDef ): boolean => runDeferred
+			? runDeferred.includes( t.id! )
+			: this.toolSurfaceFor( t.id! ) === 'manifest';
 		const sections = Agent.groupByServer( held ).map( g => {
 			const head = g.doc ? `### ${ g.name }\n${ g.doc }` : `### ${ g.name }`;
 			// Each row names the tool the way the model must CALL it — its wire name, which carries the server.

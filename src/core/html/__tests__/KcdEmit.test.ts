@@ -125,7 +125,7 @@ describe( 'KcdEmit.cssHrefFor — the one copy of the depth math', () => {
 
 	it( 'walks up one level per directory below the vault root', () => {
 		expect( KcdEmit.cssHrefFor( 'nav-index.html' ) ).toBe( 'kcd.css' );
-		expect( KcdEmit.cssHrefFor( 'plans/daedalus-integrity.html' ) ).toBe( '../kcd.css' );
+		expect( KcdEmit.cssHrefFor( 'plans/vault-integrity.html' ) ).toBe( '../kcd.css' );
 		expect( KcdEmit.cssHrefFor( 'references/patterns/two-facts-one-value.html' ) ).toBe( '../../kcd.css' );
 		expect( KcdEmit.cssHrefFor( 'lenses/driver/context/notes.html' ) ).toBe( '../../../kcd.css' );
 	} );

@@ -1,5 +1,6 @@
 import { PathText } from '../../core/PathText';
 import { KCDPrimitive, clampDepth, classifyRelPath } from './KCDPrimitive';
+import { PendingRead } from './PendingRead';
 import { VaultLayout } from '../../core/VaultLayout';
 import { SlotResolver } from './SlotResolver';
 import type { ArtifactType, KCDRole, PolicyEntry, ReaderFn, SerializedArtifact, SerializedLens, SlotMode, TaggedBlock } from '../types';
@@ -7,9 +8,9 @@ import type { Policy, Surface } from '../ToolAccess';
 
 const LENS_DEFAULT_DEPTH = 2;
 
-/** The default disk reader — a stub that throws. Core never touches `fs`; the main side injects
- *  a real reader at load(). On the renderer this stays the stub, because render never dredges —
- *  it receives finished graphs. Reaching for it there is a bug, and it says so. */
+/** The default disk reader — a stub that throws. Core never touches `fs`: main injects a disk reader at
+ *  `load()`, and a receiver that reads on access hands its own reader to `lazy` or `setReader`. Reaching
+ *  this one is a bug, and it says so. */
 const DISK_IS_MAIN_ONLY: ReaderFn = ( absPath ) => {
 	throw new Error( `LensObject.read: disk read is a main-process capability (path: ${ absPath })` );
 };
@@ -37,13 +38,16 @@ export interface LensLoadOptions {
 	 * The false default is for callers wanting a lens's own prose without touching disk for its children.
 	 */
 	eager?: boolean;
-	/** The injected disk reader. Main supplies fsReader; render never calls load(), so never sets it. */
+	/** For a lens that reads on access: read EVERY child, rather than stubbing the ones its compile does not
+	 *  use. A surface that shows each child's own cost — a lens card — wants their bodies; an agent does not. */
+	readAll?: boolean;
+	/** The injected reader. Main supplies fsReader; the renderer supplies one that fetches through its cache. */
 	read: ReaderFn;
 }
 
 /**
  * A lens is the spine: it owns its projectRoot, reads files (via an injected `read`
- * strategy — main attaches fs, the renderer never dredges), orchestrates its own dredge,
+ * strategy — main attaches fs, the renderer a reader over its cache), orchestrates its own dredge,
  * and assembles the loaded nodes into an AI context blob. Ask a lens — instantiate with
  * a path and it does the rest.
  *
@@ -91,8 +95,17 @@ export class LensObject extends KCDPrimitive {
 	/** When set, the dredge follows conditional (non-`always`) links too, marking
 	 *  them not-included. See LensLoadOptions.eager — the display-vs-context axis. */
 	protected eager = false;
+	/** See LensLoadOptions.readAll. Meaningful only for a lens that reads on access. */
+	protected readAll = false;
 	/** Injected disk capability (Strategy). Default throws — main attaches a real reader at load(). */
 	protected read: ReaderFn = DISK_IS_MAIN_ONLY;
+	/** Set on a lens that reads on access ( `LensObject.lazy` ): its own document and its children are read
+	 *  through `read` the first time something asks, and `pending` names what the reader could not supply yet.
+	 *  Null on a lens loaded whole, which never reads again. */
+	private onAccess: { loaded: boolean; dredged: boolean; pending: string[] } | null = null;
+	/** The children a lens that reads on access has already read, by path — so a pass made while other reads
+	 *  are still outstanding parses nothing twice. Cleared when it is told to read again. */
+	private readNodes = new Map<string, KCDPrimitive>();
 
 	protected constructor( filePath: string ) {
 		super( filePath, 'lens' );
@@ -123,11 +136,75 @@ export class LensObject extends KCDPrimitive {
 	}
 
 	/**
+	 * A lens that reads on access: nothing is read now. Its own document is read the first time anything asks for
+	 * its content, and its children the first time anything asks for its nodes — each through `opts.read`, which
+	 * may answer "not yet" by throwing `PendingRead`. Until every read has landed, `pending()` names what is
+	 * outstanding and the lens answers with what it has; ask again and it reads again. Once nothing is pending it
+	 * compiles exactly as a lens from `load` does.
+	 */
+	static lazy( lensPath: string, opts: LensLoadOptions ): LensObject {
+		const lens = new LensObject( PathText.resolve( opts.projectRoot, lensPath ) );
+		lens.projectRoot = opts.projectRoot;
+		lens.docRoot     = opts.docRoot;
+		lens.read        = opts.read;
+		lens.eager       = opts.eager ?? false;
+		lens.readAll     = opts.readAll ?? false;
+		lens.onAccess    = { loaded: false, dredged: false, pending: [] };
+		return lens;
+	}
+
+	/** The paths a lens that reads on access is still waiting on — empty once everything it needs has landed,
+	 *  and always empty for a lens loaded whole. Asking reads: it is how a caller finds out. */
+	pending(): string[] {
+		this.ensureDredged();
+		return this.onAccess ? [ ...this.onAccess.pending ] : [];
+	}
+
+	/** Read again on next access, because a document this lens depends on changed. A no-op for a lens loaded
+	 *  whole, which re-loads rather than re-reads. */
+	invalidate(): void {
+		if ( !this.onAccess ) return;
+		this.onAccess = { loaded: false, dredged: false, pending: [] };
+		this.readNodes.clear();
+	}
+
+	/** Hand a lens that reads on access the reader to read through — the receiving side's own disk capability.
+	 *  The same reader again is a no-op; a different one reads again from the start. */
+	setReader( read: ReaderFn ): void {
+		if ( !this.onAccess || this.read === read ) return;
+		this.read = read;
+		this.invalidate();
+	}
+
+	/** This lens as its RECORD: what a receiver needs to read it on access, and none of its content — no body, no
+	 *  sections, no nodes. The wire form for a receiver that compiles for itself. */
+	serializeRecord(): SerializedLens {
+		return {
+			path: this.path, type: 'lens', frontmatter: {}, sections: {}, body: '', links: [], included: this.isIncluded,
+			nodes: [], lazy: true, projectRoot: this.projectRoot, docRoot: this.docRoot
+		};
+	}
+
+	/** Until it is handed a reader, a lens rebuilt from its record answers "not yet" for everything — pending
+	 *  rather than empty, which is the honest state of a lens nobody has read. */
+	private static readonly NOT_YET: ReaderFn = ( abs: string ): string => {
+		throw new PendingRead( abs );
+	};
+
+	private static fromRecord( json: SerializedLens ): LensObject {
+		const lens = LensObject.lazy( json.path, { projectRoot: json.projectRoot ?? '', docRoot: json.docRoot, eager: true, read: LensObject.NOT_YET } );
+		lens.isIncluded = json.included ?? true;
+		for ( const n of json.injected ?? [] ) lens.injected.push( KCDPrimitive.fromSerialized( n ) );
+		return lens;
+	}
+
+	/**
 	 * Rebuild a lens from wire JSON — and recurse: each dredged child is hydrated through its
 	 * OWN registered fromSerialized, so a habit comes back a HabitObject. `nodes` is absent on a
 	 * shallow (non-dredged) serialization; an empty graph is the honest result there.
 	 */
 	static fromSerialized( json: SerializedArtifact ): LensObject {
+		if ( ( json as SerializedLens ).lazy ) return LensObject.fromRecord( json as SerializedLens );
 		const obj = new LensObject( json.path );
 		obj.hydrateFrom( json );
 		// Policy is computed once by the parser ( the HTML front end owns it ) and rides the wire.
@@ -153,12 +230,106 @@ export class LensObject extends KCDPrimitive {
 	 *  injected nodes (each serialized, children only — the lens isn't its own child). The
 	 *  receiver rebuilds via fromSerialized. */
 	serializeForWire(): SerializedLens {
+		this.ensureDredged();
 		return {
 			...this.serialize(),
 			nodes:     this.nodes.map( ( n ) => n.serialize() ),
 			injected:  this.injected.map( ( n ) => n.serialize() ),
 			toolModes: { ...this.toolModes },
 		};
+	}
+
+	// ── Reading on access ─────────────────────────────────────────────────────────
+
+	protected ensureContent(): void {
+		this.ensureLoaded();
+	}
+
+	/** Read this lens's own document, if it reads on access and has not yet. */
+	private ensureLoaded(): void {
+		const state = this.onAccess;
+		if ( !state || state.loaded ) return;
+		let parsed: LensObject;
+		try {
+			parsed = KCDPrimitive.fromHtml( this.read( this.path ), this.path, this.docRoot ?? LensObject.DEFAULT_DOC_ROOT ) as LensObject;
+		} catch ( err ) {
+			if ( err instanceof PendingRead ) {
+				state.pending = [ this.path ];
+				return;
+			}
+			// Missing or malformed: settle empty — the lens a failed `load` would have been skipped for — rather
+			// than ask for it forever.
+			state.loaded  = true;
+			state.dredged = true;
+			return;
+		}
+		state.loaded = true;
+		this.hydrateFrom( parsed.serialize() );
+		this.policy      = parsed.getPolicy();
+		this.toolModes   = parsed.getToolModes();
+		this.dredgeDepth = parsed.dredgeDepth;
+	}
+
+	/** Dredge this lens's children, if it reads on access and has not finished. */
+	private ensureDredged(): void {
+		const state = this.onAccess;
+		if ( !state || state.dredged ) return;
+		this.ensureLoaded();
+		if ( !state.loaded ) return;
+		state.pending = [];
+		this.nodes    = this.dredgeOnAccess( state.pending );
+		state.dredged = state.pending.length === 0;
+	}
+
+	/**
+	 * The dredge for a lens that reads on access — the same children `dredgeFrom` collects at depth two, with
+	 * one difference. A child whose content the compile uses is READ: one riding at `load`, a habit ( slot
+	 * contention reads its class ), and one whose routing row takes its why from the child itself. Every other
+	 * child is a STUB — path, type, not included — because its routing row is its whole contribution and that
+	 * row comes from this lens's own table. Its content is read when somebody opens it.
+	 */
+	private dredgeOnAccess( pending: string[] ): KCDPrimitive[] {
+		const out: KCDPrimitive[] = [];
+		if ( !this.eager || clampDepth( this.dredgeDepth ) <= 1 ) return out;
+		const visited = new Set( [ this.path ] );
+		for ( const entry of this.policy ) {
+			if ( entry.type !== 'internal' || entry.mode === 'off' ) continue;
+			const childAbs = LensObject.resolveHref( entry.href, this.projectRoot! );
+			const type     = LensObject.classifyByPath( childAbs, this.projectRoot!, this.docRoot );
+			if ( type === 'plan' || visited.has( childAbs ) ) continue;
+			visited.add( childAbs );
+
+			if ( !this.readAll && entry.mode !== 'load' && type !== 'habit' && !LensObject.whyFromChild( entry ) ) {
+				// A stub stands in for a DOCUMENT. A row naming a tool rather than a file is one the whole-lens
+				// dredge fails to read and drops, so it gets no stub here either.
+				if ( !/\.html?$/i.test( childAbs ) ) continue;
+				out.push( KCDPrimitive.fromSerialized( {
+					path: childAbs, type, frontmatter: { name: entry.what }, sections: {}, body: '', links: [], included: false
+				} ) );
+				continue;
+			}
+			const held = this.readNodes.get( childAbs );
+			if ( held ) {
+				held.setIncluded( entry.mode === 'load' );
+				out.push( held );
+				continue;
+			}
+			try {
+				const child = KCDPrimitive.fromHtml( this.read( childAbs ), childAbs, this.docRoot ?? LensObject.DEFAULT_DOC_ROOT );
+				child.setIncluded( entry.mode === 'load' );
+				this.readNodes.set( childAbs, child );
+				out.push( child );
+			} catch ( err ) {
+				if ( err instanceof PendingRead ) pending.push( childAbs );
+			}
+		}
+		return out;
+	}
+
+	/** Whether an entry's routing row takes its why from the child — the sentinel cells `resolveWhy` reads through. */
+	private static whyFromChild( entry: PolicyEntry ): boolean {
+		const cell = entry.why.trim().toLowerCase();
+		return cell === '' || cell === 'habit' || cell === 'always';
 	}
 
 	// ── Dredge orchestration ──────────────────────────────────────────────────
@@ -220,10 +391,13 @@ export class LensObject extends KCDPrimitive {
 	// The dredge policy is computed by the parser ( know-region slots, the `always` gate ) and
 	// rides the wire; the lens just exposes it. The markdown Know-table parse is gone.
 
-	getPolicy(): PolicyEntry[]  { return [ ...this.policy ]; }
+	getPolicy(): PolicyEntry[]  {
+		this.ensureLoaded();
+		return [ ...this.policy ];
+	}
 
 	/** The vault root this lens was loaded against — the base every loaded file's path is relativized to
-	 *  for the compiled manifest. Undefined on a wire-hydrated lens ( render never dredges ). */
+	 *  for the compiled manifest. Undefined on a lens hydrated whole from the wire. */
 	getProjectRoot(): string | undefined { return this.projectRoot; }
 
 	/** An absolute path in vault-relative, forward-slashed form — the file's ID in the compiled manifest
@@ -236,7 +410,10 @@ export class LensObject extends KCDPrimitive {
 	/** The full Know graph: dredged children plus any session-injected nodes. The single
 	 *  percolation point — the spiral, the count, Composition, and contribute() all read
 	 *  through here, so injected context appears everywhere with no per-consumer wiring. */
-	getNodes(): KCDPrimitive[]  { return [ ...this.nodes, ...this.injected ]; }
+	getNodes(): KCDPrimitive[]  {
+		this.ensureDredged();
+		return [ ...this.nodes, ...this.injected ];
+	}
 
 	/** The context contributors in order: the lens itself, then every node (dredged + injected). */
 	getContributors(): KCDPrimitive[] { return [ this, ...this.getNodes() ]; }
@@ -256,7 +433,10 @@ export class LensObject extends KCDPrimitive {
 	/** The per-tool modes this lens contributes ( `group.tool` → mode ) — the raw authored table. A tool is not
 	 *  a node, so this is its own read, not `getNodes()`. Prefer the two axis readers below; this survives
 	 *  for the authoring surfaces, which still edit the lens's own three-state control. */
-	getToolModes(): Record<string, SlotMode> { return { ...this.toolModes }; }
+	getToolModes(): Record<string, SlotMode> {
+		this.ensureLoaded();
+		return { ...this.toolModes };
+	}
 
 	/**
 	 * THE LENS'S CONTRIBUTION ON EACH AXIS, derived from the one mode it stores.
@@ -273,11 +453,13 @@ export class LensObject extends KCDPrimitive {
 	 * contributes no surface at all rather than a surface nothing will read.
 	 */
 	getToolPolicies(): Record<string, Policy> {
+		this.ensureLoaded();
 		return Object.fromEntries( Object.entries( this.toolModes )
 			.map( ( [ id, mode ] ) => [ id, mode === 'off' ? 'off' : 'allow' ] ) );
 	}
 
 	getToolSurfaces(): Record<string, Surface> {
+		this.ensureLoaded();
 		return Object.fromEntries( Object.entries( this.toolModes )
 			.filter( ( [ , mode ] ) => mode !== 'off' )
 			.map( ( [ id, mode ] ) => [ id, mode === 'load' ? 'preload' : 'manifest' ] ) );
@@ -311,6 +493,7 @@ export class LensObject extends KCDPrimitive {
 	 * NOT canonical for habits — do not treat the current fetch/links split as the intended contract.
 	 */
 	getContextBlocks(): TaggedBlock[] {
+		this.ensureDredged();
 		if ( !this.isIncluded ) return [];
 		const own      = super.getContextBlocks();
 		const dredged  = this.nodes.flatMap( n => n.getContextBlocks() );
@@ -335,6 +518,7 @@ export class LensObject extends KCDPrimitive {
 	 *  to `getContextBlocks()` while excluded; the old "already loaded ⇒ skip" filter caught that
 	 *  fetch-for-metadata case and silently dropped the row it was the ONLY source for. */
 	stubBlock(): TaggedBlock | null {
+		this.ensureDredged();
 		if ( !this.projectRoot ) return null;
 		const included = new Set( this.getContributors().filter( n => n.included ).map( n => n.getPath() ) );
 		const byPath   = new Map( this.nodes.map( n => [ n.getPath(), n ] as const ) );

@@ -22,6 +22,12 @@ import type { SlotRow } from '../core/html/KcdContext';
  * changes rarely. Deliberately kept separate from `TurnStatus` below: "is this archived?" and "is this
  * working right now?" are different questions on different clocks, and folding them into one field
  * would make every read ambiguous.
+ *
+ * PLAN-BINDING, AND NOT A ROSTER ACT ( Bryan, 2026-09-20 ). The Plan Studio is the only writer: its
+ * `+ New session` spawns the replacement and archives the incumbent, which is how one plan keeps one
+ * conversation. A person tidying an agent's roster still has only delete, and that is the answer — a
+ * conversation put down is retired in prose, by whoever judges it done, not by a second act on the
+ * roster. Ceremony can be added later if prose stops being enough; do not add it speculatively.
  */
 export type SessionStatus = 'active' | 'archived';
 
@@ -63,6 +69,16 @@ export interface SerializedSession {
 	 *  until an agent is assigned. Never null on the wire — the sentinel is '', so the DB's NOT NULL
 	 *  agent_id column stays satisfied without a nullable-column migration. */
 	agentId: string;
+	/** The PLAN this session was opened to write; 0 for none — the idiom a task already uses for the plan
+	 *  it is a step of. Written once, at birth, and never rewritten: like the `brief` below it says what
+	 *  this conversation was opened FOR, which is not a thing that can change later. A fork does not
+	 *  inherit it, because a fork is not the plan's session.
+	 *
+	 *  The key it forms is the PAIR ( agentId, planId ), not the plan alone: a plan written with two
+	 *  different agents is two conversations and neither is wrong. Within one pair exactly one session is
+	 *  'active' and every other is 'archived' — that is what the Plan Studio means by one plan, one
+	 *  session, and `status` is the flag it turns. */
+	planId: number;
 	/** Renamable display title, independent of the agent's name. Null → derive one (agent + stamp). */
 	title: string | null;
 	/** Free-form grouping label ( flat, one level — mirrors the agents' `folder` idiom ). Null =
@@ -79,6 +95,11 @@ export interface SerializedSession {
 	zoom: number | null;
 	/** This session's chat-surface font family. Null → the render side's default ('sans'). */
 	fontFamily: FontFamilyKey | null;
+	/** Whether this chat draws the tool-call chip on each turn that made one. Null → the render side's
+	 *  default ( off ). A READING preference like the two above, not a policy: it changes what the log
+	 *  shows a person and nothing about what rides the wire, which is why it sits here rather than in
+	 *  `policies`. Set from the composer's Tool Calls tab. */
+	showToolCalls: boolean | null;
 	/** Every POLICY acting on this session's context, by name — what rides the next request and whether
 	 *  the transcript compacts itself. PERSISTED ( unlike the transcript itself ): these are session
 	 *  CONFIGURATION the user sets deliberately, so reopening a session restores the policies it was left
@@ -96,7 +117,8 @@ export interface SerializedSession {
 
 /**
  * WHY A SESSION WAS OPENED, as the surface that opened it would say it — a named template and the values that
- * fill it. Rendered into the session's `frame`, which is the layer that rides above the agent's own compile.
+ * fill it. Rendered into the frame layer, which rides above the agent's own compile — by the host, at every
+ * compile, so the tools it names are the ones the run's manifest names.
  *
  * A FLAG AND A BAG, not finished prose ( Bryan, 2026-09-16 ). The wording belongs to the app and is authored in
  * code beside the rest of what Starmind says about itself; the surface supplies only the facts. A renderer that
@@ -120,6 +142,8 @@ export interface SessionOptions {
 	projectId?: string;
 	/** Omit ( or pass '' ) to spawn a DRAFT session with no agent yet — assigned later via reassign(). */
 	agentId?: string;
+	/** The plan this session is being opened to write; omit for none. */
+	planId?: number;
 	title?: string | null;
 	folder?: string | null;
 	tags?: string[];
@@ -128,6 +152,7 @@ export interface SessionOptions {
 	status?: SessionStatus;
 	zoom?: number | null;
 	fontFamily?: FontFamilyKey | null;
+	showToolCalls?: boolean | null;
 	/** PARTIAL, and the type says so because `policiesFrom` has always behaved that way: every absent entry
 	 *  is filled from the defaults. An opener that cares about one policy — a house seat setting `chat` or
 	 *  `tools` off — should not have to restate the other four to say it. */
@@ -168,11 +193,19 @@ export class Session {
 	/** Grouping label — flat, one level. Null = ungrouped. */
 	folder: string | null;
 	tags: string[];
+	/** The plan this session was opened to write; 0 for none. READONLY, because it is what the session was
+	 *  opened for rather than something about it now — see `SerializedSession.planId`. */
+	readonly planId: number;
 	readonly createdAt: number;
 	lastActive: number;
 	status: SessionStatus;
 	zoom: number | null;
 	fontFamily: FontFamilyKey | null;
+	/** Whether this chat draws the tool-call chip on each turn that made one. Null → the render side's
+	 *  default ( off ). A READING preference like the two above, not a policy: it changes what the log
+	 *  shows a person and nothing about what rides the wire, which is why it sits here rather than in
+	 *  `policies`. Set from the composer's Tool Calls tab. */
+	showToolCalls: boolean | null;
 
 	/** Every POLICY acting on this session's context, by name. PERSISTED session configuration — the
 	 *  deliberate counterpart to the non-persisted `transcript` below: the transcript is the durable
@@ -232,11 +265,13 @@ export class Session {
 	 *  session, never serialized, never a row column.
 	 *
 	 *  A main-side spawner assigns it directly. A SURFACE cannot — nothing of the renderer's crosses into a
-	 *  string the app speaks in its own voice — so a surface sends a `brief` instead and main renders that
-	 *  into this field. One slot, two ways in, and the persisted half is the brief rather than the prose. */
+	 *  string the app speaks in its own voice — so a surface sends a `brief` instead, and main renders that
+	 *  beside this field at every compile. Two ways into one layer, and the persisted half is the brief rather
+	 *  than the prose. */
 	frame: string = '';
 
-	/** WHY this session was opened, kept so the frame can be rebuilt after a restart. See `SessionBrief`. */
+	/** WHY this session was opened, kept so its frame can be rendered at every compile, a restart included.
+	 *  See `SessionBrief`. */
 	brief: SessionBrief | null = null;
 
 	/** WHO THIS SESSION RUNS AS — bound, not held. A RESOLVER rather than an Agent, deliberately: one Agent
@@ -250,6 +285,7 @@ export class Session {
 		id: string,
 		projectId: string,
 		agentId: string,
+		planId: number,
 		title: string | null,
 		folder: string | null,
 		tags: string[],
@@ -258,11 +294,13 @@ export class Session {
 		status: SessionStatus,
 		zoom: number | null,
 		fontFamily: FontFamilyKey | null,
+		showToolCalls: boolean | null,
 		policies: SessionPolicies,
 	) {
 		this.id         = id;
 		this.projectId  = projectId;
 		this.agentId    = agentId;
+		this.planId     = planId;
 		this.title      = title;
 		this.folder     = folder;
 		this.tags       = tags;
@@ -271,6 +309,7 @@ export class Session {
 		this.status     = status;
 		this.zoom       = zoom;
 		this.fontFamily = fontFamily;
+		this.showToolCalls = showToolCalls;
 		this.policies   = policies;
 	}
 
@@ -288,6 +327,7 @@ export class Session {
 			opts.id ?? crypto.randomUUID(),
 			opts.projectId ?? '',
 			opts.agentId ?? '',
+			opts.planId ?? 0,
 			opts.title ?? null,
 			opts.folder ?? null,
 			opts.tags ?? [],
@@ -296,6 +336,7 @@ export class Session {
 			opts.status ?? 'active',
 			opts.zoom ?? null,
 			opts.fontFamily ?? null,
+			opts.showToolCalls ?? null,
 			Session.policiesFrom( opts.policies ),
 		);
 		// Assigned rather than constructed, as `frame` is: both are layers a caller hangs on a session, not
@@ -310,6 +351,7 @@ export class Session {
 			json.id,
 			json.projectId ?? '',   // absent on a payload written before sessions carried their project
 			json.agentId ?? '',
+			json.planId ?? 0,   // absent on a row written before a session could name a plan
 			json.title ?? null,
 			json.folder ?? null,
 			json.tags ?? [],
@@ -318,6 +360,7 @@ export class Session {
 			json.status ?? 'active',
 			json.zoom ?? null,
 			json.fontFamily ?? null,
+			json.showToolCalls ?? null,
 			Session.policiesFrom( json.policies ),
 		);
 		session.brief = json.brief ?? null;
@@ -389,9 +432,10 @@ export class Session {
 			title:      opts.title ?? null,
 			folder:     this.folder,
 			tags:       [ ...this.tags ],
-			zoom:       this.zoom,
-			fontFamily: this.fontFamily,
-			policies:   this.policies,
+			zoom:          this.zoom,
+			fontFamily:    this.fontFamily,
+			showToolCalls: this.showToolCalls,
+			policies:      this.policies,
 		} );
 
 		// COMPLETE turns only. A failed turn never landed and an empty one has nothing in it, so carrying
@@ -445,16 +489,18 @@ export class Session {
 			id:         this.id,
 			projectId:  this.projectId,
 			agentId:    this.agentId,
+			planId:     this.planId,
 			title:      this.title,
 			folder:     this.folder,
 			tags:       [ ...this.tags ],
 			createdAt:  this.createdAt,
 			lastActive: this.lastActive,
 			status:     this.status,
-			zoom:       this.zoom,
-			fontFamily: this.fontFamily,
-			policies:   this.policies,
-			brief:      this.brief,
+			zoom:          this.zoom,
+			fontFamily:    this.fontFamily,
+			showToolCalls: this.showToolCalls,
+			policies:      this.policies,
+			brief:         this.brief,
 			turnStatus: this.turnStatus,
 		};
 	}
@@ -489,11 +535,13 @@ export class Session {
 		this.tags = this.tags.filter( ( t ) => t !== tag );
 	}
 
-	/** Set this session's chat-surface zoom + font family ( either may be null to fall back to
-	 *  the render side's default ). The chat header's A-/A+ and font controls call this. */
-	setDisplay( zoom: number | null, fontFamily: FontFamilyKey | null ): void {
+	/** Set how this session's chat is READ — text zoom, font family, and whether the log draws its
+	 *  tool-call chips. Any of the three may be null to fall back to the render side's default. The chat
+	 *  header's A-/A+ and font controls call this, and so does the composer's Tool Calls tab. */
+	setDisplay( zoom: number | null, fontFamily: FontFamilyKey | null, showToolCalls: boolean | null ): void {
 		this.zoom = zoom;
 		this.fontFamily = fontFamily;
+		this.showToolCalls = showToolCalls;
 	}
 
 	// ── Transcript ( the dynamic half of the wire ) ─────────────────────────────
@@ -573,7 +621,7 @@ export class Session {
 	 *
 	 *  Private and SHARED, because wireMessages() and estimateTokens() are the two readers that must never
 	 *  disagree about what rides — the moment they compose the policies separately, the gauge starts lying
-	 *  about the send. A third policy composes here and both readers get it for free. `_resultStubs()` is a
+	 *  about the send. A third policy composes here and both readers get it for free. `resultStubs()` is a
 	 *  third reader now, and it asks the same question of the same projection for the same reason.
 	 *
 	 *  Neither step edits the transcript: both build a new one, and the itinerary still shows every turn
@@ -833,8 +881,8 @@ export class Session {
 	}
 
 	/**
-	 * Every tool result riding as a STUB on the next send, keyed by `tool_use_id` — the itinerary's copy of
-	 * what the wire is about to do.
+	 * The POINTER TEXT for tool results that will not ride whole, keyed by `tool_use_id` — the itinerary's
+	 * copy of what the wire is about to do, and the Model station's source for the same sentence.
 	 *
 	 * The two halves count over DIFFERENT turn sets and both are right: WHICH results stub is a question about
 	 * the projection ( the last N that ride ), while WHICH LINE each sits on is a question about all of
@@ -844,13 +892,23 @@ export class Session {
 	 * The stub TEXT, not a flag — so the marker a user reads and the text the model receives are the same
 	 * string, produced once. A boolean would have left the display to re-frame it, and the wording is the
 	 * whole point of the stub.
+	 *
+	 * WITH NO ARGUMENT it answers for the results the projection's own AGE rule already stubs, which is the
+	 * itinerary's question. WITH ONE it answers for exactly the ids asked about, which is what a caller
+	 * holding a SECOND rule needs: the Model station decides by size which results ride as pointers and asks
+	 * here for the text, rather than framing a sentence of its own and becoming a second author of it. Either
+	 * way the two facts a stub is made of — the log path and the line — are read from the one object that
+	 * holds both, and that is the whole reason this is a method here rather than a helper anywhere else.
+	 *
+	 * NO LOG, NO STUBS, whatever was asked for. A session nothing has spilled for has no file to point at,
+	 * and a pointer naming one that does not exist is worse than the result it replaced.
 	 */
-	private _resultStubs(): Map<string, string> {
+	resultStubs( ids?: Iterable<string> ): Map<string, string> {
 		const out       = new Map<string, string>();
 		const opts      = this._wireOpts();
 		const reduction = opts?.toolResults;
 		if ( !reduction ) return out;
-		for ( const id of this._projected().stubbedResults( opts ) ) {
+		for ( const id of ids ?? this._projected().stubbedResults( opts ) ) {
 			out.set( id, frameToolResultStub( reduction.logPath, reduction.lines?.get( id ), id ) );
 		}
 		return out;
@@ -866,7 +924,7 @@ export class Session {
 	 *  indistinguishable from a bug. A row on a COMPACTED turn carries none, which is correct rather than an
 	 *  omission: it does not ride at all, so calling it stubbed would claim it does. */
 	transcriptTurns(): TranscriptTurn[] {
-		return this.transcript.turnRows( this._resultStubs() );
+		return this.transcript.turnRows( this.resultStubs() );
 	}
 
 	/** The session's own context cost — the wire weight of the PROJECTED transcript ( self-priced per

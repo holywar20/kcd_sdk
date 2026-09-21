@@ -11,21 +11,20 @@ import type { ArtifactType, SynthInput } from '../core';
 import type { ToolResult } from '../server/McpServer';
 
 /**
- * VaultTools — the KCD tool engine: one implementation of the ten vault tools, wired by two faces.
+ * VaultTools — the KCD tool engine: one implementation of the ten vault tools, wired by a face.
  *
- * The Daedalus server registers these over stdio for Claude Code; Starmind's `sm_documentation`
- * keystones call them in-process for its own agents. Both faces are wiring. What a tool DOES — the path
- * jail, the write-time type check, the lean-or-verbatim read, the synth advisories, the validate-before-
- * write gate, the batch sequencing — lives here once, so the two faces cannot drift while both are live.
+ * Starmind's `sm_documentation` keystones are that face, calling these in-process for its agents, and a
+ * face is wiring. What a tool DOES — the path jail, the write-time type check, the lean-or-verbatim read,
+ * the synth advisories, the validate-before-write gate, the batch sequencing — lives here once, so no
+ * face can drift from it.
  *
- * WHAT A FACE OWNS. Where the vault is ( Daedalus resolves a config ladder; Starmind reads the call's
- * project ), what each tool is CALLED ( `kcd_get` on one face, `get_doc` on the other ), and how a
- * result is delivered. Everything a face owns arrives through the constructor or through `spec`.
+ * WHAT A FACE OWNS. Where the vault is ( the keystones read the call's project ), what each tool is
+ * CALLED ( `get_doc` ), and how a result is delivered. Everything a face owns arrives through the
+ * constructor or through `spec`.
  *
- * NAMES ARE PER FACE, AND THE PROSE FOLLOWS THEM. A refusal that says "use kcd_query" is wrong on a face
- * that calls it `sm_documentation__query_docs`, so every sibling reference — in a doc, a schema
+ * NAMES ARE PER FACE, AND THE PROSE FOLLOWS THEM. Every sibling reference — in a doc, a schema
  * description, an example, a refusal — is written as a `{{op}}` token and rendered against the face's
- * own names. One copy of the prose, correct on every face.
+ * own names, so a refusal names the tool its reader actually holds. One copy of the prose.
  *
  * RETURNS THE WIRE ENVELOPE. Every op hands back a `ToolResult` — the MCP `tools/call` shape, which is
  * also what a keystone returns — so a face is one line per tool. Refusals are written for the model
@@ -102,13 +101,28 @@ export class VaultTools {
 
 	query( args: Record<string, unknown> ): ToolResult {
 		try {
-			// One engine, two faces: this same call backs the CLI `query` command.
-			return VaultTools.result( VaultUtilities.query( this.vault, {
+			const answer = VaultUtilities.query( this.vault, {
 				glob:    typeof args[ 'glob' ] === 'string' ? args[ 'glob' ] as string : undefined,
 				type:    typeof args[ 'type' ] === 'string' ? args[ 'type' ] as string : undefined,
 				text:    typeof args[ 'text' ] === 'string' ? args[ 'text' ] as string : undefined,
 				groupBy: args[ 'groupBy' ] === 'type' ? 'type' : undefined,
-			} ) );
+			} );
+
+			// THE CLEAN CASE IS BYTE-IDENTICAL TO WHAT IT ALWAYS WAS. An advisory is a fact about the QUERY,
+			// not a member of the result set, so it does not join the payload — it leads it, where the reader
+			// meets it before deciding the list is the whole answer. Wrapping every clean result in an
+			// envelope to carry a field that is almost always empty would spend tokens on every call to
+			// report nothing.
+			if ( answer.unreadable.length === 0 ) return VaultTools.result( answer.matches );
+
+			const n     = answer.unreadable.length;
+			const named = answer.unreadable.map( p => `  ${ p }` ).join( '\n' );
+			const note  = `NOTE: ${ n } document${ n === 1 ? '' : 's' } in scope could not be parsed, and `
+				+ `${ n === 1 ? 'is' : 'are' } therefore ABSENT from the results below — not missing from disk, `
+				+ `unreadable on it. This is the answer to "the file is there and no query finds it".\n`
+				+ `${ named }\n`
+				+ `Run ${ this.names.health } on one to see why it fails to parse.\n\n`;
+			return VaultTools.text( note + JSON.stringify( answer.matches, null, 2 ) );
 		} catch ( e ) {
 			return VaultTools.error( errorText( e ) );
 		}
@@ -157,7 +171,6 @@ export class VaultTools {
 		const filePath = String( args[ 'path' ] ?? '' );
 		try {
 			this.jail( filePath );
-			// One engine, two faces: this same call backs the CLI `links` command.
 			return VaultTools.result( VaultUtilities.links( this.vault, filePath ) );
 		} catch ( e ) {
 			return VaultTools.error( errorText( e ) );
@@ -168,7 +181,6 @@ export class VaultTools {
 		try {
 			const inputPath = typeof args[ 'path' ] === 'string' ? args[ 'path' ] as string : '';
 			if ( inputPath ) this.jail( inputPath );
-			// One engine, two faces: this same call backs the CLI `validate` command.
 			return VaultTools.result( VaultUtilities.health( this.vault, inputPath || undefined ) );
 		} catch ( e ) {
 			return VaultTools.error( errorText( e ) );
@@ -178,12 +190,10 @@ export class VaultTools {
 	compile( args: Record<string, unknown> ): ToolResult {
 		try {
 			const lenses = Array.isArray( args[ 'lenses' ] ) ? ( args[ 'lenses' ] as unknown[] ).map( String ) : [];
-			// One engine, two faces: this same call backs the CLI `compile` command.
-			//
-			// NO `lane` HERE, and the absence IS the mechanism. The CLI face carries `--lane`, which swaps the
-			// inheritance floor for `_lane-base` — the floor authored for an agent running with nobody in the
-			// session. That face is driven by a harness. This one is driven by agents, and an agent that can
-			// name its own floor can name the lenient one. Picking your own guardrails is not a capability
+			// NO `lane` HERE, and the absence IS the mechanism. `VaultUtilities.compile` takes a `lane` option
+			// that swaps the inheritance floor for `_lane-base` — the floor authored for an agent running with
+			// nobody in the session. That choice belongs to whoever launches the agent. This tool is driven by
+			// agents, and an agent that can name its own floor can name the lenient one. Picking your own guardrails is not a capability
 			// worth having, so the choice is simply not expressible here.
 			return VaultTools.result( VaultUtilities.compile( this.vault, lenses ) );
 		} catch ( e ) {
@@ -194,8 +204,7 @@ export class VaultTools {
 	survey( args: Record<string, unknown> ): ToolResult {
 		try {
 			// The survey walks the PROJECT ROOT ( the code ), not the vault — the opposite scope from every
-			// other tool, which read the artifact store. One engine, two faces: this same call backs the CLI
-			// `survey` command.
+			// other tool, which read the artifact store.
 			const report = Survey.run( this.vault.projectRoot, { skipPaths: VaultUtilities.installedPaths( this.vault ) } );
 			return args[ 'full' ] === true
 				? VaultTools.result( report )
@@ -209,11 +218,22 @@ export class VaultTools {
 
 	save( args: Record<string, unknown> ): ToolResult {
 		const filePath = String( args[ 'path' ] ?? '' );
+		// FILING, not editing ( bug-report-20 ): two filers took the same next number and the second write replaced
+		// the first unseen. The refusal comes from the open, so it holds under the race a pre-check would lose.
+		const create   = args[ 'create' ] === true;
 		try {
 			const raw      = ( args[ 'artifact' ] ?? {} ) as Record<string, unknown>;
 			const declared = String( raw[ 'type' ] ?? '' );
 
 			this.jail( filePath );
+
+			// THE ONE REQUIRED OBJECT, checked before anything reads it ( bug-report-25 ). Emitting reads it on BOTH
+			// paths, and an absent one surfaced as V8's own `Cannot convert undefined or null to object` — a
+			// message naming no field, taken for a broken edit path. It also left `checkType` nothing to read, so the
+			// directory's type guard was skipped too.
+			const fm = raw[ 'frontmatter' ];
+			if ( !fm || typeof fm !== 'object' || Array.isArray( fm ) )
+				return VaultTools.error( `${ this.names.save } refused "${ filePath }": \`artifact.frontmatter\` must be an object of fields ( name, description, type, status … ), and this call carried ${ carried( fm ) }. ${ this.names.get } with \`full: true\` returns it beside \`body\` — send both.` );
 			this.checkType( filePath, raw );
 
 			// TWO WAYS IN, one write. `content` is the AUTHORING path: sections and rows go to KcdSynth and the
@@ -271,10 +291,12 @@ export class VaultTools {
 				return VaultTools.error( `${ this.names.save } refused "${ filePath }": artifact failed validation — ${ detail }` );
 			}
 
-			const saved = this.vault.write( filePath, html );
+			const saved = this.vault.write( filePath, html, { exclusive: create } );
 			const indexed = this.wrote( [ this.vault.toAbs( filePath ) ] );
 			return VaultTools.result( { saved, warnings: [ ...report.warnings, ...advisories ], ...VaultTools.indexed( indexed ) } );
 		} catch ( e ) {
+			if ( create && isExists( e ) )
+				return VaultTools.error( `${ this.names.save } refused "${ filePath }": it already exists, and \`create\` never replaces a document. Take another path — or omit \`create\` to overwrite this one on purpose.` );
 			return VaultTools.error( errorText( e ) );
 		}
 	}
@@ -372,9 +394,8 @@ export class VaultTools {
 	}
 
 	// ── The guard ─────────────────────────────────────────────────────────────
-	// Two rules, in this order: the path jail, then ( on a save ) the write-type check. They were a guard
-	// chain the Daedalus server ran before every handler; they are part of the ops now, so no face can
-	// forget to run them.
+	// Two rules, in this order: the path jail, then ( on a save ) the write-type check. They are part of the
+	// ops, so no face can forget to run them.
 
 	/** Assert a path resolves inside the vault root. Throws with the FORM named, not just the failure. */
 	private jail( inputPath: string ): void {
@@ -472,6 +493,20 @@ export class VaultTools {
 	}
 }
 
+/** What arrived where an object belonged, in the words a refusal uses — the fact a caller needs to find its
+ *  own mistake. */
+function carried( v: unknown ): string {
+	if ( v === undefined ) return 'none';
+	if ( v === null ) return 'null';
+	if ( Array.isArray( v ) ) return 'an array';
+	return `a ${ typeof v }`;
+}
+
+/** The one failure `create` asks for, told apart from every other thrown error. */
+function isExists( e: unknown ): boolean {
+	return typeof e === 'object' && e !== null && ( e as { code?: unknown } ).code === 'EEXIST';
+}
+
 function errorText( e: unknown ): string {
 	return e instanceof Error ? e.message : String( e );
 }
@@ -482,8 +517,8 @@ function textOf( r: ToolResult ): string {
 
 // ── What each tool says ───────────────────────────────────────────────────────────────────────────
 // One copy of the prose, with every sibling reference written as a `{{op}}` token. `spec` renders it
-// against a face's names, so a doc that says "read one with {{get}}" names `kcd_get` on the Daedalus
-// wire and `sm_documentation__get_doc` in Starmind.
+// against a face's names, so a doc that says "read one with {{get}}" names `sm_documentation__get_doc`
+// in Starmind.
 
 const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 	query: {
@@ -587,7 +622,7 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 		annotations: { readOnlyHint: true },
 		description: 'Compile one or more lenses into one composed context string — first lens is primary.',
 		doc:
-			'The LENS compiler — Daedalus\'s basic context-compilation surface. Give it lens names ' +
+			'The LENS compiler — the basic context-compilation surface. Give it lens names ' +
 			'( a bare `parser` maps to `lenses/parser/parser.html`; a vault path is used as-is ) and it ' +
 			'dredges each lens to its OWN authored depth, folds their context blocks together, resolves ' +
 			'habit-class contention, and assembles one context string ( Care-first, manifest tables ). ' +
@@ -625,7 +660,7 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 			'( components with languages, entryPoints, tests, contains, stats ). What a survey does NOT tell ' +
 			'you: what the code does, which component matters, or that an absent thing is truly absent — ' +
 			'treat it as orientation, not authority ( see the read-a-survey reference ). Read-only; surveys ' +
-			'the project, writes nothing. The CLI `survey` command writes the same data as a JSON tree.',
+			'the project, writes nothing.',
 		inputSchema: {
 			type:       'object',
 			properties: {
@@ -664,7 +699,9 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 			'structured HTML is kept — content, structure and attributes ' +
 			'survive, while indentation and line breaks are NORMALIZED to house format, so expect the ' +
 			'file you get back to be formatted rather than byte-identical to what you sent. Supplying both is ' +
-			'refused rather than resolved by precedence. Content mode also returns advisories naming any ' +
+			'refused rather than resolved by precedence. Pass `create: true` to FILE a new document: the write ' +
+			'then refuses a `path` that already holds one, at the open itself, so two filers racing for one ' +
+			'name cannot both land. Content mode also returns advisories naming any ' +
 			'required or expected section left out, and — on a closed type — any section the compiler will not ' +
 			'read. NOTE: agent-authored body HTML is not yet sanitized here ( the render layer sanitizes on ' +
 			'display; a save-time sanitize pass is a named deferral ).',
@@ -716,6 +753,7 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 					},
 					required: [ 'type', 'frontmatter' ],
 				},
+				create: { type: 'boolean', description: 'FILE rather than edit: refuse, and write nothing, when `path` already holds a document. For a name another writer may take first. Omit to edit.' },
 			},
 			required: [ 'path', 'artifact' ],
 		},

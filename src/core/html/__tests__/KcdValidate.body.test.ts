@@ -3,7 +3,7 @@ import { KcdValidate } from '../KcdValidate';
 
 /**
  * The empty-body rule. A document whose frontmatter is perfect and whose body is absent used to
- * validate clean and land on disk — `kcd_save` refuses on errors only, so nothing stopped it. These
+ * validate clean and land on disk — `save_doc` refuses on errors only, so nothing stopped it. These
  * cases pin the rule at both edges: the empty box FAILS, and the thinnest real document ( a bare
  * `<h1>` ) PASSES, because the rule asks whether a body exists and not whether it is any good.
  */
@@ -27,7 +27,7 @@ ${ body }</article>
 
 describe( 'KcdValidate — the body rule', () => {
 
-	it( 'frontmatter and nothing else is an ERROR, so kcd_save refuses the write', () => {
+	it( 'frontmatter and nothing else is an ERROR, so save_doc refuses the write', () => {
 		const report = KcdValidate.validate( doc( 'reference', 'empty-shell', '' ) , { docRoot: '_Claude' });
 
 		expect( report.ok ).toBe( false );

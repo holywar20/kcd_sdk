@@ -151,6 +151,33 @@ describe( 'Agent — the two tool axes', () => {
 		expect( agent.toolManifest() ).not.toContain( 'Everything you hold' );
 	} );
 
+	it( 'marks what the RUN defers once a host binds it, whatever the surface says', () => {
+		// The surface is the papers' answer, and the request can disagree with it: a host puts a tool on the
+		// wire for reasons no surface records, a person's grant among them. A mark read off the surface told
+		// the model such a tool was not callable yet and to fetch it through a search tool the request did not
+		// carry. So a bound deferred set is the whole answer — in BOTH directions, because a surface outranking
+		// it either way is a prompt and a request disagreeing.
+		const agent = agentWith( { 'srv.probe': 'allow', 'srv.commit': 'allow' }, { 'srv.commit': 'preload' } );
+		agent.bindEnv( { searchTool: 'tool_search', runDeferred: [] } );
+		const quiet = agent.toolManifest();
+		expect( quiet.split( '\n' ).find( l => l.startsWith( '- probe' ) ) ).not.toContain( '[schema on request]' );
+		// Nothing deferred, so nothing to fetch and no mechanism named — the request carries no search tool.
+		expect( quiet ).not.toContain( 'Everything you hold' );
+
+		agent.bindEnv( { runDeferred: [ 'srv.commit' ] } );
+		const lines = agent.toolManifest().split( '\n' );
+		expect( lines.find( l => l.startsWith( '- commit' ) ) ).toContain( '[schema on request]' );
+		expect( lines.find( l => l.startsWith( '- probe' ) ) ).not.toContain( '[schema on request]' );
+	} );
+
+	it( 'falls back to the surface where there is no run to ask', () => {
+		// A composition surface — an agent card, a preview — has no request to subtract from. The surface is
+		// the best answer there, and it is what every case above this one already reads.
+		const agent = agentWith( { 'srv.probe': 'allow' } );
+		expect( agent.runDeferred ).toBeNull();
+		expect( agent.toolManifest().split( '\n' ).find( l => l.startsWith( '- probe' ) ) ).toContain( '[schema on request]' );
+	} );
+
 	it( 'does not hold a def that never crossed the serve seam', () => {
 		// A double has no identity to be filed under, and admitting it BECAUSE it lacks the field everything
 		// else is keyed by would make missing metadata a way in. This inverts the old fallback deliberately.
@@ -179,7 +206,7 @@ describe( 'a lens contributes tools by IDENTITY', () => {
 		expect( agent.composedToolPolicies[ 'sm_documentation.get_doc' ] ).toBe( 'allow' );
 		expect( agent.composedToolSurfaces[ 'sm_documentation.get_doc' ] ).toBe( 'preload' );
 		// No bare key rides along beside the identity.
-		expect( Object.keys( agent.composedToolPolicies ) ).not.toContain( 'kcd_get' );
+		expect( Object.keys( agent.composedToolPolicies ) ).not.toContain( 'get_doc' );
 	} );
 
 	it( 'edits a tool row by its identity, and a bare name addresses nothing', () => {
@@ -190,6 +217,6 @@ describe( 'a lens contributes tools by IDENTITY', () => {
 		expect( removed ).not.toContain( '>sm_documentation.get_doc<' );
 		expect( removed ).toContain( '>sm_documentation.query_docs<' );
 
-		expect( KcdEdit.setTool( body, 'kcd_get', 'off' ) ).toBeNull();
+		expect( KcdEdit.setTool( body, 'get_doc', 'off' ) ).toBeNull();
 	} );
 } );

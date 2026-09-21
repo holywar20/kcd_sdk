@@ -106,9 +106,11 @@ export interface AskerRef {
 /**
  * The gate's answer for ONE step of a composite call — a batch — by position.
  *
- * `null` is a step the gate did not judge, because its name is no sibling's; the tool answers that one
- * itself, and it is never a pass. A composite reached with no verdicts at all refuses every step: the only
- * way to a list here is through the gate, so its absence means the call went round it.
+ * `null` is a step the gate did not judge, and it is never a pass. A name that is no sibling's is judged
+ * too: Starmind's gate answers it in the same words as a sibling the run was never offered, because a tool
+ * that tells the two apart tells an agent which of its guesses are real. A composite reached with no
+ * verdicts at all refuses every step: the only way to a list here is through the gate, so its absence
+ * means the call went round it.
  */
 export type StepVerdict = { ok: true } | { ok: false; refusal: string } | null;
 

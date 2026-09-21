@@ -7,7 +7,7 @@ import { Vault } from '../Vault';
 /**
  * Heal by canonical path, not by graph ( 2026-08-18 ).
  *
- * `kcd_move` healed what the artifact PARSE GRAPH contained, so everything outside it was invisible:
+ * `move_doc` healed what the artifact PARSE GRAPH contained, so everything outside it was invisible:
  * markdown todos, `data-kcd-address`, the project-root CLAUDE.md, and any file that fails to parse —
  * which is the file most in need of repair. Three independent misses, one cause. The sharpest was
  * promoting a plan out of `work/` on 2026-08-17: it reported `edits: []` while two documents

@@ -9,7 +9,7 @@ import { KcdContext } from '../../core/html/KcdContext'
 const PROJECT_ROOT = path.resolve( __dirname, '../../../..' )   // kcd_sdk/src/node/__tests__ → repo root
 
 /**
- * §10 SEEDS — the three claims the protocol and the Daedalus README both make in prose, pinned so the
+ * §10 SEEDS — the three claims the protocol makes in prose, pinned so the
  * prose cannot quietly stop being true. Written 2026-08-13 alongside the §10 documentation pass, whose
  * whole premise is that prose alone is what drifted last time.
  *
@@ -17,7 +17,7 @@ const PROJECT_ROOT = path.resolve( __dirname, '../../../..' )   // kcd_sdk/src/n
  *   1. A payload is carried VERBATIM. Script content is raw text and needs no escaping, so what an
  *      author writes is what lands in CLAUDE.md.
  *   2. Seeds NEVER COMPILE. The context projector strips them, so a payload written for an agent that
- *      has not read the vault never reaches one that has — and three host blocks do not triple the wire.
+ *      has not read the vault never reaches one that has — and host blocks do not multiply the wire.
  *   3. Seed targets ARE the install's file registry. `installedPaths` derives from the declarations, so
  *      an uninstall removes exactly what the install added and no second list can drift.
  *

@@ -123,6 +123,10 @@ export class KCDPrimitive {
 
 	/** Copy the common wire fields onto a freshly-constructed instance. Every subclass
 	 *  hydrator runs through here — a new serialized field lands once, not ten times. */
+	/** Called before any content is read. A no-op for a primitive that holds its content; one whose content
+	 *  arrives on access ( a lens reading through its reader ) fills it here. */
+	protected ensureContent(): void {}
+
 	protected hydrateFrom( json: SerializedArtifact ): void {
 		this.frontmatter = { ...json.frontmatter };
 		this.sections    = { ...json.sections };
@@ -164,6 +168,7 @@ export class KCDPrimitive {
 	// ── Serialization ────────────────────────────────────────────────────────
 
 	serialize(): SerializedArtifact {
+		this.ensureContent();
 		return {
 			path:        this.path,
 			type:        this.type,
@@ -201,6 +206,7 @@ export class KCDPrimitive {
 	 * artifact level, not per section.
 	 */
 	getContextBlocks(): TaggedBlock[] {
+		this.ensureContent();
 		if ( !this.isIncluded ) return [];
 		const region = this.getRole() === 'do' ? 'do' : 'know';
 		const habitClass = ( this.frontmatter[ 'habit-class' ] as string | undefined ) ?? null;
@@ -274,6 +280,7 @@ export class KCDPrimitive {
 
 	/** frontmatter.name if present, otherwise the filename stem ( extension stripped ). */
 	getName(): string {
+		this.ensureContent();
 		const fmName = this.frontmatter['name'];
 		if ( typeof fmName === 'string' && fmName ) return fmName;
 		const stem = this.path.split( /[\\/]/ ).pop() ?? 'artifact';
@@ -283,6 +290,7 @@ export class KCDPrimitive {
 	/** Internal links as typed references — this artifact's outbound edges, classified
 	 *  by the same path taxonomy the dredge uses (hrefs are vault-root-relative). */
 	getBacklinks(): { name: string; type: ArtifactType }[] {
+		this.ensureContent();
 		const out: { name: string; type: ArtifactType }[] = [];
 		for ( const link of this.links ) {
 			if ( link.type !== 'internal' ) continue;
@@ -293,9 +301,9 @@ export class KCDPrimitive {
 
 	getPath(): string                          { return this.path; }
 	getType(): ArtifactType                    { return this.type; }
-	getFrontmatter(): Record<string, unknown>  { return { ...this.frontmatter }; }
-	getSections(): Record<string, string>      { return { ...this.sections }; }
-	getLinks(): LinkEntry[]                    { return [ ...this.links ]; }
+	getFrontmatter(): Record<string, unknown>  { this.ensureContent(); return { ...this.frontmatter }; }
+	getSections(): Record<string, string>      { this.ensureContent(); return { ...this.sections }; }
+	getLinks(): LinkEntry[]                    { this.ensureContent(); return [ ...this.links ]; }
 	get dirty(): boolean                       { return this.isDirty; }
 }
 

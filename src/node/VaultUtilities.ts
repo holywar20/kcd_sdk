@@ -4,7 +4,7 @@ import { KCDPrimitive, KCDValidationError, LensObject } from '../primitives';
 import type { SlotMode, LinkEntry, AddressEntry } from '../primitives';
 import type { Vault } from './Vault';
 import type { ArtifactRef } from '../core';
-import { InstallManifest, VaultLayout, KcdEmit } from '../core';
+import { InstallManifest, VaultLayout, KcdEmit, Glob } from '../core';
 
 /** Where the seed source lives, vault-relative — protocol §10's one payload-per-host document. */
 const ROOT_CONTEXT_PATH = 'root-context.html';
@@ -69,8 +69,8 @@ export interface CompileResult {
  *  matter what the lens authors ( the floor, the merged care band, the manifest, the structure ).
  *
  *  DISPLAY-ONLY, and deliberately NOT `SlotMode`. `SlotMode` is the core off/on/load currency the whole
- *  composition UI is built on; this type is consumed only by `lensView` and the CLI chart it feeds, so a new
- *  value here cannot reach the slotting surfaces. */
+ *  composition UI is built on; this type is consumed only by `lensView`, so a new value here cannot reach
+ *  the slotting surfaces. */
 export type SlotState = SlotMode | 'empty' | 'fixed';
 
 /** One row of a lens's compiled-context breakdown — a component, where it CAME FROM, its kind, its state,
@@ -111,7 +111,17 @@ export interface QueryOptions {
 }
 
 /** Either the matching refs, or — with `groupBy: 'type'` — a type census sorted by count descending. */
-export type QueryResult = ArtifactRef[] | { type: string; count: number }[];
+export type QueryMatches = ArtifactRef[] | { type: string; count: number }[];
+
+/** What a query answers: what matched, and what it could not read well enough to say.
+ *
+ *  `unreadable` is not a subset of a failed match. Those documents were never examined — they could not
+ *  be parsed — so nothing here claims they WOULD have matched, only that the answer above is silent
+ *  about them. A caller that ignores the field gets exactly the old behaviour. */
+export interface QueryResult {
+	matches:    QueryMatches;
+	unreadable: string[];
+}
 
 /** One artifact's link graph: what it points at, its addresses ( occupied or not ), and who points at it. */
 export interface LinksResult {
@@ -292,8 +302,8 @@ export interface StylesheetFixReport {
  * VaultUtilities — the shared vault-operations bucket. Higher-order routines that compose
  * several Vault primitives into one answer, kept out of Vault itself so the facade stays a
  * thin disk/path surface. Imported whole and called by name ( `VaultUtilities.health( … )` );
- * every face of Daedalus ( the `kcd_health` MCP tool, the CLI `validate` command ) calls the
- * SAME method here, so a validation behaviour can never exist on one face and not the other.
+ * every caller — the documentation tools, the app's own saves, a test — reaches the SAME method
+ * here, so a validation behaviour can never exist for one caller and not another.
  */
 export class VaultUtilities {
 
@@ -410,7 +420,7 @@ export class VaultUtilities {
 	}
 
 	/**
-	 * Compile one or more lenses to a context string — Daedalus's LENS-scoped compiler.
+	 * Compile one or more lenses to a context string — the LENS-scoped compiler.
 	 *
 	 * Builds a dumb agent ( `Vault.buildAgent` ) and compiles that, so both faces run one engine. The only
 	 * difference between them is the agent's ENVIRONMENT — root context, live MCP tool defs, DB memory —
@@ -427,10 +437,10 @@ export class VaultUtilities {
 	 * agent running overnight. A floor whose escalation route does not exist is one an agent learns to
 	 * discount whole, including the parts that did apply.
 	 *
-	 * THE FLAG IS THE CALLER'S, NEVER THE AGENT'S. It is exposed on the CLI, which the harness drives, and
-	 * deliberately NOT on the `kcd_compile` MCP tool, which agents drive — an agent that can ask for the
-	 * lane floor can ask for the other one, and picking your own guardrails is not a capability worth
-	 * having. Keep it out of that tool's `inputSchema`; the omission is the mechanism.
+	 * THE FLAG IS THE CALLER'S, NEVER THE AGENT'S. It is deliberately NOT on the compile tool, which agents
+	 * drive — an agent that can ask for the lane floor can ask for the other one, and picking your own
+	 * guardrails is not a capability worth having. Keep it out of that tool's `inputSchema`; the omission
+	 * is the mechanism.
 	 *
 	 * Each name is a bare lens name ( `lenses/{name}/{name}.html` ) or a raw vault-relative path; `[0]` is
 	 * primary. Throws on an empty list or an unresolvable name. The returned `lenses` reports what actually
@@ -450,8 +460,8 @@ export class VaultUtilities {
 	 * inheritance floor included. Priced from the compiled blocks.
 	 *
 	 * A view of the COMPOSITION, not of the text — what the object is built from, what each file costs, and
-	 * which lens brought it, so editing an object and inspecting how it assembles works from the command
-	 * line. A thin projection of `Agent.composition()` rather than its own analysis: a chart that recomputed
+	 * which lens brought it, so editing an object and inspecting how it assembles is one loop. A thin
+	 * projection of `Agent.composition()` rather than its own analysis: a chart that recomputed
 	 * the composition would be free to disagree with the thing it describes.
 	 *
 	 * EVERY FILE CARRIES A COST — at `on`, its surviving row in the deduped manifest; at `off`, zero, and
@@ -516,8 +526,23 @@ export class VaultUtilities {
 	 * The single read-query over a vault — glob, type, and text, AND-combined over one scan.
 	 * `glob` short-circuits through the Vault's own path filter; `type`/`text` narrow the
 	 * survivors. `groupBy: 'type'` returns a census instead of refs — the cheapest orientation
-	 * call, and how `kcd_query`'s inspector example works. Moved out of the MCP handler ( 1.i ):
+	 * call, and how `query_docs`'s inspector example works. Moved out of the MCP handler ( 1.i ):
 	 * this was the one tool whose filtering logic lived only on one face.
+	 *
+	 * ── IT REPORTS WHAT IT COULD NOT READ ──
+	 * An unparseable document is dropped by the scan, which is correct and was also silent: it is absent
+	 * from the result exactly as a document that does not exist is absent, and a reader has no way to tell
+	 * the two apart. That cost a real agent twenty minutes over `_lens-base.html` — on disk, the cause of a
+	 * vault-wide outage, and returned by no query under any glob; its absence was the only clue, and it was
+	 * found by falling back to a raw file glob and noticing the file was there.
+	 *
+	 * The hazard was already known and already answered ONCE, for the health sweep: `documentPaths()` exists
+	 * so a sweep can grade the file that failed to be an artifact. A sweep is not the only reader that needs
+	 * it, and an ordinary read is the one where the silence actually costs something.
+	 *
+	 * NOT FILTERED BY `type` OR `text`, deliberately. Both need a parsed document, so applying them to a
+	 * document that has none would be inventing an answer. `glob` and the archival rule DO apply — those are
+	 * path facts, true of a file whatever is inside it, and reporting outside the caller's scope is noise.
 	 *
 	 * ARCHIVAL BUCKETS ARE EXCLUDED from an unscoped query, on the same rule the grading gate uses:
 	 * naming them still returns them, because the caller asked. A retired plan answers "what did we
@@ -527,13 +552,18 @@ export class VaultUtilities {
 	 * to stop that is to not surface it.
 	 */
 	static query( vault: Vault, opts: QueryOptions = {} ): QueryResult {
-		const needle = opts.text?.toLowerCase();
+		const needle  = opts.text?.toLowerCase();
+		const report  = vault.scanReport();
+		const inScope = ( relPath: string ): boolean => {
+			if ( opts.glob && !Glob.matches( relPath, opts.glob ) ) return false;
+			return VaultUtilities.globReachesArchival( opts.glob ) || !VaultLayout.isArchivalPath( relPath );
+		};
 
-		let files = opts.glob ? vault.glob( opts.glob ) : vault.scan();
-		if ( !VaultUtilities.globReachesArchival( opts.glob ) )
-			files = files.filter( f => !VaultLayout.isArchivalPath( f.relativePath ) );
+		let files = report.files.filter( f => inScope( f.relativePath ) );
 		if ( opts.type ) files = files.filter( f => vault.classify( f.path ) === opts.type );
 		if ( needle )     files = files.filter( f => ( f.body + '\n' + JSON.stringify( f.frontmatter ) ).toLowerCase().includes( needle ) );
+
+		const unreadable = report.faults.filter( inScope );
 
 		if ( opts.groupBy === 'type' ) {
 			const counts: Record<string, number> = {};
@@ -541,12 +571,13 @@ export class VaultUtilities {
 				const t = vault.classify( f.path );
 				counts[ t ] = ( counts[ t ] ?? 0 ) + 1;
 			}
-			return Object.entries( counts )
+			const census = Object.entries( counts )
 				.sort( ( a, b ) => b[ 1 ] - a[ 1 ] )
 				.map( ( [ type, count ] ) => ( { type, count } ) );
+			return { matches: census, unreadable };
 		}
 
-		return files.map( f => vault.toRef( f ) );
+		return { matches: files.map( f => vault.toRef( f ) ), unreadable };
 	}
 
 	/**
@@ -618,7 +649,7 @@ export class VaultUtilities {
 	 * no vault yet, and the caller needs the seed declarations out of the BUNDLE's `root-context.html`
 	 * — which is the only place the set of agent entry-point filenames is written down. Anchoring an
 	 * install on "the folder containing CLAUDE.md" without this would mean hardcoding that filename in
-	 * the CLI, and there would then be two lists of host targets that could disagree.
+	 * the installer, and there would then be two lists of host targets that could disagree.
 	 */
 	static parseSeedsFrom( html: string, docRoot?: string ): SeedBlock[] {
 		const out: SeedBlock[] = [];
@@ -818,7 +849,7 @@ export class VaultUtilities {
 			.filter( f => !path.basename( f.relativePath ).startsWith( '_' ) )
 			.map( f => ( {
 				// The FOLDER name, not frontmatter.name — this is the slug `!name` and
-				// `kcd_compile`'s own `lenses/{name}/{name}.html` convention actually resolve. At
+				// `compile_lenses`'s own `lenses/{name}/{name}.html` convention actually resolve. At
 				// least three lenses' authored `name` disagrees with their folder ( hyphen vs.
 				// underscore ) — using frontmatter here would put an unresolvable slug in the one
 				// table whose whole job is telling an agent what to type.
@@ -1013,7 +1044,7 @@ export class VaultUtilities {
 	 * write in this class. `extract-template` is reported, never applied: its destination is OUTSIDE
 	 * the vault, in whatever package consumes this project, and that mapping is not this generic
 	 * utility's to know. `relocate` reuses `vault.move()` verbatim — link-healing for free, same
-	 * proven mechanism `kcd_move` already runs. `delete-duplicate` cannot use `move()` ( its
+	 * proven mechanism `move_doc` already runs. `delete-duplicate` cannot use `move()` ( its
 	 * destination already exists, which `move()` refuses by design ) — so it re-derives the same
 	 * repoint-then-remove shape by hand: every inbound link to the `kcd/` copy is rewritten to point
 	 * at the real deployed copy, then the stale file is removed, then the same post-condition
@@ -1063,7 +1094,7 @@ export class VaultUtilities {
 	 *
 	 * LOAD-BEARING, not tidiness. An existing corpus carries no baseline at all until this runs, and
 	 * until then those documents are unreadable in any viewer that will not load a stylesheet — which
-	 * is the surface most readers use. A document written through `kcd_save` is born with both tiers.
+	 * is the surface most readers use. A document written through `save_doc` is born with both tiers.
 	 *
 	 * NOT A RE-EMIT, deliberately. Rebuilding each document through `KcdEmit` would also re-serialize
 	 * its body, and `HtmlTree` normalizes whitespace on that round trip — so a repair sweep would

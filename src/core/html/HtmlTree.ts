@@ -221,7 +221,7 @@ export const HtmlTree = new class HtmlTree {
 		//
 		// Not cosmetic. Protocol §10 seed payloads are markdown inside <script type="text/kcd-md">, and
 		// `>` is markdown's blockquote character — escaped here, it is written into a real CLAUDE.md by
-		// the next `daedalus seed`. The corruption is one-time and then stable, so nothing ever gets
+		// the next seed emit. The corruption is one-time and then stable, so nothing ever gets
 		// visibly worse and nothing prompts a look.
 		//
 		// `RAW` is script/style ONLY. <pre> is deliberately not raw, and the double-escape trade pinned
@@ -327,7 +327,7 @@ export const HtmlTree = new class HtmlTree {
 	 * This is the other half of `decode` above, and the two must agree. `decode` knows a handful of
 	 * entities and passes every other one through as literal text; escaping every `&` unconditionally
 	 * therefore added a layer to `&mdash;` on the first parse → serialize round trip ( `&amp;mdash;` ),
-	 * and the document rendered the literal text to the reader. Every `kcd_save` runs that round trip —
+	 * and the document rendered the literal text to the reader. Every `save_doc` runs that round trip —
 	 * `KcdEmit.spliceFrontmatter` re-parses and re-serializes the whole body — so an unowned entity was
 	 * corroded by any edit that touched the file. The rule is now symmetric: what decode leaves alone,
 	 * escape leaves alone. Widening `decode` to a named-entity table is the alternative and is worse —

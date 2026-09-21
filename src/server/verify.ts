@@ -125,8 +125,7 @@ function judge( assertions: Assertion[], result: ToolResult ): { pass: boolean; 
 	// unconditionally made "returns JSON" an unwritten assertion on every spec, which no tool author ever
 	// wrote and which a TEXT-returning tool can never satisfy.
 	//
-	// Fixed in BOTH copies by hand on 2026-07-26 per the divergence contract in McpServer.ts — the twin lives
-	// at daedalus/src/mcp/verify.ts, where a text-returning `kcd_survey` is what surfaced it.
+	// A text-returning survey tool is what surfaced it.
 	if ( assertions.length === 0 ) return { pass: true };
 
 	let data: Record<string, unknown>;

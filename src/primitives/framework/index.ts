@@ -2,6 +2,7 @@ export { KCDPrimitive, DREDGE_MAX, clampDepth, classifyHref, classifyRelPath } f
 export type { HydratorFn } from './KCDPrimitive';
 export { LensObject } from './LensObject';
 export type { LensLoadOptions } from './LensObject';
+export { PendingRead } from './PendingRead';
 export { ContextAssembler } from './ContextAssembler';
 export { SlotResolver } from './SlotResolver';
 export type { SlotResolution, SlotCandidate, SlotPlan } from './SlotResolver';

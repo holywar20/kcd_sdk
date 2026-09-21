@@ -86,7 +86,7 @@ export const KcdValidate = new class KcdValidate {
 	 * It could have been optional with a `_Claude` default, and it was — implicitly, inside
 	 * `isEphemeralHref`. That silent default made the ephemeral-link law wrong in BOTH directions in
 	 * any vault named otherwise: a real link into scratch space went unreported, while a stale
-	 * `_Claude/…` href was reported for the wrong reason. It reached writes too, because `kcd_save`
+	 * `_Claude/…` href was reported for the wrong reason. It reached writes too, because `save_doc`
 	 * validates. A default here cannot be right, because the answer depends entirely on a fact only
 	 * the caller has.
 	 *
@@ -334,7 +334,7 @@ export const KcdValidate = new class KcdValidate {
 	 * vault, is one of them. The question here is not "which sections" but "any body at all", which
 	 * binds every type uniformly and belongs outside the per-type table.
 	 *
-	 * ERROR, not warning, deliberately. `kcd_save` refuses on errors only ( warnings ride along in the
+	 * ERROR, not warning, deliberately. `save_doc` refuses on errors only ( warnings ride along in the
 	 * result ), and the whole defect is that an empty artifact LANDS — a warning would leave the hole
 	 * exactly where it was.
 	 *
@@ -345,9 +345,9 @@ export const KcdValidate = new class KcdValidate {
 	 * which is a validator problem. The line is drawn there on purpose.
 	 *
 	 * TEMPLATES need no exemption: `validate()` returns above on `rootType === 'template'`, before any
-	 * structural pass runs, so a scaffold never reaches this method. Checked on the merits too — every
-	 * template in `daedalus/templates/` carries an h1 plus its target type's section skeleton, so none
-	 * would fail even without the blanket exemption.
+	 * structural pass runs, so a scaffold never reaches this method. Checked on the merits too — a
+	 * template scaffold carries an h1 plus its target type's section skeleton, so none would fail even
+	 * without the blanket exemption.
 	 */
 	checkBody( article: HtmlEl, err: Emit ): void {
 		// Frontmatter subtree, not just the <dl> itself — otherwise the block's own <dt>/<dd> cells

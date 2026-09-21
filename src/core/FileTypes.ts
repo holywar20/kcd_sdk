@@ -52,4 +52,18 @@ export type GrepScan = {
 	searched:  number
 	capped:    boolean
 	cancelled: boolean
+	/** Text files the walk REACHED — the denominator `searched` is a fraction of, counted before the
+	 *  `glob` filter runs. It exists to tell two empty results apart that look identical to a caller:
+	 *  a root holding nothing searchable, and a root full of files that the pattern excluded. Only the
+	 *  second is a pattern the caller should go and fix. */
+	candidates: number
+	/** Of the files the glob rejected, how many it would have ACCEPTED had it been matched against the
+	 *  bare filename instead of the path.
+	 *
+	 *  This is the one wrong mental model this grammar invites, and it invites it by rewarding it: a
+	 *  pattern like `App.vue` works when the file sits at the search root, so a caller who tries it and
+	 *  succeeds learns "globs match filenames" — and is then baffled when the same form finds nothing a
+	 *  directory down. A hit that teaches the wrong rule is worse than a miss, and this number is what
+	 *  lets the refusal say `**\/App.vue` instead of "widen your glob". */
+	nearMisses: number
 }

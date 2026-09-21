@@ -10,7 +10,7 @@ import { Vault } from '../Vault'
  * A tool PARAMETER is vault-relative ( `plans/x.html` ) because it resolves against the root itself.
  *
  * The regression that earned this file: an agent read a link out of a document and passed it verbatim to
- * `kcd_get`. `toAbs` produced `…/_Claude/_Claude/lenses/…`, the path jail PASSED it ( a doubled path is
+ * `get_doc`. `toAbs` produced `…/_Claude/_Claude/lenses/…`, the path jail PASSED it ( a doubled path is
  * still inside the vault, so the one guard positioned to catch it could not see it ), and it died as a raw
  * ENOENT with an absolute path the caller never wrote. Copying a link into a tool call is the obvious
  * thing to do; it has to work.

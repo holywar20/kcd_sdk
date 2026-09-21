@@ -5,7 +5,7 @@ import { HtmlTree } from '../HtmlTree';
  * The pretty-printer seam ( 2026-08-17 ).
  *
  * `serialize` emitted no newlines at all, and `parse` collapses every whitespace-only run to a single
- * space — so every document written through `kcd_save` came out as ONE PHYSICAL LINE. `KcdSynth` built
+ * space — so every document written through `save_doc` came out as ONE PHYSICAL LINE. `KcdSynth` built
  * indented markup and `KcdEmit.spliceFrontmatter` re-parsed it through `HtmlTree` in the same call and
  * threw the formatting away: two halves of one pipeline undoing each other.
  *
@@ -82,7 +82,7 @@ describe( 'HtmlTree.serialize — whitespace-significant and raw content', () =>
 describe( 'HtmlTree.serialize — stability', () => {
 
 	/**
-	 * IDEMPOTENCE IS THE LOAD-BEARING PROPERTY. Every `kcd_save` re-parses and re-serializes the whole
+	 * IDEMPOTENCE IS THE LOAD-BEARING PROPERTY. Every `save_doc` re-parses and re-serializes the whole
 	 * body, so a printer that is not a fixed point would churn the file on every write — a diff on every
 	 * save that touched nothing, which is worse than the flattening it replaced.
 	 */
