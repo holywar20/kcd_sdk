@@ -359,6 +359,33 @@ describe( 'VaultTools — batch runs the FACE\'s dispatch, every call, one resul
 		] );
 		expect( steps( r )[ 2 ]!.ok ).toBe( true );
 	} );
+
+	/**
+	 * A BATCH THAT RUNS NOTHING SAYS SO. `calls` sent as a JSON string came back `{ results: [] }` — no error, nothing
+	 * written — and an agent read that as success. It is refused whole, and names what arrived.
+	 */
+	it( 'refuses, and runs nothing, when calls is a string, missing or empty', async () => {
+		const t   = tools();
+		let   ran = 0;
+		const counting = async ( name: string, args: Record<string, unknown> ): Promise<ToolResult> => { ran++; return invoke( t )( name, args ); };
+
+		const asString = await t.batch( { calls: JSON.stringify( [ { tool: 'find' } ] ) }, counting );
+		expect( asString.isError ).toBe( true );
+		expect( text( asString ) ).toContain( '"calls" arrived as a string' );
+		expect( text( asString ) ).toContain( 'Nothing ran.' );
+
+		expect( text( await t.batch( {}, counting ) ) ).toContain( '"calls" arrived as none' );
+		expect( text( await t.batch( { calls: [] }, counting ) ) ).toContain( '"calls" is empty' );
+		expect( ran ).toBe( 0 );
+	} );
+
+	it( 'fails one step whose args arrived as a string, and runs the rest', async () => {
+		const t = tools();
+		const r = json( await t.batch( { calls: [ { tool: 'read', args: '{"path":"x"}' }, { tool: 'find' } ] }, invoke( t ) ) );
+		expect( steps( r )[ 0 ]!.ok ).toBe( false );
+		expect( steps( r )[ 0 ]!.output ).toContain( '"args" arrived as a string' );
+		expect( steps( r )[ 1 ]!.ok ).toBe( true );
+	} );
 } );
 
 describe( 'VaultTools.spec — one copy of the prose, rendered per face', () => {

@@ -138,6 +138,22 @@ export const KcdEdit = new class KcdEdit {
 		return HtmlTree.innerHtml( root );
 	}
 
+	// ── habit ops ─────────────────────────────────────────────────────────────────
+
+	/** Rewrite a habit's Why section — the line a compiled agent that does not load the habit carries instead of
+	 *  its body. The heading stays; everything under it becomes one paragraph. Null when the habit has no Why
+	 *  section, or the text is blank: a habit's why is required, so there is nothing sound to write. */
+	setHabitWhy( body: string, why: string ): string | null {
+		const text = why.trim();
+		if( !text ) return null;
+		const root = HtmlTree.parse( body );
+		const sec  = HtmlTree.first( root, ( el ) => HtmlTree.get( el, 'data-kcd-section' ) === 'why' );
+		if( !sec ) return null;
+		const head = sec.kids.find( ( k ): k is HtmlEl => k.type === 'el' && /^h[1-6]$/.test( k.tag ) );
+		sec.kids = [ ...( head ? [ head ] : [] ), this.el( 'p', {}, [ this.text( text ) ] ) ];
+		return HtmlTree.innerHtml( root );
+	}
+
 	// ── tool ops ( where-LESS slots under the Do region's `tools` section ) ────────
 
 	toolTable( root: HtmlEl ): HtmlEl | null {

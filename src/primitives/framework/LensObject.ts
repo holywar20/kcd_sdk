@@ -504,6 +504,14 @@ export class LensObject extends KCDPrimitive {
 		return [ ...own, ...dredged, ...( stub ? [ stub ] : [] ), ...injected ];
 	}
 
+	/** This lens's OWN sections in one region — its Care, or its Know tables — without the region intro, the
+	 *  stub, or anything it dredged. What a lens says about itself, read the same way by the agent compiler and
+	 *  the lens editor. */
+	getOwnBlocks( region: 'care' | 'know' ): TaggedBlock[] {
+		const own = this.getPath();
+		return this.getContextBlocks().filter( b => b.path === own && b.region === region && !!b.section && b.section !== 'stub' );
+	}
+
 	/** The "Available on request" stub — every `on`-mode internal link this lens's policy names (the
 	 *  routing-row case, any artifact type), plus any `load` link the current dredge depth
 	 *  didn't reach. One synthetic block, folded into `getContextBlocks()` so the unified assembler

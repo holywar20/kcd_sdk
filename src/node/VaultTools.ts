@@ -69,6 +69,12 @@ export interface VaultToolsOptions {
 	 *  moved or removed, every referrer a heal rewrote, and every folder nav-index the write rebuilt. A host
 	 *  holding an index invalidates off it. */
 	onWrite?:     ( paths: string[] ) => void;
+	/** Told after a move lands, with the source and destination as absolute paths. `onWrite` names both
+	 *  among everything else it touched and cannot say which was which; a host keeping an identity per
+	 *  document needs exactly that. */
+	onMove?:      ( from: string, to: string ) => void;
+	/** Told after a delete lands, with the absolute path of the document removed. */
+	onDelete?:    ( path: string ) => void;
 }
 
 export class VaultTools {
@@ -308,6 +314,7 @@ export class VaultTools {
 			this.jail( from );
 			this.jail( to );
 			const plan = this.vault.move( from, to );
+			this.tell( () => this.opts.onMove?.( this.vault.toAbs( from ), this.vault.toAbs( to ) ) );
 			const indexed = this.wrote( [ from, to, ...plan.edits.map( e => e.file ) ].map( p => this.vault.toAbs( p ) ) );
 			return VaultTools.result( { ...plan, ...VaultTools.indexed( indexed ) } );
 		} catch ( e ) {
@@ -320,6 +327,7 @@ export class VaultTools {
 		try {
 			this.jail( filePath );
 			const plan = this.vault.delete( filePath );
+			this.tell( () => this.opts.onDelete?.( this.vault.toAbs( filePath ) ) );
 			const indexed = this.wrote( [ filePath, ...plan.edits.map( e => e.file ) ].map( p => this.vault.toAbs( p ) ) );
 			return VaultTools.result( { ...plan, ...VaultTools.indexed( indexed ) } );
 		} catch ( e ) {
@@ -362,9 +370,15 @@ export class VaultTools {
 	 * does not stop the ones after it, and nothing already applied is undone. One result per call, in order,
 	 * carrying the step's own reply verbatim, so the caller learns exactly which landed and why the others
 	 * did not, and decides for itself what a partial outcome means.
+	 *
+	 * A batch whose `calls` cannot be read is the one case that stops before any step — refused whole, with what
+	 * arrived, because there is no step to run and an empty result list would read as success.
 	 */
 	private async runBatch( args: Record<string, unknown>, invoke: VaultToolInvoke ): Promise<ToolResult> {
-		const calls   = Array.isArray( args[ 'calls' ] ) ? args[ 'calls' ] as Array<Record<string, unknown>> : [];
+		const malformed = malformedCalls( args[ 'calls' ] );
+		if ( malformed ) return VaultTools.error( `${ this.names.batch }: ${ malformed } Nothing ran.` );
+
+		const calls   = args[ 'calls' ] as Array<Record<string, unknown>>;
 		const results: VaultBatchStep[] = [];
 
 		for ( let i = 0; i < calls.length; i++ ) {
@@ -374,6 +388,11 @@ export class VaultTools {
 
 			if ( !tool ) {
 				results.push( { tool, ok: false, output: 'call is missing a "tool" name' } );
+				continue;
+			}
+			if ( typeof callArgs !== 'object' || Array.isArray( callArgs ) ) {
+				results.push( { tool, ok: false, output: `"args" arrived as ${ carried( callArgs ) }, not an object — `
+					+ 'send the arguments object itself, not a JSON string of it. This step did not run.' } );
 				continue;
 			}
 			if ( tool === this.names.batch ) {
@@ -459,11 +478,12 @@ export class VaultTools {
 
 	/** Tell the host what landed. */
 	private notify( absPaths: string[] ): void {
-		try {
-			this.opts.onWrite?.( absPaths );
-		} catch {
-			// A host's index bookkeeping failing is the host's problem to notice; the write is done.
-		}
+		this.tell( () => this.opts.onWrite?.( absPaths ) );
+	}
+
+	/** Run one host hook. A host's bookkeeping failing is the host's problem to notice; the write is done. */
+	private tell( hook: () => void ): void {
+		try { hook(); } catch { /* the write already landed */ }
 	}
 
 	/** An index outcome folded into a write's result — present only when an index changed or was left alone. */
@@ -500,6 +520,21 @@ function carried( v: unknown ): string {
 	if ( v === null ) return 'null';
 	if ( Array.isArray( v ) ) return 'an array';
 	return `a ${ typeof v }`;
+}
+
+/**
+ * Why `calls` cannot be run, or '' when it can. A BATCH THAT RUNS NOTHING SAYS SO ( 2026-09-21 ): `calls` sent as a
+ * JSON string — the commonest way a model gets this wrong — used to read as an empty list and come back as
+ * `{ results: [] }`, which an agent took for success and moved on from with nothing written. It is refused, never
+ * parsed: the gate judged the steps it could see, and a string is none, so running it would run steps unjudged.
+ */
+function malformedCalls( calls: unknown ): string {
+	if ( typeof calls === 'string' ) {
+		return '"calls" arrived as a string. Send the array itself — [ { "tool": ..., "args": { ... } } ] — not a JSON string of it.';
+	}
+	if ( !Array.isArray( calls ) ) return `"calls" arrived as ${ carried( calls ) }. It must be an array of { tool, args } steps.`;
+	if ( !calls.length ) return '"calls" is empty — there was nothing to run.';
+	return '';
 }
 
 /** The one failure `create` asks for, told apart from every other thrown error. */
