@@ -27,42 +27,19 @@ export interface ManifestEntry {
 	purpose: string
 }
 
-/** The base lens's filename — `_`-prefixed because it is INFRASTRUCTURE, not an authored domain lens
- *  ( the KCD naming rule, see `KcdAddress` ). Declared here rather than in each reader because the
- *  string was being re-spelled at five call sites that all had to agree about the inheritance floor. */
-const BASE_LENS_FILE = '_lens-base.html'
-
-/** The LANE floor — the inheritance base for an agent running with nobody in the session.
- *
- *  A SECOND floor rather than a flag on the first, because the two documents address different readers
- *  and cannot be reconciled by wording. `_lens-base` tells its reader to state a path and wait for
- *  clearance; an unattended agent has nobody to wait for, and a floor whose escalation route does not
- *  exist is one an agent learns to discount entire — including the parts that did apply. So the lane
- *  gets its own floor, authored as prohibitions rather than as a collaboration protocol.
- *
- *  OPTIONAL, unlike `BASE_LENS`, and deliberately absent from `MANIFEST`: the bundle installs what every
- *  vault needs, and a project that never runs an unattended agent needs no lane. A vault without one
- *  cannot compile a lane at all, which is the correct failure — better than compiling a lane onto the
- *  session floor and looking like it worked. */
-const LANE_BASE_LENS_FILE = '_lane-base.html'
-
 const MANIFEST: readonly ManifestEntry[] = [
 
 	{
-		bundleSource: `lenses/${ BASE_LENS_FILE }`, vaultHome: `lenses/${ BASE_LENS_FILE }`, required: true,
-		purpose: 'The base lens, auto-loaded into every session. A vault without it has no floor to stand on.'
-	},
-	{
-		bundleSource: 'lenses/lens-crafter', vaultHome: 'lenses/lens-crafter', required: true,
-		purpose: 'The authoring lens. REQUIRED, not a nicety: a new vault\'s entry document sends its first session to compile it ( `!lens-crafter` ) before any lens is written, so a vault without it fails at the exact step where it starts producing value. Shipped as a directory so the lens keeps its `{name}/{name}.html` + `context/` anatomy.'
+		bundleSource: 'lenses/documentation', vaultHome: 'lenses/documentation', required: true,
+		purpose: 'The authoring lens the Lens Crafter agent wears. REQUIRED, not a nicety: a new vault\'s entry document sends its first session to Lens Crafter before any lens is written, so a vault without it fails at the exact step where it starts producing value. Shipped as a directory so the lens keeps its `{name}/{name}.html` + `context/` anatomy.'
 	},
 	{
 		bundleSource: 'lenses/house', vaultHome: 'lenses/house', required: true,
-		purpose: 'The house lens — what the project\'s house agent is composed from. REQUIRED: every project is minted with a house agent wearing it, and Starmind\'s automatic work ( session titles, compaction ) runs on that agent, so a vault without it cannot host its own house agent. Pairs with `prompts`, which carries each task\'s wording; the lens carries the stance they all share. Shipped as a directory for the same anatomy reason as lens-crafter.'
+		purpose: 'The house lens — what the project\'s house agent is composed from. REQUIRED: every project is minted with a house agent wearing it, and Starmind\'s automatic work ( session titles, compaction ) runs on that agent, so a vault without it cannot host its own house agent. Pairs with `prompts`, which carries each task\'s wording; the lens carries the stance they all share. Shipped as a directory for the same anatomy reason as documentation.'
 	},
 	{
 		bundleSource: 'habits', vaultHome: 'habits', required: true,
-		purpose: 'Atomic behavior fragments the base lens and every domain lens link into.'
+		purpose: 'Atomic behavior fragments the shipped agents carry.'
 	},
 	{
 		bundleSource: 'analyzers/_analyzer_base.html', vaultHome: 'analyzers/_analyzer_base.html', required: true,
@@ -82,7 +59,7 @@ const MANIFEST: readonly ManifestEntry[] = [
 	},
 	{
 		bundleSource: 'references/how-to', vaultHome: 'references/how-to', required: true,
-		purpose: 'Procedural references the bundled lenses link into by path. Currently read-a-survey, which lens-crafter loads when proposing artifacts for an unfamiliar codebase — the "read this INSTEAD of exploring" instruction that the whole survey-as-anchor design rests on.'
+		purpose: 'Procedural references the bundled lenses link into by path. Currently read-a-survey, which the documentation lens loads when proposing artifacts for an unfamiliar codebase — the "read this INSTEAD of exploring" instruction that the whole survey-as-anchor design rests on.'
 	},
 	{
 		bundleSource: 'prompts', vaultHome: 'prompts', required: true,
@@ -95,6 +72,10 @@ const MANIFEST: readonly ManifestEntry[] = [
 	{
 		bundleSource: 'root.html', vaultHome: 'root.html', required: true,
 		purpose: 'THE ENTRY DOCUMENT — the first thing every session reads, and what the generated CLAUDE.md points at. Required in the strongest sense: `root-context.html` instructs the agent to open it three times over, so a vault without it hands every new user a broken first instruction. It was missing entirely until 2026-07-26. Shipped as a starting point and meant to be edited.'
+	},
+	{
+		bundleSource: 'agent-defaults.json', vaultHome: 'agent-defaults.json', required: true,
+		purpose: 'The shipped agents — Basic, Lane and Lens Crafter — named in strings: their lenses, system prompt, habits and tools. The project\'s own copy, edited by a person; its agents follow it at the next load. Laid down here so the entry document\'s link to it resolves from the first open, before the agents are seeded.'
 	},
 	{
 		bundleSource: 'root-context.html', vaultHome: 'root-context.html', required: true,
@@ -112,33 +93,6 @@ const MANIFEST: readonly ManifestEntry[] = [
 ]
 
 export class InstallManifest {
-
-	/** The base lens's vault-relative home — THE one place the inheritance floor is named. Every reader
-	 *  that has to tell the floor apart from an authored lens ( `Agent.domainLenses`, Starmind's
-	 *  `Agents.withBase` / `_lensPathsOf`, `VaultUtilities.compile` ) resolves it through here. */
-	static readonly BASE_LENS = `lenses/${ BASE_LENS_FILE }`
-
-	/** The LANE floor's vault-relative home — the base a compile rides when it is running for an agent
-	 *  with nobody in the session. Named here for the same reason `BASE_LENS` is: one spelling, so the
-	 *  readers that have to tell a floor from an authored lens cannot drift apart. */
-	static readonly LANE_LENS = `lenses/${ LANE_BASE_LENS_FILE }`
-
-	/** Is this path A base lens — an inheritance floor rather than an authored domain lens? Matches on
-	 *  the trailing SEGMENT, so it is true for a vault-relative path, an OS-absolute one, and either slash
-	 *  flavour, and false for a same-suffixed name that merely ends in the same characters. Null / empty
-	 *  ( an in-memory lens with no path ) is not a base lens.
-	 *
-	 *  A SET, not one name, since the lane floor joined it. Every caller asks this to mean "is a floor
-	 *  already present / is this thing inherited rather than chosen", and both floors answer yes to that
-	 *  question. Left as a single name, `Agent.withFloor` would fail to see a lane floor in the stack and
-	 *  append the session floor beside it — two floors in one context, contradicting each other, which is
-	 *  the exact failure the lane exists to prevent. */
-	static isBaseLens( path: string | null | undefined ): boolean {
-		if( !path ) return false
-		const segments = path.replace( /\\/g, '/' ).split( '/' )
-		const file = segments[ segments.length - 1 ]
-		return file === BASE_LENS_FILE || file === LANE_BASE_LENS_FILE
-	}
 
 	/** Every row, in table order. */
 	static all(): readonly ManifestEntry[] {

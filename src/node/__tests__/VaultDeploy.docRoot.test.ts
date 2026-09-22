@@ -144,7 +144,10 @@ describe( 'a vault installed under a non-default doc root', () => {
 			+ `<dt>description</dt><dd data-kcd-field="description" data-kcd-type="text">A lens.</dd>`
 			+ `<dt>type</dt><dd data-kcd-field="type" data-kcd-type="enum">lens</dd>`
 			+ `<dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>`
-			+ `</dl>\n<h1>sample</h1>\n</article>\n</body></html>\n` );
+			+ `</dl>\n<h1>sample</h1>\n`
+			+ `<section data-kcd-section="personality"><p>Who it is.</p></section>\n`
+			+ `<section data-kcd-section="philosophy"><p>What it believes.</p></section>\n`
+			+ `</article>\n</body></html>\n` );
 
 		const rows = VaultUtilities.lensIndex( new Vault( root, DOC_ROOT ) );
 		const row  = rows.find( r => r.what === 'sample' );

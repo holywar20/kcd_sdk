@@ -19,7 +19,8 @@ const FIXTURE = `<!DOCTYPE html>
 <h1>Fixture</h1>
 <p>Prose that must survive as plain text.</p>
 <p data-kcd-audience="human">This paragraph is human-only and must never reach the model.</p>
-<section data-kcd-region="know">
+<section data-kcd-section="personality"><p>Who the fixture is.</p></section>
+<section data-kcd-section="philosophy"><p>What the fixture believes.</p></section>
 <section data-kcd-section="references">
 <div data-kcd-table>
 <div data-kcd-head><span>What</span><span>Where</span><span>Why</span></div>
@@ -29,7 +30,6 @@ const FIXTURE = `<!DOCTYPE html>
 <span data-kcd-field="why" data-kcd-type="text">Because it matters.</span>
 </div>
 </div>
-</section>
 </section>
 </article>
 </body>
@@ -117,23 +117,15 @@ const LENS_FIXTURE = `<!DOCTYPE html>
 <dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>
 </dl>
 <h1>Region Fixture</h1>
-<p>The lens's own identity lede — unregioned, top-level.</p>
-<section data-kcd-region="know">
-<h2>Know</h2>
-<p>The Know region's own intro paragraph, before its first named section.</p>
+<p>The lens's own identity lede — top-level.</p>
+<section data-kcd-section="personality">
+<p>This lens exists to test block decomposition.</p>
+</section>
+<section data-kcd-section="philosophy" data-kcd-merge-key="stance">
+<p>Believe the section, not the wrapper.</p>
+</section>
 <section data-kcd-section="references">
 <div data-kcd-slot="reference"><span data-kcd-field="what" data-kcd-type="text">A ref</span><a data-kcd-field="where" data-kcd-type="path" href="x.html">x</a><span data-kcd-field="why" data-kcd-type="text">reasons</span></div>
-</section>
-</section>
-<section data-kcd-region="care">
-<section data-kcd-section="purpose">
-<p>This lens exists to test region decomposition.</p>
-</section>
-</section>
-<section data-kcd-region="do">
-<section data-kcd-section="habits" data-kcd-merge-key="habits-table">
-<p>Habit A applies.</p>
-</section>
 </section>
 </article>
 </body>
@@ -163,41 +155,25 @@ const REFERENCE_FIXTURE = `<!DOCTYPE html>
 </html>
 `;
 
-describe( 'KcdContext.projectBlocks — region-block decomposition (Phase 2)', () => {
-	it( 'tags a lens\'s unregioned lede as `care`, and its named sections by their enclosing data-kcd-region', () => {
+describe( 'KcdContext.projectBlocks — block decomposition', () => {
+	it( 'derives a lens\'s tier from the section — references are what it knows, everything else is who it is', () => {
 		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' , '_Claude');
 		const blocks = KcdContext.projectBlocks( artifact, 'know' );
 
 		const lede = blocks.find( b => b.section === null && b.text.includes( 'identity lede' ) );
 		expect( lede?.region ).toBe( 'care' );
 
-		const refs = blocks.find( b => b.section === 'references' );
-		expect( refs?.region ).toBe( 'know' );
+		expect( blocks.find( b => b.section === 'references' )?.region ).toBe( 'know' );
+		expect( blocks.find( b => b.section === 'personality' )?.region ).toBe( 'care' );
 
-		const purpose = blocks.find( b => b.section === 'purpose' );
-		expect( purpose?.region ).toBe( 'care' );
-
-		const habits = blocks.find( b => b.section === 'habits' );
-		expect( habits?.region ).toBe( 'do' );
-		expect( habits?.mergeKey ).toBe( 'habits-table' );
+		const philosophy = blocks.find( b => b.section === 'philosophy' );
+		expect( philosophy?.region ).toBe( 'care' );
+		expect( philosophy?.mergeKey ).toBe( 'stance' );
 	} );
 
-	it( 'tags a region\'s own intro paragraph ( before its first named section ) with THAT region, not the artifact-level care lede', () => {
+	it( 'renders a lens\'s section rows into its block text', () => {
 		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' , '_Claude');
-		const blocks = KcdContext.projectBlocks( artifact, 'know' );
-		const intro = blocks.find( b => b.section === null && b.text.includes( 'Know region\'s own intro' ) );
-		expect( intro?.region ).toBe( 'know' );
-	} );
-
-	it( 'never emits the Know/Care/Do region-label heading — the region sorts the build for us, it never names itself to the agent', () => {
-		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' , '_Claude');
-		const knowLabel = /^#+\s+Know\s*$/m;
-		// Both render paths drop it: the flat single-string projection and the block ( wire ) projection.
-		expect( KcdContext.project( artifact ) ).not.toMatch( knowLabel );
 		const joined = KcdContext.projectBlocks( artifact, 'know' ).map( b => b.text ).join( '\n' );
-		expect( joined ).not.toMatch( knowLabel );
-		// The region's real content — its intro and its section rows — is untouched.
-		expect( joined ).toContain( 'Know region\'s own intro' );
 		expect( joined ).toContain( 'A ref — reasons (x.html)' );
 	} );
 
@@ -244,8 +220,8 @@ describe( 'KcdContext.projectBlocks — region-block decomposition (Phase 2)', (
 	it( 'a block with no data-kcd-slot rows carries no `rows` at all — not an empty array, genuinely absent', () => {
 		const artifact = KcdParse.parse( LENS_FIXTURE, 'fixture.html' , '_Claude');
 		const blocks = KcdContext.projectBlocks( artifact, 'know' );
-		const purpose = blocks.find( b => b.section === 'purpose' )!;
-		expect( purpose.rows ).toBeUndefined();
+		const personality = blocks.find( b => b.section === 'personality' )!;
+		expect( personality.rows ).toBeUndefined();
 	} );
 } );
 

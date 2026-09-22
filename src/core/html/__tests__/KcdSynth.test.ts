@@ -208,15 +208,15 @@ describe( 'KcdSynth — declared shape drives placement', () => {
 	} );
 
 	it( 'counts a slot-supplied section as supplied, not as missing', () => {
-		// Also found live: the advisory audited prose keys only, so a lens whose `habits` arrived as
-		// ROWS was reported missing `habits`.
+		// Also found live: the advisory audited prose keys only, so a lens whose `references` arrived as
+		// ROWS was reported missing `references`.
 		const supplied = KcdSynth.suppliedSections( {
-			sections: { purpose: 'p', philosophy: 'q' },
-			slots:    [ { section: 'habits', rows: [ { what: 'track-todo-liberal' } ] } ],
+			sections: { personality: 'p', philosophy: 'q' },
+			slots:    [ { section: 'references', rows: [ { what: 'protocol' } ] } ],
 		} );
 
-		expect( supplied ).toContain( 'habits' );
-		expect( KcdShapes.audit( 'lens', supplied ).thin ).not.toContain( 'habits' );
+		expect( supplied ).toContain( 'references' );
+		expect( KcdShapes.audit( 'lens', supplied ).thin ).not.toContain( 'references' );
 	} );
 
 	it( 'reports sections the shape does not declare, but still emits them', () => {
@@ -232,32 +232,29 @@ describe( 'KcdSynth — declared shape drives placement', () => {
 
 describe( 'KcdSynth — regions and slot rows', () => {
 
-	it( 'wraps a lens\'s sections in their Know/Care/Do regions', () => {
+	it( 'writes a lens as flat sections, in the shape\'s order, with no region wrapper', () => {
 		const { html, report } = build( 'lens', 'synth-lens', {
-			sections: { purpose: 'What it governs.', philosophy: 'What it defends.' },
+			sections: { philosophy: 'What it defends.', personality: 'Who it is.' },
 		} );
 
 		expect( report.errors ).toEqual( [] );
-		expect( html ).toContain( '<section data-kcd-region="care">' );
-
-		const care    = html.indexOf( 'data-kcd-region="care"' );
-		const purpose = html.indexOf( 'data-kcd-section="purpose"' );
-		expect( care ).toBeLessThan( purpose );
+		expect( html ).not.toContain( 'data-kcd-region' );
+		expect( html.indexOf( 'data-kcd-section="personality"' ) ).toBeLessThan( html.indexOf( 'data-kcd-section="philosophy"' ) );
 	} );
 
 	it( 'emits slot rows as a faux-table with a real href, and validates', () => {
 		const { html, report } = build( 'lens', 'synth-slots', {
-			sections: { purpose: 'p', philosophy: 'q' },
+			sections: { personality: 'p', philosophy: 'q' },
 			slots: [ {
-				section: 'habits',
-				rows: [ { what: 'track-todo-liberal', where: '_Claude/habits/track-todo/track-todo-liberal.html', why: 'when a deferred item surfaces' } ],
+				section: 'references',
+				rows: [ { what: 'protocol', where: '_Claude/references/kcd_sdk/kcd-document-protocol.html', why: 'the format' } ],
 			} ],
 		} );
 
 		expect( report.errors ).toEqual( [] );
 		expect( html ).toContain( '<div data-kcd-table>' );
-		expect( html ).toContain( 'data-kcd-slot="habit"' );          // kind defaulted from the shape
-		expect( html ).toContain( 'href="_Claude/habits/track-todo/track-todo-liberal.html"' );
+		expect( html ).toContain( 'data-kcd-slot="reference"' );      // kind defaulted from the shape
+		expect( html ).toContain( 'href="_Claude/references/kcd_sdk/kcd-document-protocol.html"' );
 		expect( html ).not.toContain( '<table' );                      // never a real table
 	} );
 
@@ -294,9 +291,9 @@ describe( 'KcdSynth — regions and slot rows', () => {
 	} );
 
 	it( 'defaults an unknown slot kind to table-data rather than emitting an invalid one', () => {
-		const { report } = build( 'lens', 'synth-badkind', {
-			sections: { purpose: 'p', philosophy: 'q' },
-			slots:    [ { section: 'habits', kind: 'not-a-kind', rows: [ { what: 'x' } ] } ],
+		const { report } = build( 'reference', 'synth-badkind', {
+			sections: { location: 'p' },
+			slots:    [ { section: 'notes', kind: 'not-a-kind', rows: [ { what: 'x' } ] } ],
 		} );
 		expect( report.errors ).toEqual( [] );
 	} );
@@ -319,7 +316,7 @@ describe( 'KcdShapes — the table itself', () => {
 
 	it( 'flags undeclared sections only on a closed type', () => {
 		expect( KcdShapes.audit( 'plan', [ 'goal', 'phases', 'current-state', 'bespoke' ] ).unexpected ).toEqual( [] );
-		expect( KcdShapes.audit( 'lens', [ 'purpose', 'philosophy', 'bespoke' ] ).unexpected ).toEqual( [ 'bespoke' ] );
+		expect( KcdShapes.audit( 'lens', [ 'personality', 'philosophy', 'bespoke' ] ).unexpected ).toEqual( [ 'bespoke' ] );
 	} );
 
 	it( 'describes a shape in prose an author can act on', () => {

@@ -1,14 +1,14 @@
-import type { LensObject } from '../primitives/framework/LensObject';
+import { LensObject } from '../primitives/framework/LensObject';
 import { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
-import type { Policy, Surface } from '../primitives/ToolAccess';
+import type { ToolMode } from '../primitives/ToolAccess';
 import type { TaggedBlock } from '../primitives/types';
 
 /**
  * AgentCompiler — an agent's context, built from its record ( plan agents-own-behaviour, task 55 ).
  *
- * An agent is its lenses, its habits and its tools, and that is all this reads. The lenses come in stack
- * order: the first is the persona and overrules the rest where they conflict, and every lens adds its Care and
- * its references. A lens's own habit and tool tables are NOT read — behaviour belongs to the agent now, and a
+ * An agent is its system prompt, its lenses, its habits and its tools, and that is all this reads. The lenses come in stack
+ * order, and THE FIRST LOADED WINS: it alone supplies the personality, every later lens adds only its philosophy
+ * and its references, and a reference two lenses share stands as the first has it ( see `_lensBlocks` ). A lens's own habit and tool tables are NOT read — behaviour belongs to the agent now, and a
  * lens is documentation. Habits the agent loads ride in full; the rest ride as one line of why, so the agent
  * knows they exist and where to find them. The tools are described, never granted here: what an agent may call
  * is its passport's business, or Claude Code's.
@@ -31,15 +31,17 @@ export interface CompileHabit {
 	habit?:  KCDPrimitive | null;
 }
 
+/** One tool on the record. `mode` is how much of it rides — carried for the callers that report a record,
+ *  never read by the compile itself, which describes every tool it is handed and grants none of them. */
 export interface CompileTool {
 	id:           string;
 	description?: string;
-	policy?:      Policy;
-	surface?:     Surface;
+	mode?:        ToolMode;
 }
 
 export interface AgentCompileInput {
 	name:    string;
+	systemPrompt?: string | null;   // the agent's own words — they lead, above every lens
 	lenses:  LensObject[];
 	habits:  CompileHabit[];
 	tools:   CompileTool[];
@@ -54,17 +56,45 @@ export interface AgentCompiled {
 	tools:   string[];
 }
 
-/** What a lens contributes: its Care, its own Know tables, then the bodies of the references it loads. */
-function _lensBlocks( lens: LensObject ): TaggedBlock[] {
-	const own = lens.getPath();
-	const loaded = lens.getContextBlocks().filter( b => b.path !== own && b.artifactType === 'reference' );
-	return [ ...lens.getOwnBlocks( 'care' ), ...lens.getOwnBlocks( 'know' ), ...loaded ];
+/** The Care section a stacked lens still contributes when it is not first. Everything else in its Care is who
+ *  it is, and there is one of those per agent. */
+const PHILOSOPHY = 'philosophy';
+
+const _norm = ( p: string ): string => p.replace( /\\/g, '/' );
+
+/** Every reference path a lens names, in any mode — `off` included, because a mode is a claim on the
+ *  reference, and the first lens to make one decides it. Forward-slashed and absolute where the lens knows its
+ *  root, so a block's path can be matched against it. */
+function _namedRefs( lens: LensObject ): string[] {
+	const root = lens.getProjectRoot();
+	return lens.getPolicy()
+		.filter( e => e.type === 'internal' && !!e.href )
+		.map( e => _norm( root ? LensObject.resolveHref( e.href!, root ) : e.href! ) );
 }
 
-function _lensSection( lens: LensObject, primary: boolean ): string {
+const _claimed = ( claimed: Set<string>, path: string ): boolean => {
+	const p = _norm( path );
+	for ( const c of claimed ) if ( p === c || p.endsWith( '/' + c ) || c.endsWith( '/' + p ) ) return true;
+	return false;
+};
+
+/**
+ * What a lens contributes. THE FIRST LENS LOADED WINS: the primary brings its whole Care — its personality —
+ * and each lens after it brings only its philosophy. Every lens brings its own Know tables and the bodies of the
+ * references it loads, EXCEPT a reference an earlier lens already names: that one stands as the earlier lens
+ * has it, mode included, so a later lens can neither load what the first kept on the shelf nor load it twice.
+ */
+function _lensBlocks( lens: LensObject, primary: boolean, claimed: Set<string> ): TaggedBlock[] {
+	const own    = lens.getPath();
+	const care   = lens.getOwnBlocks( 'care' ).filter( b => primary || b.section === PHILOSOPHY );
+	const loaded = lens.getContextBlocks().filter( b => b.path !== own && b.artifactType === 'reference' && !_claimed( claimed, b.path ) );
+	return [ ...care, ...lens.getOwnBlocks( 'know' ), ...loaded ];
+}
+
+function _lensSection( lens: LensObject, primary: boolean, claimed: Set<string> ): string {
 	const name  = lens.getName();
 	const head  = primary ? `## ${ name } — primary` : `## ${ name }`;
-	const body  = _lensBlocks( lens ).map( b => b.text.trim() ).filter( Boolean );
+	const body  = _lensBlocks( lens, primary, claimed ).map( b => b.text.trim() ).filter( Boolean );
 	return [ head, ...body ].join( '\n\n' );
 }
 
@@ -88,12 +118,22 @@ export const AgentCompiler = {
 		const host  = input.host ?? 'starmind';
 		const parts: string[] = [];
 
+		const prompt = input.systemPrompt?.trim();
+		if ( prompt ) parts.push( prompt );
+
 		const lenses = input.lenses.map( l => l.getName() );
 		if ( input.lenses.length ) {
 			const order = input.lenses.length > 1
 				? `You are ${ input.name }, wearing ${ input.lenses.length } lenses in this order. The first, ${ lenses[ 0 ] }, is your persona and overrules the others where they conflict.`
 				: `You are ${ input.name }, wearing ${ lenses[ 0 ] }.`;
-			parts.push( [ '# Lenses', order, ...input.lenses.map( ( l, i ) => _lensSection( l, i === 0 ) ) ].join( '\n\n' ) );
+			const claimed  = new Set<string>();
+			const sections: string[] = [];
+			input.lenses.forEach( ( l, i ) => {
+				sections.push( _lensSection( l, i === 0, claimed ) );
+				for ( const p of _namedRefs( l ) ) claimed.add( p );
+				for ( const b of l.getContextBlocks() ) if ( b.artifactType === 'reference' ) claimed.add( _norm( b.path ) );
+			} );
+			parts.push( [ '# Lenses', order, ...sections ].join( '\n\n' ) );
 		}
 
 		const loaded: string[] = [];

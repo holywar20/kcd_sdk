@@ -28,10 +28,13 @@ export const KcdAddress = new class KcdAddress {
 	STATUSES     = [ 'draft', 'active', 'observation', 'composed', 'disabled', 'deployed', 'complete', 'retired', 'paused' ];
 	AUDIENCES    = [ 'human', 'agent', 'both' ];
 	MERGES       = [ 'additive', 'declarative', 'union' ];
+	/** The Know / Care / Do tiers — INTERNAL now. No document carries a `data-kcd-region` wrapper any more
+	 *  ( plan agents-own-behaviour, 2026-09-22 ); the projector still tags blocks with a tier to sort a
+	 *  compile, and `KcdContext` derives it from the section. */
 	REGIONS      = [ 'know', 'care', 'do' ];
-	/** The closed Care-region section vocabulary. `core-mental-model` and `philosophy-prerogatives`
-	 *  were retired 2026-07-12 — Care is Purpose + Philosophy ( + Open Questions ). */
-	CARE_SECTIONS = [ 'purpose', 'philosophy', 'open-questions' ];
+	/** A lens's whole, closed section vocabulary: personality + philosophy + references. Behaviour — habits,
+	 *  tools, contracts — belongs to the agent, and a lens that carries it is refused. */
+	LENS_SECTIONS = [ 'personality', 'philosophy', 'references' ];
 	SLOT_FIELDS  = [ 'what', 'where', 'why' ];
 	PARAM_FIELDS = [ 'name', 'type', 'default', 'description' ];
 	/** The one idiom every routable artifact ( reference, habit, contract, plan, anything else a

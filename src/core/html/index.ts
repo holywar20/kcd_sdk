@@ -23,6 +23,7 @@ export type { ParsedArtifact, ParsedSlot, ParsedParam } from './KcdParse';
 export { KcdEmit } from './KcdEmit';
 export { KcdExcise } from './KcdExcise';
 export { KcdEdit } from './KcdEdit';
+export { LensMigration } from './LensMigration';
 export { KcdContext } from './KcdContext';
 /** The what/where/why row — the context system's public row currency. `Agent.bindEnv` takes it in a
  *  public signature and the dispatch tier authors them, so it has to be nameable from outside. */

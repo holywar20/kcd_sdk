@@ -43,6 +43,7 @@ export const KcdValidate = new class KcdValidate {
 
 	AUTHOR_RE = /^.+\s<[^\s@]+@[^\s@]+\.[^\s@]+>$/;        // Name <email>
 	SCOPE_RE  = /^(?:universal|lens:[a-z0-9-]+)$/;
+	ID_RE     = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;   // a v4-shaped UUID, lowercase
 
 	// ── Frontmatter spec ( tier + expected type + per-field extras ) ──────────────
 	FRONTMATTER: Record<string, FieldSpec> = {
@@ -50,6 +51,10 @@ export const KcdValidate = new class KcdValidate {
 		description:      { required: true,  type: 'text', nonEmpty: true, maxLen: 1024 },
 		type:             { required: true,  type: 'enum' },
 		status:           { required: true,  type: 'enum', oneOf: KcdAddress.STATUSES, emptyOkForType: 'template' },
+		// The document's stable identity ( plan agents-own-behaviour, task "Lens and habit ids live in their
+		// frontmatter" ). Carried BY THE FILE so a move behind the app's back keeps it; the doc index reads it
+		// rather than minting one of its own. Optional until the lens/habit hard cut makes it required there.
+		id:               { type: 'text', pattern: this.ID_RE },
 		'schema-version': { type: 'text' },
 		author:           { type: 'text', pattern: this.AUTHOR_RE },
 		updated:          { type: 'date' },
@@ -214,12 +219,11 @@ export const KcdValidate = new class KcdValidate {
 				if ( a.startsWith( 'data-kcd' ) && !KcdAddress.KNOWN_ATTRS.includes( a ) )
 					err( 'unknown-attr', a, `"${ a }" is not in the closed attribute set` );
 
-			// region — lens-only; value constrained; no empties
+			// region — RETIRED on every type ( plan agents-own-behaviour, 2026-09-22 ). Know / Care / Do is no
+			// longer written into documents; a lens is flat sections.
 			if ( KcdAddress.isRegion( el ) ) {
 				const v = HtmlTree.get( el, 'data-kcd-region' )!;
-				if ( !KcdAddress.REGIONS.includes( v ) ) err( 'bad-region', `region:${ v }`, `region must be one of { ${ KcdAddress.REGIONS.join( ' | ' ) } }` );
-				if ( rootType !== 'lens' )               err( 'region-non-lens', `region:${ v }`, 'regions are lens-only' );
-				if ( this.isEmptyContainer( el ) )       err( 'empty-region', `region:${ v }`, 'empty region — omit it ( no empty containers )' );
+				err( 'region-retired', `region:${ v }`, `Know / Care / Do regions are retired — write flat sections ( a lens is { ${ KcdAddress.LENS_SECTIONS.join( ' | ' ) } } )` );
 			}
 
 			// section — named merge key; no empties; merge constrained
@@ -241,10 +245,10 @@ export const KcdValidate = new class KcdValidate {
 					err( 'unkinded-slot', 'slot', `slot carries no kind — data-kcd-slot must name one of { ${ KcdAddress.SLOT_KINDS.join( ' | ' ) } }` );
 				else if ( !KcdAddress.SLOT_KINDS.includes( kind ) )
 					err( 'bad-slot-kind', `slot:${ kind }`, `slot kind "${ kind }" not in { ${ KcdAddress.SLOT_KINDS.join( ' | ' ) } }` );
-				// A tool slot is a lens's tool exposure — what composes onto an agent. Every other type is a
-				// process written as prose and encodes no permissions, so a tool slot there is refused.
-				if ( kind === 'tool' && rootType !== 'lens' )
-					err( 'tool-slot-non-lens', 'slot:tool', `tool slots belong to a lens alone — a ${ rootType } names the tools it reaches for in prose, not in a tool slot` );
+				// A tool is the agent's, never a document's: no type encodes permissions. A lens carried tool
+				// slots until 2026-09-22; every other type always named its tools in prose.
+				if ( kind === 'tool' )
+					err( 'tool-slot-retired', 'slot:tool', `tool slots are retired — an agent's tools live on its record, and a ${ rootType } names the tools it reaches for in prose` );
 				const hc = HtmlTree.get( el, 'data-kcd-habit-class' );
 				if ( hc ) habitClasses[ hc ] = ( habitClasses[ hc ] ?? 0 ) + 1;
 				// A ROW THE READER CANNOT READ, in the two ways that happens. Carrying no field at all was
@@ -307,18 +311,52 @@ export const KcdValidate = new class KcdValidate {
 			}
 		} );
 
-		// Care is a CLOSED section vocabulary — Purpose + Philosophy ( + Open Questions ). The retired
-		// `core-mental-model` / `philosophy-prerogatives` slugs must not reappear.
-		for ( const region of HtmlTree.collect( article, el => KcdAddress.isRegion( el ) && HtmlTree.get( el, 'data-kcd-region' ) === 'care' ) )
-			for ( const sec of HtmlTree.collect( region, el => KcdAddress.isSection( el ) ) ) {
-				const v = HtmlTree.get( sec, 'data-kcd-section' );
-				if ( v && !KcdAddress.CARE_SECTIONS.includes( v ) )
-					err( 'bad-care-section', `section:${ v }`, `Care section "${ v }" not in { ${ KcdAddress.CARE_SECTIONS.join( ' | ' ) } }` );
-			}
+		if ( rootType === 'lens' ) this.checkLens( article, err );
 
 		// composable-rule guard: one carrier ⇒ at most one slot per habit-class
 		for ( const [ hc, n ] of Object.entries( habitClasses ) )
 			if ( n > 1 ) err( 'dup-habit-class', `habit-class:${ hc }`, `${ n } slots share habit-class "${ hc }" — at most one per file ( §6 )` );
+	}
+
+	// ── Lens pass — personality + philosophy + references, and nothing that behaves ─────
+	/**
+	 * A lens is information ( plan agents-own-behaviour ). Its top-level sections are exactly the closed
+	 * `LENS_SECTIONS` — personality and philosophy required — and it carries no behaviour: no habit, tool or
+	 * contract rows, and no `base` to inherit from, because nothing inherits. A lens in the old Know / Care /
+	 * Do shape fails here whole — the migration is a hard cut, and a half-read lens is a different agent.
+	 */
+	checkLens( article: HtmlEl, err: Emit ): void {
+		const top = HtmlTree.collect( article, el => KcdAddress.isSection( el ) && !this.insideSection( article, el ) );
+		const names = top.map( el => HtmlTree.get( el, 'data-kcd-section' ) ?? '' );
+		for ( const v of names )
+			if ( v && !KcdAddress.LENS_SECTIONS.includes( v ) )
+				err( 'bad-lens-section', `section:${ v }`, `a lens section is one of { ${ KcdAddress.LENS_SECTIONS.join( ' | ' ) } } — "${ v }" is not ( behaviour belongs to the agent; code areas are references )` );
+		for ( const need of [ 'personality', 'philosophy' ] )
+			if ( !names.includes( need ) ) err( 'lens-no-' + need, `section:${ need }`, `a lens must carry a \`${ need }\` section` );
+
+		for ( const slot of HtmlTree.collect( article, el => KcdAddress.isSlot( el ) ) ) {
+			const kind = HtmlTree.get( slot, 'data-kcd-slot' );
+			if ( kind === 'habit' || kind === 'contract' )
+				err( 'lens-behaviour-slot', `slot:${ kind }`, `a lens carries no ${ kind } rows — ${ kind }s belong to the agent ( habits ) or the project ( contracts )` );
+		}
+
+		const base = HtmlTree.first( article, el => KcdAddress.isField( el ) && HtmlTree.get( el, 'data-kcd-field' ) === 'base' );
+		if ( base ) err( 'base-retired', 'field:base', 'a lens inherits from nothing — drop the `base` field' );
+	}
+
+	/** Whether `el` sits inside another section below `root` — a nested subsection, not a top-level one. */
+	insideSection( root: HtmlEl, el: HtmlEl ): boolean {
+		let found = false;
+		const visit = ( node: HtmlEl, depth: number ): boolean => {
+			for ( const k of node.kids ) {
+				if ( !HtmlTree.isEl( k ) ) continue;
+				if ( k === el ) { found = depth > 0; return true; }
+				if ( visit( k, depth + ( KcdAddress.isSection( k ) ? 1 : 0 ) ) ) return true;
+			}
+			return false;
+		};
+		visit( root, 0 );
+		return found;
 	}
 
 	// ── Body pass — a document must SAY something ──────────────────────────────────

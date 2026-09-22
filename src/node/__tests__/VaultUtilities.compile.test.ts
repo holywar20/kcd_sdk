@@ -43,11 +43,8 @@ describe( 'VaultUtilities.compile — one compiler, shared with Starmind', () =>
 		expect( text ).toContain( '( Primary )' )
 	} )
 
-	it( 'reports the floor in the compiled lens list, not just the lenses asked for', () => {
-		const { lenses } = VaultUtilities.compile( vault(), [ 'render' ] )
-
-		expect( lenses ).toContain( 'render' )
-		expect( lenses ).toContain( '_lens-base' )
+	it( 'reports exactly the lenses it compiled — no floor rides under them', () => {
+		expect( VaultUtilities.compile( vault(), [ 'render', 'mcp' ] ).lenses ).toEqual( [ 'render', 'mcp' ] )
 	} )
 
 	it( 'reports a token count consistent with the text it returns', () => {

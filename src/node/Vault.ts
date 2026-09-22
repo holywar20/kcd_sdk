@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { LensObject, Glob, KcdExcise, VaultLayout, Agent, InstallManifest, KcdEmit } from '../core';
+import { LensObject, Glob, KcdExcise, VaultLayout, Agent, KcdEmit } from '../core';
 import type { ArtifactRef, ArtifactType } from '../core';
 import { scan, scanReport } from '../scanner';
 import type { ScannedFile, ScanReport } from '../scanner';
@@ -389,25 +389,20 @@ export class Vault {
 	 *
 	 * `model` is null on purpose ( see `Agent.model` ): this agent compiles context for delivery as CLI
 	 * text or a tool result and never dispatches, so there is no model to name. The name is left to
-	 * `Agent.create`, which takes it from the first AUTHORED lens — never the floor.
+	 * `Agent.create`, which takes it from the primary lens.
 	 *
 	 * This lives on `Vault` and not on `Agent` because an agent cannot construct itself: `Agent` is
 	 * deliberately Node-free ( the renderer imports it ), while resolving a lens NAME to a dredged
 	 * `LensObject` needs disk, path math, and the ( projectRoot, docRoot ) pair this facade already owns.
 	 *
 	 * Starmind does NOT route through here. Its agents come from database rows carrying identity and
-	 * per-artifact override maps that a list of lens names cannot express; the two faces share the engine
-	 * and the floor policy, not the constructor.
+	 * per-artifact override maps that a list of lens names cannot express; the two faces share the engine,
+	 * not the constructor. Nothing is stacked under the named lenses: there is no base lens.
 	 *
 	 * Throws on an empty list or a name that resolves to nothing — an unresolvable lens is a caller error,
-	 * not a degraded compile. A MISSING BASE LENS is different and is tolerated: a half-installed or
-	 * hand-built vault still compiles, just without a floor.
-	 *
-	 * `opts.lane` swaps WHICH floor rides — the lane base rather than the session base. It never drops
-	 * one: base is inheritance, not an ingredient, and that rule is unchanged. See `loadBaseLens` for why
-	 * a missing lane floor throws where a missing session floor does not.
+	 * not a degraded compile.
 	 */
-	buildAgent( lensNames: string[], opts: { lane?: boolean } = {} ): Agent {
+	buildAgent( lensNames: string[] ): Agent {
 		if ( !lensNames.length ) throw new Error( 'buildAgent requires at least one lens' );
 
 		const lenses = lensNames.map( name => {
@@ -422,39 +417,7 @@ export class Vault {
 			return this.loadLens( rel, { eager: true } );
 		} );
 
-		// The inheritance floor — ordering, idempotence, and missing-file tolerance all live in
-		// `Agent.withFloor`, the ONE place either face spells the rule ( see it for why ).
-		return Agent.create( {
-			id:     Agent.VAULT_AGENT_ID,
-			model:  null,
-			lenses: Agent.withFloor( lenses, this.loadBaseLens( opts ) ),
-		} );
-	}
-
-	/** The inheritance floor, freshly dredged. FRESH every call, never cached: a `LensObject` carries
-	 *  mutable dredge state, so a shared floor would leak one agent's toggles into every other agent
-	 *  wearing it.
-	 *
-	 *  The SESSION floor is null when this vault has none ( half-installed / hand-built — tolerated, not
-	 *  fatal: a session has a person in it who will notice ).
-	 *
-	 *  The LANE floor THROWS when absent, and the asymmetry is the point. Falling back to the session
-	 *  floor would hand an unattended agent an escalation protocol addressed to somebody who is not there;
-	 *  falling back to no floor would hand it no guardrails at all. Both failures compile cleanly and look
-	 *  like a working run, which is what makes them worse than a stopped one. A lane asked for and not
-	 *  found is a broken install, and the caller hears about it. */
-	loadBaseLens( opts: { lane?: boolean } = {} ): LensObject | null {
-		if ( opts.lane ) {
-			if ( !fs.existsSync( this.toAbs( InstallManifest.LANE_LENS ) ) )
-				throw new Error(
-					`no lane floor found ( looked for ${ InstallManifest.LANE_LENS } ). A lane compile will not ` +
-					'fall back to the session floor: that floor tells its reader to ask a person for clearance, ' +
-					'and a lane has no person to ask.'
-				);
-			return this.loadLens( InstallManifest.LANE_LENS, { eager: true } );
-		}
-		if ( !fs.existsSync( this.toAbs( InstallManifest.BASE_LENS ) ) ) return null;
-		return this.loadLens( InstallManifest.BASE_LENS, { eager: true } );
+		return Agent.create( { id: Agent.VAULT_AGENT_ID, model: null, lenses } );
 	}
 
 	// ── Authoring / heal ──────────────────────────────────────────────────────
@@ -922,6 +885,7 @@ export class Vault {
 	referenceIssues( onlyFile?: string ): RefIssue[] {
 		const files   = this.scan();
 		const names   = new Set( files.map( f => typeof f.frontmatter[ 'name' ] === 'string' ? f.frontmatter[ 'name' ] as string : '' ) );
+		const ids     = this._idsOf( files );
 		// Only the LIBRARY is graded. A named file is always checked ( the caller asked for it ); a
 		// whole-vault sweep skips scratch space per the registry.
 		const targets = onlyFile
@@ -967,8 +931,30 @@ export class Vault {
 				if ( !names.has( v ) )
 					issues.push( { path: f.relativePath, severity: 'warn', message: `${ key } "${ v }" names no artifact in the vault`, ref: v } );
 			}
+
+			// A DUPLICATED ID IS AN ERROR. The id is the document's identity — an agent names a lens by it — so
+			// two documents carrying one means a record could resolve to either. It is almost always a file
+			// copied in Explorer, which copies the frontmatter with it.
+			const id = f.frontmatter[ 'id' ];
+			if ( typeof id === 'string' && id !== '' ) {
+				const others = ( ids.get( id ) ?? [] ).filter( p => p !== f.relativePath );
+				if ( others.length )
+					issues.push( { path: f.relativePath, severity: 'error', ref: id, message: `id "${ id }" is also carried by ${ others.map( p => `"${ p }"` ).join( ', ' ) } — every document's id must be its own` } );
+			}
 		}
 		return issues;
+	}
+
+	/** Every library document's frontmatter id → the paths carrying it. LIBRARY ONLY: a scratch copy of a lens
+	 *  under `work/` is not a second identity, it is a backup nobody resolves. */
+	private _idsOf( files: ScannedFile[] ): Map<string, string[]> {
+		const ids = new Map<string, string[]>();
+		for ( const f of files ) {
+			const id = f.frontmatter[ 'id' ];
+			if ( typeof id !== 'string' || id === '' || !this.isLibraryPath( f.relativePath ) ) continue;
+			ids.set( id, [ ...( ids.get( id ) ?? [] ), f.relativePath ] );
+		}
+		return ids;
 	}
 
 	/**

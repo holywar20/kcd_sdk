@@ -25,25 +25,20 @@ const FM = ( name: string, type: string ): string =>
 
 const page = ( body: string ): string => `<!DOCTYPE html><html><head><title>x</title></head><body>${ body }</body></html>`;
 
-const LENS = ( name: string, purpose: string, extra = '' ): string => page(
+const REF_ROW = ( ref: string, mode: string ): string =>
+	`<div data-kcd-slot="reference" data-kcd-mode="${ mode }"><span data-kcd-field="what" data-kcd-type="text">${ ref }</span>`
+	+ `<a data-kcd-field="where" data-kcd-type="path" href="_Claude/references/${ ref }.html">${ ref }</a>`
+	+ `<span data-kcd-field="why" data-kcd-type="text">what ${ ref } says</span></div>`;
+
+const LENS = ( name: string, purpose: string, rows = REF_ROW( `${ name }-notes`, 'load' ) ): string => page(
 	`<article data-kcd="lens">${ FM( name, 'lens' ) }<h1>${ name }</h1>`
-	+ '<section data-kcd-region="know"><h2>Know</h2>'
+	+ `<section data-kcd-section="personality"><h3 data-kcd-heading>Personality</h3><p>${ purpose }</p></section>`
+	+ `<section data-kcd-section="philosophy"><h3 data-kcd-heading>Philosophy</h3><p>${ name } believes in its own way.</p></section>`
 	+ '<section data-kcd-section="references"><h3>References</h3><div data-kcd-table>'
 	+ '<div data-kcd-head><span>What</span><span>Where</span><span>Why</span></div>'
-	+ `<div data-kcd-slot="reference" data-kcd-mode="load"><span data-kcd-field="what" data-kcd-type="text">${ name } notes</span>`
-	+ `<a data-kcd-field="where" data-kcd-type="path" href="_Claude/references/${ name }-notes.html">${ name }-notes</a>`
-	+ `<span data-kcd-field="why" data-kcd-type="text">what ${ name } knows</span></div>`
-	+ '</div></section></section>'
-	+ `<section data-kcd-region="care"><h2>Care</h2><section data-kcd-section="purpose"><h3 data-kcd-heading>Purpose</h3><p>${ purpose }</p></section></section>`
-	+ extra
+	+ rows
+	+ '</div></section>'
 	+ '</article>' );
-
-/** A Do table naming a habit — the compiler must ignore it, because behaviour is the agent's. */
-const LENS_HABITS = '<section data-kcd-region="do"><h2>Do</h2><section data-kcd-section="habits"><h3>Habits</h3><div data-kcd-table>'
-	+ '<div data-kcd-head><span>What</span><span>Where</span><span>Why</span></div>'
-	+ '<div data-kcd-slot="habit" data-kcd-mode="load"><span data-kcd-field="what" data-kcd-type="text">lens-habit</span>'
-	+ '<a data-kcd-field="where" data-kcd-type="path" href="_Claude/habits/lens-habit/lens-habit.html">lens-habit</a>'
-	+ '<span data-kcd-field="why" data-kcd-type="text"></span></div></div></section></section>';
 
 const REFERENCE = ( name: string, body: string ): string =>
 	page( `<article data-kcd="reference">${ FM( name, 'reference' ) }<h1>${ name }</h1><p>${ body }</p></article>` );
@@ -65,7 +60,7 @@ const habit = ( rel: string ): KCDPrimitive => KCDPrimitive.fromHtml( readFileSy
 
 beforeEach( () => {
 	root = mkdtempSync( join( tmpdir(), 'kcd-agent-compiler-' ) );
-	put( '_Claude/lenses/alpha/alpha.html', LENS( 'alpha', 'Alpha cares about first things.', LENS_HABITS ) );
+	put( '_Claude/lenses/alpha/alpha.html', LENS( 'alpha', 'Alpha cares about first things.' ) );
 	put( '_Claude/lenses/beta/beta.html', LENS( 'beta', 'Beta cares about second things.' ) );
 	put( '_Claude/lenses/_lens-base.html', LENS( '_lens-base', 'The floor nobody asked for.' ) );
 	put( '_Claude/references/alpha-notes.html', REFERENCE( 'alpha-notes', 'Alpha reference body.' ) );
@@ -91,16 +86,41 @@ function compile() {
 
 describe( 'AgentCompiler', () => {
 
-	it( 'compiles the lenses in order, the first marked primary, each with its Care and its loaded references', () => {
+	it( 'compiles the lenses in order, the first marked primary, each with its loaded references', () => {
 		const { text, lenses } = compile();
 
 		expect( lenses ).toEqual( [ 'alpha', 'beta' ] );
 		expect( text ).toContain( 'The first, alpha, is your persona and overrules the others where they conflict.' );
 		expect( text ).toContain( '## alpha — primary' );
 		expect( text.indexOf( '## alpha — primary' ) ).toBeLessThan( text.indexOf( '## beta' ) );
-		expect( text.indexOf( 'Alpha cares about first things.' ) ).toBeLessThan( text.indexOf( 'Beta cares about second things.' ) );
 		expect( text ).toContain( 'Alpha reference body.' );
 		expect( text ).toContain( 'Beta reference body.' );
+	} );
+
+	it( 'takes the personality from the first lens only — a later lens brings its philosophy, not who it is', () => {
+		const { text } = compile();
+
+		expect( text ).toContain( 'Alpha cares about first things.' );
+		expect( text ).toContain( 'alpha believes in its own way.' );
+		expect( text ).not.toContain( 'Beta cares about second things.' );
+		expect( text ).toContain( 'beta believes in its own way.' );
+	} );
+
+	it( 'rides a reference two lenses share once, as the first lens has it', () => {
+		put( '_Claude/references/shared.html', REFERENCE( 'shared', 'Shared reference body.' ) );
+		put( '_Claude/lenses/gamma/gamma.html', LENS( 'gamma', 'Gamma first.', REF_ROW( 'shared', 'load' ) ) );
+		put( '_Claude/lenses/delta/delta.html', LENS( 'delta', 'Delta second.', REF_ROW( 'shared', 'load' ) ) );
+		put( '_Claude/lenses/shelf/shelf.html', LENS( 'shelf', 'Shelf keeps it on the shelf.', REF_ROW( 'shared', 'on' ) ) );
+
+		const both = AgentCompiler.compile( { name: 'T', habits: [], tools: [],
+			lenses: [ lens( '_Claude/lenses/gamma/gamma.html' ), lens( '_Claude/lenses/delta/delta.html' ) ] } ).text;
+		expect( both.split( 'Shared reference body.' ).length - 1 ).toBe( 1 );
+		expect( both.indexOf( 'Shared reference body.' ) ).toBeLessThan( both.indexOf( '## delta' ) );
+
+		// The first lens's MODE stands: it keeps the reference on the shelf, so a later lens cannot load it.
+		const shelved = AgentCompiler.compile( { name: 'T', habits: [], tools: [],
+			lenses: [ lens( '_Claude/lenses/shelf/shelf.html' ), lens( '_Claude/lenses/delta/delta.html' ) ] } ).text;
+		expect( shelved ).not.toContain( 'Shared reference body.' );
 	} );
 
 	it( 'rides a loaded habit in full and the others as their why-text only', () => {
@@ -124,12 +144,20 @@ describe( 'AgentCompiler', () => {
 		expect( cc.text ).toContain( 'Claude Code decides what you may call' );
 	} );
 
-	it( 'walks no inheritance — no base floor, and none of a lens\'s own habits', () => {
+	it( 'leads with the agent\'s system prompt, above every lens', () => {
+		const { text } = AgentCompiler.compile( { name: 'T', systemPrompt: '  Paths are links.  ', habits: [], tools: [],
+			lenses: [ lens( '_Claude/lenses/alpha/alpha.html' ) ] } );
+
+		expect( text.startsWith( 'Paths are links.' ) ).toBe( true );
+		expect( text.indexOf( 'Paths are links.' ) ).toBeLessThan( text.indexOf( '# Lenses' ) );
+		expect( compile().text.startsWith( '# Lenses' ) ).toBe( true );
+	} );
+
+	it( 'walks no inheritance — no base floor', () => {
 		const { text } = compile();
 
 		expect( text ).not.toContain( '_lens-base' );
 		expect( text ).not.toContain( 'The floor nobody asked for.' );
-		expect( text ).not.toContain( 'lens-habit' );
 		expect( text ).not.toContain( 'Available on request' );
 	} );
 

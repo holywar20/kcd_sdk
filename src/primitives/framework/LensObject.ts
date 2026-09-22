@@ -4,7 +4,6 @@ import { PendingRead } from './PendingRead';
 import { VaultLayout } from '../../core/VaultLayout';
 import { SlotResolver } from './SlotResolver';
 import type { ArtifactType, KCDRole, PolicyEntry, ReaderFn, SerializedArtifact, SerializedLens, SlotMode, TaggedBlock } from '../types';
-import type { Policy, Surface } from '../ToolAccess';
 
 const LENS_DEFAULT_DEPTH = 2;
 
@@ -83,10 +82,9 @@ export class LensObject extends KCDPrimitive {
 	 *  serialize distinctly (they ride the wire but never reach disk). They contribute
 	 *  as always-loaded Know — see getNodes / addInjected. */
 	protected injected: KCDPrimitive[] = [];
-	/** Per-tool three-state inclusion the lens CONTRIBUTES ( `group.tool` → mode ), parsed from the lens's
-	 *  Tools table. Unlike references/habits a tool is not a dredged node, so it lives here, not in `nodes`.
-	 *  Read through `getToolPolicies` / `getToolSurfaces`, which spend the three-state on the agent's two
-	 *  axes at that one seam — the lens keeps the single control because its mode is a document attribute. */
+	/** Per-tool three-state inclusion parsed from the lens's Tools table ( `group.tool` → mode ). Unlike
+	 *  references/habits a tool is not a dredged node, so it lives here, not in `nodes`. Read through
+	 *  `getToolModes` — see there for why nothing downstream composes it onto an agent any more. */
 	protected toolModes: Record<string, SlotMode> = {};
 	protected projectRoot?: string;
 	/** This vault's folder name — see LensLoadOptions.docRoot. Undefined falls back to the default. */
@@ -430,39 +428,19 @@ export class LensObject extends KCDPrimitive {
 		this.injected.push( node );
 	}
 
-	/** The per-tool modes this lens contributes ( `group.tool` → mode ) — the raw authored table. A tool is not
-	 *  a node, so this is its own read, not `getNodes()`. Prefer the two axis readers below; this survives
-	 *  for the authoring surfaces, which still edit the lens's own three-state control. */
+	/**
+	 * The per-tool modes this lens's document TABLE holds ( `group.tool` → mode ) — the raw authored rows. A
+	 * tool is not a node, so this is its own read, not `getNodes()`.
+	 *
+	 * IT CONTRIBUTES NOTHING TO AN AGENT ANY MORE ( Bryan, 2026-09-22 ). Tools belong to the agent ( task 58 )
+	 * and a lens is documentation, so the two derivations that turned these rows into an agent's allowances
+	 * and surfaces are gone. What is left is the authored table itself, still parsed and still editable, for
+	 * the lens surfaces that draw it — and a table the compile no longer reads is a leftover of the document
+	 * format, to be removed from the format on its own pass rather than half-removed here.
+	 */
 	getToolModes(): Record<string, SlotMode> {
 		this.ensureLoaded();
 		return { ...this.toolModes };
-	}
-
-	/**
-	 * THE LENS'S CONTRIBUTION ON EACH AXIS, derived from the one mode it stores.
-	 *
-	 * ── WHY THIS IS A DERIVATION AND NOT A SECOND PAIR OF FIELDS ──
-	 * The agent carries the two axes natively; a LENS still authors the single three-state, because the mode
-	 * is a `data-kcd-mode` attribute on the lens's Tools table and changing that is a document-format break
-	 * across every lens on disk — deliberately deferred, and not worth buying twice. So the diagonal is
-	 * spent HERE, at the one seam between the two shapes, rather than leaving every downstream reader to
-	 * work out which vocabulary it is holding.
-	 *
-	 * `off` → a subtraction. `on` → allowed, one manifest line. `load` → allowed, full schema preloaded.
-	 * The cost half is only meaningful for a tool the lens actually supplies, so a subtracted tool
-	 * contributes no surface at all rather than a surface nothing will read.
-	 */
-	getToolPolicies(): Record<string, Policy> {
-		this.ensureLoaded();
-		return Object.fromEntries( Object.entries( this.toolModes )
-			.map( ( [ id, mode ] ) => [ id, mode === 'off' ? 'off' : 'allow' ] ) );
-	}
-
-	getToolSurfaces(): Record<string, Surface> {
-		this.ensureLoaded();
-		return Object.fromEntries( Object.entries( this.toolModes )
-			.filter( ( [ , mode ] ) => mode !== 'off' )
-			.map( ( [ id, mode ] ) => [ id, mode === 'load' ? 'preload' : 'manifest' ] ) );
 	}
 
 	getRole(): KCDRole { return 'lens'; }

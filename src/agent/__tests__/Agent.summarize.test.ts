@@ -19,7 +19,7 @@ function lens( name: string, path: string, body = '' ): LensObject {
 	} )
 }
 
-const base   = (): LensObject => lens( '_lens-base', '/vault/_Claude/lenses/_lens-base.html', 'B'.repeat( 5_000 ) )
+const studio = (): LensObject => lens( 'studio', '/vault/_Claude/lenses/studio/studio.html', 'S'.repeat( 5_000 ) )
 const render = (): LensObject => lens( 'render', '/vault/_Claude/lenses/render/render.html', 'R'.repeat( 5_000 ) )
 const mcp    = (): LensObject => lens( 'mcp', '/vault/_Claude/lenses/mcp/mcp.html' )
 
@@ -37,14 +37,8 @@ describe( 'Agent.summarize — the roster form', () => {
 		} )
 	} )
 
-	it( 'leaves the auto-appended base lens out of the stack it names', () => {
-		const agent = Agent.create( { id: 'a1', lenses: Agent.withFloor( [ render() ], base() ) } )
-
-		expect( agent.summarize().lensPaths ).toEqual( [ '/vault/_Claude/lenses/render/render.html' ] )
-	} )
-
 	it( 'carries no lens content, however much the stack loaded', () => {
-		const agent = Agent.create( { id: 'a1', lenses: Agent.withFloor( [ render() ], base() ) } )
+		const agent = Agent.create( { id: 'a1', lenses: [ render(), studio() ] } )
 
 		expect( JSON.stringify( agent.serializeForWire() ).length ).toBeGreaterThan( 10_000 )
 		expect( JSON.stringify( agent.summarize() ).length ).toBeLessThan( 200 )

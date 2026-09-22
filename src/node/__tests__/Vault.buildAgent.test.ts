@@ -1,7 +1,7 @@
 import { describe, it, expect } from 'vitest'
 import * as path from 'path'
 import { Vault } from '../Vault'
-import { Agent, InstallManifest } from '../../core'
+import { Agent } from '../../core'
 
 /**
  * `Vault.buildAgent` — the vault face's dumb-agent factory.
@@ -10,7 +10,7 @@ import { Agent, InstallManifest } from '../../core'
  * bytes as one assembled by hand from the same lenses. That is the whole claim of the compiler collapse —
  * that the vault face runs the SAME engine rather than a parallel one — so it is asserted directly rather
  * than inferred from output shape. Everything else here guards a specific way the factory could lie about
- * what it built ( a model it will never run, a name taken from the floor, a floor appended first ).
+ * what it built ( a model it will never run, a lens it was not asked for ).
  *
  * Reads the real project vault, like the ContextAssembly suite: the lens corpus IS the fixture, and a
  * synthetic one would prove the factory works on lenses that don't exist.
@@ -20,7 +20,7 @@ const PROJECT_ROOT = path.resolve( __dirname, '../../../..' )   // kcd_sdk/src/n
 
 const vault = (): Vault => new Vault( PROJECT_ROOT )
 
-/** A lens that exists in this vault and is NOT the floor — the stand-in for "some authored lens". */
+/** Lenses that exist in this vault — the stand-ins for "some authored lens". */
 const LENS = 'render'
 const SECOND = 'mcp'
 
@@ -31,8 +31,8 @@ describe( 'Vault.buildAgent — the dumb-agent factory', () => {
 
 		const built = v.buildAgent( [ LENS, SECOND ] )
 
-		// The hand-built comparison: the same lens objects, loaded the SAME WAY, in the same order, floor
-		// last — assembled directly through Agent.create with no factory involved.
+		// The hand-built comparison: the same lens objects, loaded the SAME WAY, in the same order —
+		// assembled directly through Agent.create with no factory involved.
 		//
 		// EAGER here too, and it is not boilerplate ( ruled 2026-09-17 ). The LOADER is part of what the
 		// factory does: `buildAgent` dredges eagerly because anything that compiles must ( see
@@ -40,13 +40,12 @@ describe( 'Vault.buildAgent — the dumb-agent factory', () => {
 		// difference as an engine one — which is the opposite of what this test is for. It is also the wrong
 		// comparison to want: a non-eager lens dredges nothing, so a `load`-mode slot contributes only its
 		// routing row and loses the whole meaning the 2026-09-12 ruling gave it. The lazy form read clean
-		// only while no lens in the corpus carried a `load` row; the floor's js-style-guide row is what
+		// only while no lens in the corpus carried a `load` row; a js-style-guide `load` row is what
 		// surfaced the asymmetry, as ~15KB of style guide present on one side and absent on the other.
 		const byHand = Agent.create( {
 			lenses: [
 				v.loadLens( v.lensPath( LENS ),   { eager: true } ),
 				v.loadLens( v.lensPath( SECOND ), { eager: true } ),
-				v.loadLens( InstallManifest.BASE_LENS, { eager: true } ),
 			],
 		} )
 
@@ -64,19 +63,10 @@ describe( 'Vault.buildAgent — the dumb-agent factory', () => {
 		for ( const lens of built.lenses ) expect( lens.getNodes().length ).toBeGreaterThan( 0 )
 	} )
 
-	it( 'carries the named lenses in order, with the floor appended LAST', () => {
+	it( 'carries the named lenses in order, and nothing else', () => {
 		const built = vault().buildAgent( [ LENS, SECOND ] )
-		const names = built.lenses.map( l => l.getName() )
 
-		expect( names.slice( 0, 2 ) ).toEqual( [ LENS, SECOND ] )
-		// Floor last, never first: a named lens must PRECEDE base for its own habit to win the class.
-		expect( InstallManifest.isBaseLens( built.lenses[ built.lenses.length - 1 ].getPath() ) ).toBe( true )
-		expect( built.lenses.filter( l => InstallManifest.isBaseLens( l.getPath() ) ) ).toHaveLength( 1 )
-	} )
-
-	it( 'does not double-append the floor when it was asked for by name', () => {
-		const built = vault().buildAgent( [ LENS, InstallManifest.BASE_LENS ] )
-		expect( built.lenses.filter( l => InstallManifest.isBaseLens( l.getPath() ) ) ).toHaveLength( 1 )
+		expect( built.lenses.map( l => l.getName() ) ).toEqual( [ LENS, SECOND ] )
 	} )
 
 	it( 'is honest about what it is: no model, the reserved id, and a name off the authored lens', () => {
@@ -86,9 +76,7 @@ describe( 'Vault.buildAgent — the dumb-agent factory', () => {
 		// would be a lie a later reader acts on.
 		expect( built.model ).toBeNull()
 		expect( built.id ).toBe( Agent.VAULT_AGENT_ID )
-		// The name comes from the authored lens, never the floor it also carries.
 		expect( built.name ).toBe( LENS )
-		expect( built.name ).not.toBe( '_lens-base' )
 	} )
 
 	it( 'binds no environment — a vault cannot source live tools or injections', () => {
@@ -104,9 +92,6 @@ describe( 'Vault.buildAgent — the dumb-agent factory', () => {
 
 		expect( built.isDraft() ).toBe( false )
 		expect( built.primaryLens?.getName() ).toBe( LENS )
-		// domainLenses excludes the inherited floor; lenses includes it.
-		expect( built.domainLenses ).toHaveLength( 1 )
-		expect( built.lenses.length ).toBeGreaterThan( built.domainLenses.length )
 	} )
 
 	it( 'throws on an unresolvable lens name rather than compiling a degraded context', () => {

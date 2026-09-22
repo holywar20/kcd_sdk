@@ -5,7 +5,6 @@ import { ContextAssembler, MANIFEST_SECTIONS } from '../primitives/framework/Con
 import { KcdContext } from '../core/html/KcdContext';
 import type { Command } from '../core/Command';
 import type { SlotRow } from '../core/html/KcdContext';
-import { InstallManifest } from '../core/InstallManifest';
 import { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
 import type { ArtifactType, ContextSegment, PolicyEntry, SegmentKey, SerializedArtifact, SerializedLens, SlotMode, SourceLayer, TaggedBlock } from '../primitives/types';
 
@@ -57,7 +56,7 @@ export interface HabitSlotView {
 	candidates: HabitSlotCandidate[];
 }
 import { DEFAULT_MODEL_KEY } from './Model';
-import { holds, type Policy, type Surface } from '../primitives/ToolAccess';
+import { carries, type ToolMode } from '../primitives/ToolAccess';
 import type { ToolDef } from './ToolDef';
 
 /*
@@ -104,9 +103,9 @@ export interface SerializedAgent {
 	 * The habits this agent HOLDS, as paths — its own, never inherited. A lens supplies no habits to an agent.
 	 *
 	 * THERE IS NO `baseTools` HERE ANY MORE. It was the tool half of this inventory and it never had a
-	 * consumer — `toolPolicies` answers both "does this agent hold it" and "may it run", because those were
-	 * always the same question. Two fields meant two answers that could disagree, on the axis where a
-	 * disagreement is silent permission.
+	 * consumer — `toolModes` answers both "does this agent carry it" and "how much of it rides", because
+	 * those are the only two questions an agent has about a tool. Two fields meant two answers that could
+	 * disagree, on the axis where a disagreement is silent permission.
 	 */
 	baseHabits: string[];
 	/** The held habits whose whole text rides; every other held habit rides as its one-line routing row. Taking
@@ -123,22 +122,22 @@ export interface SerializedAgent {
 	/** Lenses the record names that did not load — see `BrokenLens`. */
 	brokenLenses?: BrokenLens[];
 	/**
-	 * MAY IT RUN — this agent's contribution to the run's passport, keyed by tool IDENTITY ( `group.tool` ).
+	 * WHAT THIS AGENT CARRIES, and how much of each one is put in front of it — keyed by tool IDENTITY
+	 * ( `group.tool` ).
 	 *
-	 * PRESENCE IS THE ALLOWANCE. A tool absent from here and from every lens is denied, because absence and
-	 * deny are one fact rather than two — which is what makes a denial unable to leak: it is not there. There
-	 * is deliberately no second field saying which tools this agent HOLDS, since inclusion and permission
-	 * terminate on the same state and writing both was one concept spelled twice.
+	 * PRESENCE IS THE ANSWER. `off` is never stored: a tool absent from here is not carried, is not minted
+	 * into the passport, and is refused — absence and denial are one fact rather than two, which is what
+	 * makes a denial unable to leak. It is not there.
 	 *
-	 * `allow` is what an add writes, in the same gesture — there is no state a tool sits in waiting to be
-	 * switched on. `ask` is a later, deliberate tightening. `off` is a SUBTRACTION of something a lens
-	 * supplied, and it is spent at assembly rather than carried; see `toolAllowances`. */
-	toolPolicies: Record<string, Policy>;
-
-	/** HOW MUCH OF EACH HELD TOOL RIDES IN THE PROMPT — `manifest` ( a name and a line ) or `preload` ( the
-	 *  whole schema, before the agent asks ). Absent = `manifest`, the cheap answer. Read only for tools that
-	 *  survived assembly: a thing that is not there has no cost to answer for. */
-	toolSurfaces: Record<string, Surface>;
+	 * ONE FIELD, BECAUSE IT IS ONE QUESTION ( Bryan, 2026-09-22 ). This was `toolPolicies` + `toolSurfaces`,
+	 * a permission axis beside a cost axis. An agent has no permission axis: it is a PROTOTYPE, and the run's
+	 * papers are minted from it. What is left is how much of a carried tool rides — a line, or the whole
+	 * schema — which is the same ladder references and habits already wear.
+	 *
+	 * NO `ask` HERE. The confirm question is the passport's and the project's; an agent that could also ask it
+	 * was a second control writing a value only the passport ever read. See `ToolAccess`.
+	 */
+	toolModes: Record<string, ToolMode>;
 	/** Open typed-field bag — composable config, kept LOOSE at the SDK seam (widget SettingFields). */
 	fields: Record<string, unknown>[];
 	/** Management / system configuration (model overrides, runtime knobs). Loose by design. */
@@ -189,8 +188,7 @@ export interface AgentOptions {
 	lenses?: LensObject[];
 	baseHabits?: string[];
 	loadedHabits?: string[];
-	toolPolicies?: Record<string, Policy>;
-	toolSurfaces?: Record<string, Surface>;
+	toolModes?: Record<string, ToolMode>;
 	fields?: Record<string, unknown>[];
 	system?: Record<string, unknown>;
 	folder?: string;
@@ -271,20 +269,6 @@ export type AgentEnvironment = {
 	rootContext?:    string;
 	toolDefs?:       ToolDef[];
 	/**
-	 * WHAT EACH OF THOSE DEFS COSTS, FOR THIS RUN — the host's answer, and it outranks the agent's own.
-	 *
-	 * Bound beside `toolDefs` because it is the same kind of fact: what the run was handed, not what the
-	 * agent is. Its absence is why a surface used to be an agent-wide live setting — one Agent object serves
-	 * many sessions, so a session that chose to preload a tool could not say so without saying it for every
-	 * other session of that agent at the same instant. The host resolves it per run now and binds the
-	 * answer here.
-	 *
-	 * IT IS THE PAPERS' ANSWER, AND NOT WHAT THE REQUEST CARRIES. A host can put a tool on the wire for a
-	 * reason that is not its surface — a person granted it, say — so a mark read off this map would call a
-	 * tool deferred while the request is holding it. That is `runDeferred`'s question, bound beside this.
-	 */
-	runSurfaces?:    Record<string, Surface>;
-	/**
 	 * WHAT THIS RUN DEFERS — the ids it may call that its request does NOT carry, and so exactly the tools
 	 * the manifest marks `[schema on request]`. Bound by the host from the SAME subtraction that decides
 	 * whether the search door rides, so the prompt and the request cannot disagree about which tools need
@@ -325,10 +309,9 @@ export class Agent {
 	/** The held habits that load in full (see SerializedAgent.loadedHabits). */
 	loadedHabits: string[];
 
-	/** MAY IT RUN, by tool identity — presence IS the allowance (see SerializedAgent.toolPolicies). */
-	toolPolicies: Record<string, Policy>;
-	/** What each held tool costs in prompt (see SerializedAgent.toolSurfaces). */
-	toolSurfaces: Record<string, Surface>;
+	/** What this agent carries, and how much of each rides — presence IS the answer (see
+	 *  SerializedAgent.toolModes). */
+	toolModes: Record<string, ToolMode>;
 
 	fields: Record<string, unknown>[];
 	system: Record<string, unknown>;
@@ -342,17 +325,6 @@ export class Agent {
 	composedHabits: string[] = [];
 	composedReferences: string[] = [];
 	composedPlans: string[] = [];
-	/** The tool allowances CONTRIBUTED by the lenses, materialized in compose(). The baseline this agent's
-	 *  own `toolPolicies` overlays, agent-wins-per-tool. Never persisted — rebuilt from the lenses. */
-	composedToolPolicies: Record<string, Policy> = {};
-	/** The lenses' contribution on the COST axis, overlaid the same way and INDEPENDENTLY: an agent that
-	 *  tightens a lens's tool has said nothing about what that tool costs. */
-	composedToolSurfaces: Record<string, Surface> = {};
-
-	/** THE RUN'S surfaces, bound per turn by the host ( `AgentEnvironment.runSurfaces` ) and never persisted.
-	 *  Empty on a composition surface, which has no run to answer for. */
-	runSurfaces: Record<string, Surface> = {};
-
 	/** THE RUN'S deferred set, bound per turn by the host ( `AgentEnvironment.runDeferred` ) and never
 	 *  persisted. NULL — not empty — until a host binds one: empty means "this run defers nothing", and the
 	 *  manifest must be able to tell that apart from "there is no run to ask". */
@@ -473,8 +445,7 @@ export class Agent {
 		lenses: LensObject[],
 		baseHabits: string[],
 		loadedHabits: string[],
-		toolPolicies: Record<string, Policy>,
-		toolSurfaces: Record<string, Surface>,
+		toolModes: Record<string, ToolMode>,
 		fields: Record<string, unknown>[],
 		system: Record<string, unknown>,
 		createdAt: number,
@@ -491,8 +462,7 @@ export class Agent {
 		this.lenses         = lenses;
 		this.baseHabits     = baseHabits;
 		this.loadedHabits   = loadedHabits;
-		this.toolPolicies   = toolPolicies;
-		this.toolSurfaces   = toolSurfaces;
+		this.toolModes      = toolModes;
 		this.fields         = fields;
 		this.system         = system;
 		this.createdAt      = createdAt;
@@ -503,17 +473,14 @@ export class Agent {
 
 	// ── Static entry points ──────────────────────────────────────────────────
 
-	/** Compose an agent. A lensless draft is legal — running is what demands a lens. The unnamed-agent
-	 *  fallback takes the first AUTHORED lens's name, never `lenses[ 0 ]`: the base floor now rides on every
-	 *  agent including a draft ( see `domainLenses` ), and a draft named `_lens-base` would be the floor
-	 *  leaking out as identity. A draft with no name given is just `'agent'`, as it always was. */
+	/** Compose an agent. A lensless draft is legal — running is what demands a lens. An agent with no name
+	 *  given takes its primary lens's, and a draft is just `'agent'`. */
 	static create( opts: AgentOptions = {} ): Agent {
 		const lenses = opts.lenses ?? [];
-		const domain = lenses.filter( ( l ) => !InstallManifest.isBaseLens( l.getPath() ) );
 		return new Agent(
 			opts.id ?? crypto.randomUUID(),
 			opts.projectId ?? '',
-			opts.name ?? domain[ 0 ]?.getName() ?? 'agent',
+			opts.name ?? lenses[ 0 ]?.getName() ?? 'agent',
 			opts.icon ?? null,
 			opts.color ?? null,
 			// `=== undefined`, never `??` — the two differ exactly where it matters. ABSENT means "give me the
@@ -525,8 +492,7 @@ export class Agent {
 			lenses,
 			opts.baseHabits ?? [],
 			opts.loadedHabits ?? [],
-			opts.toolPolicies ?? {},
-			opts.toolSurfaces ?? {},
+			opts.toolModes ?? {},
 			opts.fields ?? [],
 			opts.system ?? {},
 			Date.now(),
@@ -550,8 +516,7 @@ export class Agent {
 			lenses,
 			json.baseHabits ?? [],
 			json.loadedHabits ?? [],
-			json.toolPolicies ?? {},
-			json.toolSurfaces ?? {},
+			json.toolModes ?? {},
 			json.fields ?? [],
 			json.system ?? {},
 			json.createdAt,
@@ -570,7 +535,7 @@ export class Agent {
 	 *  whole fleet of these costs what one row of a table would. */
 	summarize(): AgentSummary {
 		const lensPaths: string[] = [];
-		for ( const lens of this.domainLenses ) {
+		for ( const lens of this.lenses ) {
 			const path = lens.getPath();
 			if ( path ) lensPaths.push( path );
 		}
@@ -601,8 +566,7 @@ export class Agent {
 			systemPrompt:   this.systemPrompt,
 			baseHabits:     [ ...this.baseHabits ],
 			loadedHabits:   [ ...this.loadedHabits ],
-			toolPolicies:   { ...this.toolPolicies },
-			toolSurfaces:   { ...this.toolSurfaces },
+			toolModes:      { ...this.toolModes },
 			fields:         this.fields.map( ( f ) => ( { ...f } ) ),
 			system:         { ...this.system },
 			createdAt:      this.createdAt,
@@ -621,21 +585,15 @@ export class Agent {
 	 * expensive dredge already happened when the lens was loaded), so call it freely: at
 	 * construction, and whenever a base string or a lens changes.
 	 *
-	 * A TOOL IS NOT A DREDGED NODE, so a lens contributes tools as two per-tool maps rather than as paths —
-	 * an ALLOWANCE map and a COST map, read off each lens and overlaid in order. Later lenses override
-	 * earlier ones per tool; this agent's own maps then override all of them ( `toolAllowances()` ).
+	 * NO TOOLS COME OUT OF A LENS. A lens is documentation — personality, philosophy and references — and
+	 * tools belong to the agent ( task 58 ). There were two composed tool maps here, overlaid lens by lens;
+	 * they contributed nothing after that ruling and are gone.
 	 */
 	compose(): void {
 		const nodes = this.lenses.flatMap( ( l ) => l.getNodes() );
 		this.composedReferences = _pathsOfType( nodes, 'reference' );
 		this.composedPlans      = _pathsOfType( nodes, 'plan' );
 		this.composedHabits     = _pathsOfType( nodes, 'habit' );
-		this.composedToolPolicies = {};
-		this.composedToolSurfaces = {};
-		for ( const l of this.lenses ) {
-			Object.assign( this.composedToolPolicies, l.getToolPolicies() );
-			Object.assign( this.composedToolSurfaces, l.getToolSurfaces() );
-		}
 	}
 
 	/**
@@ -650,7 +608,6 @@ export class Agent {
 		if ( env.hostPrompt  !== undefined ) this.hostPrompt  = env.hostPrompt;
 		if ( env.rootContext !== undefined ) this.rootContext = env.rootContext;
 		if ( env.toolDefs    !== undefined ) this.toolDefs    = env.toolDefs;
-		if ( env.runSurfaces !== undefined ) this.runSurfaces = env.runSurfaces;
 		if ( env.runDeferred !== undefined ) this.runDeferred = env.runDeferred;
 		if ( env.searchTool  !== undefined ) this.searchTool  = env.searchTool;
 		if ( env.contributions !== undefined ) this.contributions = env.contributions;
@@ -664,32 +621,31 @@ export class Agent {
 	}
 
 	/**
-	 * THE ALLOWANCES this agent holds — its own `toolPolicies`, with nothing denied surviving.
+	 * THE TOOLS THIS AGENT CARRIES, by identity — the ones at `on` or `preload`, with the mode each is at.
 	 *
-	 * A LENS IS NOT READ HERE. Its tools were merged into the agent's passport once, when the lens was
-	 * authored onto it, and `toolPolicies` mirrors that passport; the agent owns its tools from then on.
-	 * `composedToolPolicies` stays for display — what a lens offers — and grants nothing.
+	 * NOTHING UNCARRIED SURVIVES, so no reader can forget to check. `off` is never stored, but a map written
+	 * by an older build or hand-edited can still hold one, and it is dropped here rather than trusted.
 	 *
-	 * NOTHING UNHELD SURVIVES: a tool at `off` or `deny` is absent, so no reader can forget to check.
+	 * A LENS IS NOT READ HERE, and there is nothing to read: tools belong to the agent.
 	 */
-	toolAllowances(): Record<string, Policy> {
-		const held: Record<string, Policy> = { ...this.toolPolicies };
-		for ( const [ id, policy ] of Object.entries( held ) ) if ( !holds( policy ) ) delete held[ id ];
+	carriedTools(): Record<string, ToolMode> {
+		const held: Record<string, ToolMode> = {};
+		for ( const [ id, mode ] of Object.entries( this.toolModes ) ) if ( carries( mode ) ) held[ id ] = mode;
 		return held;
 	}
 
 	/**
-	 * What one held tool COSTS — the same lens-then-agent overlay on the other axis, resolved per tool because
-	 * that is how every reader asks. INDEPENDENT of the allowance overlay, deliberately: an agent that tightens
-	 * a lens's tool to `ask` has said nothing about what that tool costs, and an override is only ever a
-	 * difference. `manifest` is the answer when nobody has said otherwise.
+	 * HOW MUCH OF ONE TOOL RIDES — `preload` for its whole schema, `on` for its manifest line, `off` for a
+	 * tool this agent does not carry.
 	 *
-	 * THE RUN'S OWN ANSWER COMES FIRST, when a host has bound one. That is the papers the turn is going out
-	 * under, resolved for THIS session rather than for the agent object several sessions share; the two layers
-	 * below it are what a COMPOSITION surface reads, where there is no run to ask. See `runSurfaces`.
+	 * NO RUN LAYER ABOVE IT. A session used to be able to hold its own surfaces, bound per turn by the host,
+	 * because the cost axis lived on the passport. It does not: preload is semantic priming, decided while
+	 * building the agent, and a run in flight can simply call for a schema it turns out to want. One answer,
+	 * from the prototype, for every session of it.
 	 */
-	toolSurfaceFor( id: string ): Surface {
-		return this.runSurfaces[ id ] ?? this.toolSurfaces[ id ] ?? this.composedToolSurfaces[ id ] ?? 'manifest';
+	toolModeFor( id: string ): ToolMode {
+		const mode = this.toolModes[ id ];
+		return mode && carries( mode ) ? mode : 'off';
 	}
 
 	/**
@@ -715,53 +671,6 @@ export class Agent {
 	}
 
 	// ── Lens surface ──────────────────────────────────────────────────────────
-
-	/**
-	 * The AUTHORED lenses — the composed stack minus the inherited base floor, in stack order.
-	 *
-	 * THE distinction this surface exists to draw ( 2026-07-30 ): `lenses` is what COMPILES, `domainLenses`
-	 * is what the agent WEARS. `_lens-base` is inherited, not composed — nobody chose it, every agent has
-	 * it, and it carries no identity — so every question about the agent's own composition ( is it a draft?
-	 * what is its primary? what gets persisted to `agent_lens`? ) has to be asked of this list, never of
-	 * `lenses`. Conflating the two is what kept the base floor OUT of a lensless draft's context: Starmind's
-	 * `Agents.withBase` refused to append base to an empty stack precisely because `isDraft()` read
-	 * `lenses.length`, so appending it would have deployed the draft. With draft-ness asked of the authored
-	 * list instead, base can ride on every agent — including a draft — the way inheritance always meant.
-	 */
-	get domainLenses(): LensObject[] { return this.lenses.filter( l => !InstallManifest.isBaseLens( l.getPath() ) ); }
-
-	/**
-	 * THE base-floor policy — the one place either face decides how the inherited floor joins a lens stack.
-	 *
-	 * The rule, all of it:
-	 *
-	 * - **Appended LAST, never first.** `SlotResolver.compilePlan`'s same-rank tie breaks toward the
-	 *   FIRST-encountered candidate ( every lens collapses to source layer `'lens'`, with no distinct
-	 *   base/primary rank ), so a named lens must PRECEDE base for its own habit to win the class. An
-	 *   authored override beating the floor is the entire point of an override.
-	 * - **Once.** A stack already carrying a floor is returned untouched, so this is safe at every choke
-	 *   point that rebuilds a stack — including ones that start from an already-floored list.
-	 * - **Tolerant.** A null base ( missing or unreadable file ) yields the stack unchanged: a half-installed
-	 *   or hand-built vault still compiles, just without a floor.
-	 *
-	 * `base` is passed IN rather than loaded here because loading needs disk and this class is deliberately
-	 * Node-free — and because the two faces genuinely resolve it differently ( a `Vault` against its own
-	 * root pair, Starmind against the active project's vault path ). What must not differ is the rule, and
-	 * that is what lives here.
-	 *
-	 * CALLER CONTRACT — pass a FRESH instance, never a cached or shared one. A `LensObject` carries mutable
-	 * dredge state ( `setIncluded` flips per-agent ), so one shared base would leak one agent's toggles into
-	 * every other agent wearing the floor.
-	 *
-	 * This exists because the rule was previously spelled once per face, kept in step by a comment asking
-	 * them to agree — and they silently stopped agreeing: Starmind's copy grew an exception that skipped the
-	 * floor for a lensless draft, which the vault-side copy had no way to notice.
-	 */
-	static withFloor( lenses: LensObject[], base: LensObject | null ): LensObject[] {
-		if ( !base ) return lenses;
-		if ( lenses.some( l => InstallManifest.isBaseLens( l.getPath() ) ) ) return lenses;
-		return [ ...lenses, base ];
-	}
 
 	/**
 	 * THE composition surface — every file in this agent's compiled context, priced at what it really costs.
@@ -880,12 +789,11 @@ export class Agent {
 		return out;
 	}
 
-	/** The primary lens — the first AUTHORED lens ( base is never primary ), or null for a draft. */
-	get primaryLens(): LensObject | null { return this.domainLenses[ 0 ] ?? null; }
+	/** The primary lens — the first in the stack, or null for a draft. */
+	get primaryLens(): LensObject | null { return this.lenses[ 0 ] ?? null; }
 
-	/** A draft cannot run: no lens has been COMPOSED onto it yet. Base doesn't count — it is inherited,
-	 *  not chosen, so a base-only agent is still a draft ( it stands on the floor; it has no identity ). */
-	isDraft(): boolean { return this.domainLenses.length === 0; }
+	/** A draft cannot run: no lens has been COMPOSED onto it yet. */
+	isDraft(): boolean { return this.lenses.length === 0; }
 
 	/** The primary lens's path — the agent's path identity — or null for a draft. */
 	getPath(): string | null { return this.primaryLens?.getPath() ?? null; }
@@ -943,12 +851,8 @@ export class Agent {
 	 * The recursive context query as one source-blind string: `getContextBlocks()` run through
 	 * `SlotResolver` ( habit-class contention resolved — a losing log-action-never never rides alongside
 	 * the log-action it lost to ) and `ContextAssembler` ( merged by `data-kcd-merge-key`,
-	 * sorted Care-first / injected-last ). A DRAFT still contributes its inherited base floor — base rides
-	 * on every agent, composed or not ( see `domainLenses` ); the empty-array guard below is the genuinely
-	 * lensless case ( an SDK-built agent, or a vault with no base file ), not draft-ness. ( The `systemPrompt`
-	 * lever rides the wire but is not yet prepended here — that lands with deploy-time assembly; base
-	 * references + tools join once their own resolver seams turn them into objects, the way base habits
-	 * now do. )
+	 * sorted Care-first / injected-last ). A draft contributes nothing. ( The `systemPrompt` lever rides the
+	 * wire but is not prepended here — `wireSystem` folds it in. )
 	 */
 	contribute(): string {
 		if ( !this.lenses.length ) return '';
@@ -972,9 +876,8 @@ export class Agent {
 	 * The body is every loaded artifact's full text, habit-class-resolved ( `SlotResolver` ) then merged
 	 * + sorted ( `ContextAssembler` ), with NO per-artifact header: a loaded file's identity lives once
 	 * in the manifest, its content merges into the body at its point. The legacy `stub` ( Available-on-
-	 * request ) block is dropped — the References table already carries those rows. A draft compiles to its
-	 * inherited base floor alone ( base is on every agent — `domainLenses` ); only a genuinely lensless
-	 * agent compiles to nothing.
+	 * request ) block is dropped — the References table already carries those rows. A draft compiles to
+	 * nothing.
 	 */
 	compile(): string {
 		return Agent.projectSystem( this.compiledBlocks() );
@@ -1336,7 +1239,7 @@ export class Agent {
 		const runDeferred = this.runDeferred;
 		const deferred = ( t: ToolDef ): boolean => runDeferred
 			? runDeferred.includes( t.id! )
-			: this.toolSurfaceFor( t.id! ) === 'manifest';
+			: this.toolModeFor( t.id! ) !== 'preload';
 		const sections = Agent.groupByServer( held ).map( g => {
 			const head = g.doc ? `### ${ g.name }\n${ g.doc }` : `### ${ g.name }`;
 			// Each row names the tool the way the model must CALL it — its wire name, which carries the server.
@@ -1386,7 +1289,7 @@ export class Agent {
 	 *  collision the group segment exists to make impossible. Read off the DEFS rather than off any map's
 	 *  keys, so a setting left behind for a tool no longer served cannot name a tool that is not there. */
 	preloadedToolIds(): string[] {
-		return _heldIds( this.toolDefs ).filter( t => this.toolSurfaceFor( t.id! ) === 'preload' ).map( t => t.id! );
+		return _heldIds( this.toolDefs ).filter( t => this.toolModeFor( t.id! ) === 'preload' ).map( t => t.id! );
 	}
 
 	/** A plain string wrapped as a synthetic wire-order `TaggedBlock` — root context / tool manifest /
@@ -1481,10 +1384,8 @@ export class Agent {
 	/**
 	 * The by-KIND care bands ( compilation pass, 2026-07-19 ) — Purpose and Philosophy each become ONE
 	 * block that MERGES every active lens's contribution as a labeled sub-section, instead of one band per
-	 * lens. The primary lens leads and is marked `( Primary )` ( disputes resolve in its favor ); `_lens-base`
-	 * follows, labeled `Base lens`. This is the true "group by KIND, decouple from source" output — the
-	 * reader sees each identity kind ONCE, its sources folded underneath — where the earlier per-lens
-	 * `# {Name} - Lens` band was a half-step ( it repeated base's care into every lens, the duplicate chips ).
+	 * lens. The primary lens leads and is marked `( Primary )` ( disputes resolve in its favor ). The reader
+	 * sees each identity kind ONCE, its sources folded underneath.
 	 *
 	 * Each merged block is `# {Kind}` over, per contributing lens, `## {label}` over that lens's care prose.
 	 * A care block carries its section's OWN surviving `### heading` ( the `data-kcd-heading` survivor ) —
@@ -1492,21 +1393,15 @@ export class Agent {
 	 * surface in first-appearance order ( Purpose before Philosophy — natural authoring order ). The block
 	 * keeps its first member's care/section tagging ( so it sorts into the care tier and labels as its kind );
 	 * only `text` is synthesized. A care block belonging to no active lens ( an injected-care drop ) rides at
-	 * the tail of its kind, never dropped. A base-only agent shows base AS the lens, unmarked.
+	 * the tail of its kind, never dropped.
 	 */
 	buildCareBands( careBlocks: TaggedBlock[] ): TaggedBlock[] {
-		const norm   = ( s: string ): string => s.replace( /\\/g, '/' );
-		const isBase = ( l: LensObject ): boolean => InstallManifest.isBaseLens( l.getPath() );
-		const reals  = this.domainLenses;
-		const bases  = this.lenses.filter( isBase );
-		// Sub-section order: primary first, then any other real lens, then base last ( labeled "Base lens" ).
-		// A base-only agent ( the SDK `loadBase` construct ) shows base AS the lens, no primary annotation.
-		const ordered  = reals.length ? [ ...reals, ...bases ] : bases;
-		const allPaths = new Set( this.lenses.map( l => norm( l.getPath() ?? '' ) ) );
+		const norm     = ( s: string ): string => s.replace( /\\/g, '/' );
+		const ordered  = this.lenses;
+		const allPaths = new Set( ordered.map( l => norm( l.getPath() ?? '' ) ) );
 
 		const title     = ( k: string ): string => k ? k.charAt( 0 ).toUpperCase() + k.slice( 1 ) : 'Care';
-		const lensLabel = ( l: LensObject ): string =>
-			( isBase( l ) && reals.length ) ? 'Base lens' : `${ l.getName() }${ l === reals[ 0 ] ? ' ( Primary )' : '' }`;
+		const lensLabel = ( l: LensObject ): string => `${ l.getName() }${ l === ordered[ 0 ] ? ' ( Primary )' : '' }`;
 		// Drop a care section's own leading `### {title}` heading ( the survivor of the parser's heading nuke ),
 		// so the `# {Kind}` band above it isn't shadowed by a near-duplicate; everything after it is the prose.
 		const prose = ( text: string ): string => {
@@ -1591,10 +1486,9 @@ export class Agent {
 	 * to prevent, and it failed SILENTLY — nothing errors, the agent simply reads both.
 	 *
 	 * So the contest is settled here over the node INVENTORY, which knows every habit regardless of mode.
-	 * Specificity, most specific first: the agent's own bolted-on habits, then each lens in load order,
-	 * then the inheritance floor — which is last by definition, not by accident. `withFloor` appends it,
-	 * and a floor a lens cannot correct is not a floor, it is a ceiling. Ties inside one rank keep the
-	 * incumbent, so a habit two lenses both declare is one artifact, not a rival of itself.
+	 * Specificity, most specific first: the agent's own bolted-on habits, then each lens in load order.
+	 * Ties inside one rank keep the incumbent, so a habit two lenses both declare is one artifact, not a
+	 * rival of itself.
 	 */
 	displacedHabitPaths(): Set<string> {
 		const norm = ( s: string ): string => s.replace( /\\/g, '/' );
@@ -1614,10 +1508,7 @@ export class Agent {
 		};
 
 		for ( const n of this.baseHabitNodes ) consider( n, 0 );
-		// Stable sort: domain lenses keep their load order, the floor sinks to the end.
-		const ordered = [ ...this.lenses ].sort( ( a, b ) =>
-			Number( InstallManifest.isBaseLens( a.getPath() ) ) - Number( InstallManifest.isBaseLens( b.getPath() ) ) );
-		ordered.forEach( ( lens, i ) => { for ( const n of lens.getNodes() ) consider( n, 1 + i ); } );
+		this.lenses.forEach( ( lens, i ) => { for ( const n of lens.getNodes() ) consider( n, 1 + i ); } );
 
 		const out = new Set<string>();
 		for ( const c of all ) if ( best.get( c.cls )!.path !== c.path ) out.add( c.path );

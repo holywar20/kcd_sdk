@@ -12,6 +12,12 @@ import type { SlotRow } from '../../core/html/KcdContext';
 
 const ROOT = 'C:/fixtures/root';
 
+/** A flat lens body: its references first ( to prove the sort does not follow document order ), then who it is. */
+const LENS_BODY = ( rows: string, personality = 'A fixture personality.' ) =>
+	`<section data-kcd-section="references">\n${ rows }\n</section>\n`
+	+ `<section data-kcd-section="personality">\n<p>${ personality }</p>\n</section>\n`
+	+ '<section data-kcd-section="philosophy">\n<p>A fixture philosophy.</p>\n</section>';
+
 const LENS_HTML = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Fixture Lens</title></head>
 <body>
@@ -24,17 +30,8 @@ const LENS_HTML = `<!DOCTYPE html>
 </dl>
 <h1>Fixture Lens</h1>
 <p>Its identity lede.</p>
-<section data-kcd-region="know">
-<section data-kcd-section="references">
-<div data-kcd-slot="reference" data-kcd-mode="load"><span data-kcd-field="what" data-kcd-type="text">Reference A</span><a data-kcd-field="where" data-kcd-type="path" href="ref-a.html">a</a><span data-kcd-field="why" data-kcd-type="text">reason A</span></div>
-<div data-kcd-slot="reference" data-kcd-mode="load"><span data-kcd-field="what" data-kcd-type="text">Reference B</span><a data-kcd-field="where" data-kcd-type="path" href="ref-b.html">b</a><span data-kcd-field="why" data-kcd-type="text">reason B</span></div>
-</section>
-</section>
-<section data-kcd-region="care">
-<section data-kcd-section="purpose">
-<p>Care identity prose.</p>
-</section>
-</section>
+${ LENS_BODY( '<div data-kcd-slot="reference" data-kcd-mode="load"><span data-kcd-field="what" data-kcd-type="text">Reference A</span><a data-kcd-field="where" data-kcd-type="path" href="ref-a.html">a</a><span data-kcd-field="why" data-kcd-type="text">reason A</span></div>\n'
+	+ '<div data-kcd-slot="reference" data-kcd-mode="load"><span data-kcd-field="what" data-kcd-type="text">Reference B</span><a data-kcd-field="where" data-kcd-type="path" href="ref-b.html">b</a><span data-kcd-field="why" data-kcd-type="text">reason B</span></div>', 'Care identity prose.' ) }
 </article>
 </body></html>
 `;
@@ -164,12 +161,8 @@ describe( 'LensObject.getContextBlocks + ContextAssembler — Phase 2 integratio
 <dt>type</dt><dd data-kcd-field="type" data-kcd-type="enum">lens</dd>
 <dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>
 </dl>
-<section data-kcd-region="know">
-<section data-kcd-section="references">
-<div data-kcd-slot="reference" data-kcd-mode="off"><span data-kcd-field="what" data-kcd-type="text">Disabled Reference</span><a data-kcd-field="where" data-kcd-type="path" href="ref-off.html">off</a><span data-kcd-field="why" data-kcd-type="text">turned off</span></div>
-<div data-kcd-slot="reference"><span data-kcd-field="what" data-kcd-type="text">Default Reference</span><a data-kcd-field="where" data-kcd-type="path" href="ref-on.html">on</a><span data-kcd-field="why" data-kcd-type="text">default on-mode</span></div>
-</section>
-</section>
+${ LENS_BODY( '<div data-kcd-slot="reference" data-kcd-mode="off"><span data-kcd-field="what" data-kcd-type="text">Disabled Reference</span><a data-kcd-field="where" data-kcd-type="path" href="ref-off.html">off</a><span data-kcd-field="why" data-kcd-type="text">turned off</span></div>\n'
+	+ '<div data-kcd-slot="reference"><span data-kcd-field="what" data-kcd-type="text">Default Reference</span><a data-kcd-field="where" data-kcd-type="path" href="ref-on.html">on</a><span data-kcd-field="why" data-kcd-type="text">default on-mode</span></div>' ) }
 </article>
 </body></html>
 `;
@@ -221,11 +214,7 @@ const slotLensHtml = ( mode: 'on' | 'load' ) => `<!DOCTYPE html>
 <dt>type</dt><dd data-kcd-field="type" data-kcd-type="enum">lens</dd>
 <dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>
 </dl>
-<section data-kcd-region="know">
-<section data-kcd-section="references">
-<div data-kcd-slot="reference"${ mode === 'load' ? ' data-kcd-mode="load"' : '' } data-kcd-habit-class="log-action"><span data-kcd-field="what" data-kcd-type="text">log-action</span><a data-kcd-field="where" data-kcd-type="path" href="_Claude/habits/log-action/log-action.html">log-action</a><span data-kcd-field="why" data-kcd-type="text">default</span></div>
-</section>
-</section>
+${ LENS_BODY( `<div data-kcd-slot="reference"${ mode === 'load' ? ' data-kcd-mode="load"' : '' } data-kcd-habit-class="log-action"><span data-kcd-field="what" data-kcd-type="text">log-action</span><a data-kcd-field="where" data-kcd-type="path" href="_Claude/habits/log-action/log-action.html">log-action</a><span data-kcd-field="why" data-kcd-type="text">default</span></div>` ) }
 </article>
 </body></html>
 `;
@@ -313,24 +302,20 @@ const planSlotLensHtml = ( planHref: string ) => `<!DOCTYPE html>
 <dt>type</dt><dd data-kcd-field="type" data-kcd-type="enum">lens</dd>
 <dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>
 </dl>
-<section data-kcd-region="know">
-<section data-kcd-section="references">
-<div data-kcd-slot="reference" data-kcd-mode="load"><span data-kcd-field="what" data-kcd-type="text">context-optimization plan</span><a data-kcd-field="where" data-kcd-type="path" href="${ planHref }">context-optimization</a><span data-kcd-field="why" data-kcd-type="text">the plan this lens tracks</span></div>
-</section>
-</section>
+${ LENS_BODY( `<div data-kcd-slot="reference" data-kcd-mode="load"><span data-kcd-field="what" data-kcd-type="text">context-optimization plan</span><a data-kcd-field="where" data-kcd-type="path" href="${ planHref }">context-optimization</a><span data-kcd-field="why" data-kcd-type="text">the plan this lens tracks</span></div>` ) }
 </article>
 </body></html>
 `;
 
 describe( 'Agent.compile — the context-compiler surface: merged body first, then the manifest at the bottom', () => {
 	const loadBase = (): Agent => {
-		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/_lens-base.html' ), {
+		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/documentation/documentation.html' ), {
 			projectRoot: PROJECT_ROOT, read: ( abs ) => fs.readFileSync( abs, 'utf-8' ), depth: 2
 		} );
 		return Agent.create( { lenses: [ lens ] } );
 	};
 
-	it( 'trails with the manifest: the body leads, then a Files table and the References/Habits tables, each exactly once', () => {
+	it( 'trails with the manifest: the body leads, then a Files table and the References table, each exactly once', () => {
 		const out = loadBase().compile();
 		// The manifest sinks to the bottom ( Bryan, 2026-07-12 ): the body prose leads, the affordance
 		// surface trails. The Files table is the manifest head, so no body text follows it.
@@ -338,10 +323,12 @@ describe( 'Agent.compile — the context-compiler surface: merged body first, th
 		const filesIdx = out.indexOf( '## Files' );
 		expect( filesIdx ).toBeGreaterThan( 0 );
 		expect( out.indexOf( 'Philosophy' ) ).toBeLessThan( filesIdx );   // lens prose precedes the manifest
-		for ( const header of [ '## Files', '## References', '## Habits' ] )
+		for ( const header of [ '## Files', '## References' ] )
 			expect( out.split( header ).length - 1 ).toBe( 1 );   // exactly one occurrence
+		// A lens carries no habits any more — behaviour is the agent's.
+		expect( out ).not.toContain( '## Habits' );
 		// The Files row is the lens's own vault-relative path ( the file ID ), not an absolute OS path.
-		expect( out ).toContain( '(_Claude/lenses/_lens-base.html)' );
+		expect( out ).toContain( '(_Claude/lenses/documentation/documentation.html)' );
 		expect( out ).not.toContain( 'C:/Code' );
 	} );
 
@@ -357,7 +344,7 @@ describe( 'Agent.compile — the context-compiler surface: merged body first, th
 
 describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Phase 1)', () => {
 	const loadBase = (): Agent => {
-		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/_lens-base.html' ), {
+		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/documentation/documentation.html' ), {
 			projectRoot: PROJECT_ROOT, read: ( abs ) => fs.readFileSync( abs, 'utf-8' ), depth: 2
 		} );
 		return Agent.create( { lenses: [ lens ] } );
@@ -475,25 +462,18 @@ describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Ph
 	} );
 } );
 
-describe( 'Know/Care/Do labels are stripped from compiled context — real deployed base lens', () => {
-	it( 'the base lens compiles with no K/C/D region headings, but its sections and slot rows survive', () => {
-		const p = path.join( PROJECT_ROOT, '_Claude/lenses/_lens-base.html' );
+describe( 'a real deployed lens, flat', () => {
+	it( 'compiles with no Know / Care / Do label, and its sections and reference rows survive', () => {
+		const p = path.join( PROJECT_ROOT, '_Claude/lenses/documentation/documentation.html' );
 		const lens = KCDPrimitive.fromHtml( fs.readFileSync( p, 'utf-8' ), p , '_Claude');
 		const joined = lens.getContextBlocks().map( b => b.text ).join( '\n\n' );
 
 		for ( const label of [ 'Know', 'Care', 'Do' ] )
 			expect( joined ).not.toMatch( new RegExp( `^#+\\s+${ label }\\s*$`, 'm' ) );
 
-		// The region intros + placeholder sections are annotated `data-kcd-audience="human"` — kept in the
-		// source for a human reader, dropped from compiled context ( Bryan, 2026-07-12 ).
-		expect( joined ).not.toContain( 'Project-wide stance' );        // Care region intro
-		expect( joined ).not.toContain( 'Universal execution layer' );  // Do region intro
-		expect( joined ).not.toContain( 'No domains at base level' );   // Domains placeholder section
-		expect( joined ).not.toContain( 'no working space of its own' );// Working Space placeholder section
-
-		// Substance is untouched: section headings and the real slot rows still ride.
 		expect( joined ).toMatch( /Philosophy/ );
-		expect( joined ).toContain( 'write-files-scoped' );
+		expect( joined ).toContain( 'kcd_framework' );
+		expect( joined ).not.toContain( 'write-files-scoped' );   // its habits moved to the agents
 	} );
 } );
 
@@ -731,7 +711,7 @@ describe( 'the Grants section reaches the wire, or does not ride at all', () => 
 	// `loadBase` is a per-describe local by convention in this file rather than a file-level helper, so
 	// this block declares its own instead of reaching into a sibling's scope.
 	const loadBase = (): Agent => {
-		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/_lens-base.html' ), {
+		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/documentation/documentation.html' ), {
 			projectRoot: PROJECT_ROOT, read: ( abs ) => fs.readFileSync( abs, 'utf-8' ), depth: 2
 		} );
 		return Agent.create( { lenses: [ lens ] } );

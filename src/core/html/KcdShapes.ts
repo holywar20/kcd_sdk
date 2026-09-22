@@ -133,40 +133,16 @@ export const SHAPES: Record<string, TypeShape> = {
 		],
 	},
 
-	// THE ONE CLOSED TYPE, and closed by evidence rather than preference: thirteen lenses share one
-	// section vocabulary, and the single deviation the check found ( `tools` ) turned out to be a real
-	// gap in this table rather than a drifting document. A lens is the substrate's own composition
-	// surface — an undeclared section here means the compiler silently drops content — so closure buys
-	// something real. Every other type is open.
+	// THE ONE CLOSED TYPE. A lens is information — personality + philosophy + references — and nothing
+	// that changes what an agent DOES: habits, tools and contracts belong to the agent ( plan
+	// agents-own-behaviour ). Flat sections; the Know / Care / Do regions are retired. `KcdValidate.checkLens`
+	// enforces the closure, so a lens in the old shape is refused whole.
 	lens: {
-		purpose: 'A Know + Care pair — a personality. What it loads, what it defends, and how it behaves.',
-		regions: [
-			{
-				name: 'know',
-				hint: 'Read-only inputs: what this lens loads from the knowledge store.',
-				sections: [
-					{ name: 'references', tier: 'expected', slot: 'reference', hint: 'Rows pointing at the references this lens always brings.' },
-					{ name: 'domains',    tier: 'optional', slot: 'reference', hint: 'Rows pointing at code areas this lens owns.' },
-				],
-			},
-			{
-				name: 'care',
-				hint: 'The personality: who this lens is and what it defends.',
-				sections: [
-					{ name: 'purpose',        tier: 'required', hint: 'What this lens governs, and the bet behind it.' },
-					{ name: 'philosophy',     tier: 'required', hint: 'Design stance, push-back style, prerogatives, flags, and what it does NOT do.' },
-					{ name: 'open-questions', tier: 'optional', hint: 'Live unknowns this lens is carrying.' },
-				],
-			},
-			{
-				name: 'do',
-				hint: 'Execution layer: how this lens operates and where its work goes.',
-				sections: [
-					{ name: 'habits',    tier: 'expected', slot: 'habit',    hint: 'Rows naming the habits this lens carries.' },
-					{ name: 'contracts', tier: 'optional', slot: 'contract', hint: 'Rows naming the contracts that bind it.' },
-					{ name: 'tools',     tier: 'optional', slot: 'tool',     hint: 'Rows setting this lens\'s tool exposure; an agent-level override wins over it.' },
-				],
-			},
+		purpose: 'Information for an agent: who it is, what it believes, and what it reads.',
+		sections: [
+			{ name: 'personality', tier: 'required', hint: 'Who this lens is and what it governs. Only the first lens an agent loads supplies one.' },
+			{ name: 'philosophy',  tier: 'required', hint: 'Design stance, push-back style, prerogatives, flags, and what it does NOT do.' },
+			{ name: 'references',  tier: 'expected', slot: 'reference', hint: 'Rows pointing at the documents and code this lens brings — each off, on or load.' },
 		],
 	},
 

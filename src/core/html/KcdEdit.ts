@@ -33,12 +33,11 @@ export const KcdEdit = new class KcdEdit {
 		} );
 	}
 
-	/** The `[data-kcd-table]` under `[data-kcd-region=REGION]` › `[data-kcd-section=SECTION]`, or null —
-	 *  the HtmlTree read of the descendant-combinator selectors the renderer helpers used. */
-	table( root: HtmlEl, region: string, section: string ): HtmlEl | null {
-		const reg = HtmlTree.first( root, ( el ) => HtmlTree.get( el, 'data-kcd-region' ) === region );
-		if( !reg ) return null;
-		const sec = HtmlTree.first( reg, ( el ) => HtmlTree.get( el, 'data-kcd-section' ) === section );
+	/** The `[data-kcd-table]` in `[data-kcd-section=SECTION]`, or null. `region` is a legacy argument: no
+	 *  document carries a region wrapper any more, so a section is found wherever it sits — which also means
+	 *  the Do-region ops ( habits, tools ) find nothing on a lens, and refuse. */
+	table( root: HtmlEl, _region: string, section: string ): HtmlEl | null {
+		const sec = HtmlTree.first( root, ( el ) => HtmlTree.get( el, 'data-kcd-section' ) === section );
 		if( !sec ) return null;
 		return HtmlTree.first( sec, ( el ) => HtmlTree.has( el, 'data-kcd-table' ) );
 	}
@@ -152,6 +151,45 @@ export const KcdEdit = new class KcdEdit {
 		const head = sec.kids.find( ( k ): k is HtmlEl => k.type === 'el' && /^h[1-6]$/.test( k.tag ) );
 		sec.kids = [ ...( head ? [ head ] : [] ), this.el( 'p', {}, [ this.text( text ) ] ) ];
 		return HtmlTree.innerHtml( root );
+	}
+
+	// ── identity ──────────────────────────────────────────────────────────────────
+
+	/**
+	 * Write a document's frontmatter `id`, adding the row after `name` or rewriting the one it has. Null when the
+	 * document already carries exactly this id, or has no frontmatter block to write into.
+	 *
+	 * THE ONE EDIT HERE THAT TAKES THE WHOLE DOCUMENT, and the one that SPLICES rather than re-serializing. Every
+	 * other method rewrites a body the caller is about to save anyway; this one is stamped onto every lens and
+	 * habit in a vault the first time the doc index meets it, and a normalizing rewrite would turn that into a
+	 * whitespace diff across the whole library. Only the id row changes; every other byte is the file's own.
+	 */
+	setId( html: string, id: string ): string | null {
+		const open = /<dl\b[^>]*\bdata-kcd-frontmatter\b[^>]*>/i.exec( html );
+		if( !open ) return null;
+		const close = html.indexOf( '</dl>', open.index );
+		if( close < 0 ) return null;
+		const block = html.slice( open.index, close );
+
+		const held = /(<dd\b[^>]*\bdata-kcd-field=["']id["'][^>]*>)([^<]*)(<\/dd>)/i.exec( block );
+		if( held ) {
+			if( held[ 2 ].trim() === id ) return null;
+			const at = open.index + held.index;
+			return html.slice( 0, at ) + held[ 1 ] + id + held[ 3 ] + html.slice( at + held[ 0 ].length );
+		}
+
+		const row  = `<dt>id</dt><dd data-kcd-field="id" data-kcd-type="text">${ id }</dd>`;
+		const name = /<dd\b[^>]*\bdata-kcd-field=["']name["'][^>]*>[\s\S]*?<\/dd>/i.exec( block );
+		if( !name ) return html.slice( 0, close ) + row + html.slice( close );
+
+		// After the name row, on a line of its own at the name row's indentation — so a hand-formatted block reads
+		// as though the row had always been there. A block written on one line gets its row on one line too.
+		const start  = open.index + name.index;
+		const end    = start + name[ 0 ].length;
+		const inline = !/\n/.test( block );
+		if( inline ) return html.slice( 0, end ) + row + html.slice( end );
+		const indent = /^[\t ]*/.exec( html.slice( html.lastIndexOf( '\n', start ) + 1 ) )![ 0 ];
+		return html.slice( 0, end ) + '\n' + indent + row + html.slice( end );
 	}
 
 	// ── tool ops ( where-LESS slots under the Do region's `tools` section ) ────────

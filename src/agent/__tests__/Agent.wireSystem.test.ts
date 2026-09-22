@@ -30,18 +30,14 @@ const LENS_HTML = `<!DOCTYPE html>
 <dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>
 </dl>
 <h1>Baseline Lens</h1>
-<section data-kcd-region="care">
-<section data-kcd-section="purpose">
+<section data-kcd-section="personality">
 <p>Why this lens exists.</p>
 </section>
 <section data-kcd-section="philosophy">
 <p>What this lens defends.</p>
 </section>
-</section>
-<section data-kcd-region="know">
 <section data-kcd-section="references">
 <div data-kcd-slot="reference" data-kcd-mode="on"><span data-kcd-field="what" data-kcd-type="text">Reference A</span><a data-kcd-field="where" data-kcd-type="path" href="ref-a.html">a</a><span data-kcd-field="why" data-kcd-type="text">when A applies</span></div>
-</section>
 </section>
 </article>
 </body></html>
@@ -71,10 +67,9 @@ function fullAgent(): Agent {
 		lenses:       [ lens ],
 		model:        'test.lorem',
 		systemPrompt: 'The agent own authored instruction.',
-		// ONE OF EACH SURFACE, so the snapshot carries both a manifest line and a preloaded schema — the two
-		// layers this test exists to hold in order. Both are equally permitted; only the cost differs.
-		toolPolicies: { 'srv.probe': 'allow', 'srv.commit': 'allow' },
-		toolSurfaces: { 'srv.commit': 'preload' }
+		// ONE OF EACH MODE, so the snapshot carries both a manifest line and a preloaded schema — the two
+		// layers this test exists to hold in order. Both are equally carried; only how much rides differs.
+		toolModes: { 'srv.probe': 'on', 'srv.commit': 'preload' }
 	} );
 	agent.bindEnv( {
 		hostPrompt:  'The host environment preamble.',
@@ -100,7 +95,8 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 
 	/** Re-pinned 2026-09-15 for two deliberate changes to the tool manifest: the calling rule ( wire names,
 	 *  2026-09-13 ) and the note naming the search tool the host bound ( bug-report-9 ). The agent's name
-	 *  block landed the same day on another machine, and the two were pinned together at the merge. */
+	 *  block landed the same day on another machine, and the two were pinned together at the merge. Re-pinned
+	 *  2026-09-22 for the flat lens: a lens's Purpose is its Personality now ( plan agents-own-behaviour ). */
 	it( 'pins the assembled system half byte-for-byte', () => {
 		expect( fullAgent().wireSystem() ).toMatchInlineSnapshot(`
 			"The host environment preamble.
@@ -120,7 +116,7 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 
 			---
 
-			# Purpose
+			# Personality
 
 			## baseline ( Primary )
 
@@ -180,7 +176,7 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 			  null,
 			  "root-context",
 			  null,
-			  "purpose",
+			  "personality",
 			  "philosophy",
 			  "semantic_memory",
 			  null,
@@ -207,7 +203,7 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 	it( 'pins the budget split, so a block that changes BUCKET is caught as well as one that moves', () => {
 		expect( fullAgent().compiledBudget() ).toMatchInlineSnapshot(`
 			{
-			  "lenses": 128,
+			  "lenses": 129,
 			  "system": 36,
 			  "tools": 140,
 			}
@@ -266,7 +262,7 @@ describe( 'Agent.contextSegments — the breakdown is the wire, decomposed', () 
 			  "system / name",
 			  "system / agent instruction",
 			  "system / root context",
-			  "lens / purpose",
+			  "lens / personality",
 			  "lens / philosophy",
 			  "injection / semantic_memory",
 			  "index / files",

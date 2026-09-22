@@ -199,9 +199,12 @@ export const KcdContext = new class KcdContext {
 				}
 				if ( KcdAddress.isSection( kid ) ) {
 					flushLede();
+					const section = HtmlTree.get( kid, 'data-kcd-section' ) ?? null;
 					out.push( {
-						region,
-						section:  HtmlTree.get( kid, 'data-kcd-section' ) ?? null,
+						// A LENS'S TIER IS DERIVED, now that no lens carries a region wrapper: its references
+						// are what it knows, and everything else — personality, philosophy — is who it is.
+						region:   region === 'care' && section === 'references' ? 'know' : region,
+						section,
 						mergeKey: KcdAddress.mergeKeyOf( kid ),
 						nodes:    [ kid ]
 					} );

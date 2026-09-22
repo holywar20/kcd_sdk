@@ -22,9 +22,9 @@ import type { ReaderFn } from '../../primitives/types'
  */
 
 const ROOT  = resolve( __dirname, '../../../..' )
-const BASE  = join( ROOT, '_Claude', 'lenses', '_lens-base.html' )
-const HOUSE = join( ROOT, '_Claude', 'lenses', 'house', 'house.html' )
-const VAULT = existsSync( BASE ) && existsSync( HOUSE )
+const HOUSE  = join( ROOT, '_Claude', 'lenses', 'house', 'house.html' )
+const RENDER = join( ROOT, '_Claude', 'lenses', 'render', 'render.html' )
+const VAULT  = existsSync( RENDER ) && existsSync( HOUSE )
 
 /** The renderer's cache, in miniature: it answers from what it has been handed, and records anything else as
  *  asked for and "not yet". `land` hands over everything asked for, as a round of fetches would. */
@@ -55,15 +55,15 @@ class LateReader {
 }
 
 function eagerAgent(): Agent {
-	const house = loadLensFromDisk( HOUSE, { projectRoot: ROOT, eager: true } )
-	const base  = loadLensFromDisk( BASE,  { projectRoot: ROOT, eager: true } )
-	return Agent.create( { id: 'probe', name: 'probe', lenses: Agent.withFloor( [ house ], base ) } )
+	const house  = loadLensFromDisk( HOUSE,  { projectRoot: ROOT, eager: true } )
+	const render = loadLensFromDisk( RENDER, { projectRoot: ROOT, eager: true } )
+	return Agent.create( { id: 'probe', name: 'probe', lenses: [ house, render ] } )
 }
 
 function lazyAgent( reader: LateReader ): Agent {
-	const house = LensObject.lazy( HOUSE, { projectRoot: ROOT, eager: true, read: reader.read } )
-	const base  = LensObject.lazy( BASE,  { projectRoot: ROOT, eager: true, read: reader.read } )
-	return Agent.create( { id: 'probe', name: 'probe', lenses: Agent.withFloor( [ house ], base ) } )
+	const house  = LensObject.lazy( HOUSE,  { projectRoot: ROOT, eager: true, read: reader.read } )
+	const render = LensObject.lazy( RENDER, { projectRoot: ROOT, eager: true, read: reader.read } )
+	return Agent.create( { id: 'probe', name: 'probe', lenses: [ house, render ] } )
 }
 
 /** Compose, ask what is missing, hand it over, and go again until nothing is. Answers the rounds it took. */
@@ -94,7 +94,7 @@ describe.skipIf( !VAULT )( 'a lens that reads on access', () => {
 		const reader = new LateReader()
 		const lazy   = lazyAgent( reader )
 
-		expect( lazy.pending().sort() ).toEqual( [ BASE, HOUSE ].sort() )
+		expect( lazy.pending().sort() ).toEqual( [ RENDER, HOUSE ].sort() )
 		expect( settle( lazy, reader ) ).toBe( 2 )
 		expect( lazy.pending() ).toEqual( [] )
 	} )

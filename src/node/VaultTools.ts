@@ -196,11 +196,6 @@ export class VaultTools {
 	compile( args: Record<string, unknown> ): ToolResult {
 		try {
 			const lenses = Array.isArray( args[ 'lenses' ] ) ? ( args[ 'lenses' ] as unknown[] ).map( String ) : [];
-			// NO `lane` HERE, and the absence IS the mechanism. `VaultUtilities.compile` takes a `lane` option
-			// that swaps the inheritance floor for `_lane-base` — the floor authored for an agent running with
-			// nobody in the session. That choice belongs to whoever launches the agent. This tool is driven by
-			// agents, and an agent that can name its own floor can name the lenient one. Picking your own guardrails is not a capability
-			// worth having, so the choice is simply not expressible here.
 			return VaultTools.result( VaultUtilities.compile( this.vault, lenses ) );
 		} catch ( e ) {
 			return VaultTools.error( errorText( e ) );
@@ -661,12 +656,10 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 			'( a bare `parser` maps to `lenses/parser/parser.html`; a vault path is used as-is ) and it ' +
 			'dredges each lens to its OWN authored depth, folds their context blocks together, resolves ' +
 			'habit-class contention, and assembles one context string ( Care-first, manifest tables ). ' +
-			'Multiple lenses compose into one, first = primary. The BASE LENS is always included and cannot ' +
-			'be suppressed — it is the vault\'s inheritance floor ( project-wide stance plus the universal ' +
-			'habits ), appended last so a named lens\'s own habit wins its class. Returns ' +
-			'`{ lenses, text, tokens }`, where `lenses` reports what actually compiled, `_lens-base` ' +
-			'included. This is lens composition only — the live runtime layers ( model root context, active ' +
-			'MCP tool schemas, session memory ) are Starmind\'s job, not the vault\'s. Read-only.',
+			'Multiple lenses compose into one, first = primary. Returns `{ lenses, text, tokens }`, where ' +
+			'`lenses` reports what actually compiled. This is lens composition only — an agent\'s system ' +
+			'prompt, habits and tools, and the live runtime layers ( model root context, active MCP tool ' +
+			'schemas, session memory ), are Starmind\'s job, not the vault\'s. Read-only.',
 		inputSchema: {
 			type:       'object',
 			properties: {

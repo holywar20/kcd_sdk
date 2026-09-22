@@ -42,20 +42,18 @@ describe( 'VaultUtilities.lensView — the composition of a compiled object', ()
 		expect( view().slots.find( s => s.what === 'manifest' ) ).toBeUndefined()
 	} )
 
-	it( 'makes the inherited floor visible with a real weight', () => {
-		// The floor contributes no body of its own — base is care prose plus routing tables — so its cost is
-		// only legible once its share of the merged care band lands on its own row.
-		const floor = view().slots.find( s => s.source === '_lens-base' && s.kind === 'lens' )
+	it( 'charts one lens row — the lens itself, with a real weight, and no floor beside it', () => {
+		const lenses = view().slots.filter( s => s.kind === 'lens' )
 
-		expect( floor ).toBeDefined()
-		expect( floor!.tokens ).toBeGreaterThan( 0 )
+		expect( lenses.map( s => s.source ) ).toEqual( [ 'render' ] )
+		expect( lenses[ 0 ].tokens ).toBeGreaterThan( 0 )
 	} )
 
 	it( 'lists the WHOLE declared inventory — one row per policy entry, plus the lens itself', () => {
 		// No lens in this vault currently declares an `off` slot or an unfilled placeholder, so asserting such
 		// a row EXISTS would only test the corpus. What matters is that nothing gets dropped: every policy
 		// entry a lens declares reaches the chart, whatever its mode.
-		const lens = vault().buildAgent( [ 'render' ] ).domainLenses[ 0 ]
+		const lens = vault().buildAgent( [ 'render' ] ).lenses[ 0 ]
 		const own  = view().slots.filter( s => s.source === 'render' )
 
 		expect( own.length ).toBe( lens.getPolicy().length + 1 )      // + the lens's own row
@@ -76,12 +74,11 @@ describe( 'VaultUtilities.lensView — the composition of a compiled object', ()
 			expect( kinds.lastIndexOf( k ) - firstOf( k ) + 1 ).toBe( kinds.filter( x => x === k ).length )
 	} )
 
-	it( 'reports the mutual-exclusion slot on the files that declare one', () => {
-		// Habits are what use slots today. Two rows sharing a slot means only one reached the compile.
-		const slotted = view().slots.filter( s => s.slot !== '' )
-
-		expect( slotted.length ).toBeGreaterThan( 0 )
-		for ( const s of slotted ) expect( s.kind ).toBe( 'habit' )
+	it( 'reports a mutual-exclusion slot only on a habit — and a lens brings no habits now', () => {
+		// Habits are what use slots, and habits belong to the agent ( plan agents-own-behaviour ): a lens view
+		// carries none, so nothing in it is slotted.
+		for ( const s of view().slots.filter( s => s.slot !== '' ) ) expect( s.kind ).toBe( 'habit' )
+		expect( view().slots.some( s => s.kind === 'habit' ) ).toBe( false )
 	} )
 
 	it( 'names a source on every row', () => {

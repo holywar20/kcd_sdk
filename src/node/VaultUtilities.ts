@@ -66,7 +66,7 @@ export interface CompileResult {
 
 /** The display state of one row in a lens view: its dredge mode, `empty` when nothing fills the slot, or
  *  `fixed` for a row that is not a slot at all — inherited or compiler-synthesized content that rides no
- *  matter what the lens authors ( the floor, the merged care band, the manifest, the structure ).
+ *  matter what the lens authors ( the merged care band, the manifest, the structure ).
  *
  *  DISPLAY-ONLY, and deliberately NOT `SlotMode`. `SlotMode` is the core off/on/load currency the whole
  *  composition UI is built on; this type is consumed only by `lensView`, so a new value here cannot reach
@@ -79,8 +79,7 @@ export interface LensSlot {
 	what:   string;
 	kind:   string;
 	/** Which lens this row's content came from — the inspected lens's own name for its identity and slots,
-	 *  the floor's name for inherited content, `—` for content that merges several sources or belongs to
-	 *  none. The column that makes inherited context legible rather than silently folded into the total. */
+	 *  `—` for content that merges several sources or belongs to none. */
 	source: string;
 	/** The mutual-exclusion slot this row competes in ( `habit-class` ), or '' when it contends nothing.
 	 *  Two rows sharing a slot means only one of them reached the compiled context. */
@@ -92,8 +91,8 @@ export interface LensSlot {
 /** A lens's compiled-context detail — every component with its source, state and real token weight, plus the
  *  total. The structured form behind the `show` chart.
  *
- *  Priced from a BUILT AGENT, so this reports what a session wearing this lens ACTUALLY receives — the floor
- *  included — rather than what the lens alone contributes. `tokens` is the same number `compile` reports for
+ *  Priced from a BUILT AGENT, so this reports what a session wearing this lens ACTUALLY receives. `tokens` is
+ *  the same number `compile` reports for
  *  the same lens, and the rows sum to it exactly. */
 export interface LensView {
 	lens:   string;
@@ -424,31 +423,15 @@ export class VaultUtilities {
 	 *
 	 * Builds a dumb agent ( `Vault.buildAgent` ) and compiles that, so both faces run one engine. The only
 	 * difference between them is the agent's ENVIRONMENT — root context, live MCP tool defs, DB memory —
-	 * which has no vault-side source, so a vault agent never binds it.
-	 *
-	 * A BASE LENS ALWAYS RIDES, with no flag to suppress it: base is an inheritance mechanism, not an
-	 * ingredient, so a compile that drops it is wrong rather than lean. A lens re-declaring part of the
-	 * floor camouflages the missing rest, which is why the rule lives once, in `Agent.withFloor`.
-	 *
-	 * `opts.lane` picks WHICH floor, and is not an exception to that. A lane compile rides `_lane-base`
-	 * instead of `_lens-base` — one floor, still mandatory, still appended last. The two exist because
-	 * they address different readers: the session floor asks its reader to state a path and wait for
-	 * clearance, which is sound advice to somebody sitting with a person and an empty instruction to an
-	 * agent running overnight. A floor whose escalation route does not exist is one an agent learns to
-	 * discount whole, including the parts that did apply.
-	 *
-	 * THE FLAG IS THE CALLER'S, NEVER THE AGENT'S. It is deliberately NOT on the compile tool, which agents
-	 * drive — an agent that can ask for the lane floor can ask for the other one, and picking your own
-	 * guardrails is not a capability worth having. Keep it out of that tool's `inputSchema`; the omission
-	 * is the mechanism.
+	 * which has no vault-side source, so a vault agent never binds it. It compiles the lenses alone: an
+	 * agent's own system prompt, habits and tools are the agent compiler's, not this.
 	 *
 	 * Each name is a bare lens name ( `lenses/{name}/{name}.html` ) or a raw vault-relative path; `[0]` is
 	 * primary. Throws on an empty list or an unresolvable name. The returned `lenses` reports what actually
-	 * COMPILED, base included — reporting only what was asked for is what keeps a missing floor invisible.
-	 * Read off the built agent, so a lens named by raw path reports its artifact NAME.
+	 * COMPILED, read off the built agent, so a lens named by raw path reports its artifact NAME.
 	 */
-	static compile( vault: Vault, lensNames: string[], opts: { lane?: boolean } = {} ): CompileResult {
-		const agent    = vault.buildAgent( lensNames, opts );
+	static compile( vault: Vault, lensNames: string[] ): CompileResult {
+		const agent    = vault.buildAgent( lensNames );
 		const compiled = agent.lenses.map( l => l.getName() );
 		const text     = agent.compile();
 
@@ -456,8 +439,8 @@ export class VaultUtilities {
 	}
 
 	/**
-	 * The composition behind the `show` chart: what a session WEARING this lens receives, file by file,
-	 * inheritance floor included. Priced from the compiled blocks.
+	 * The composition behind the `show` chart: what a session WEARING this lens receives, file by file.
+	 * Priced from the compiled blocks.
 	 *
 	 * A view of the COMPOSITION, not of the text — what the object is built from, what each file costs, and
 	 * which lens brought it, so editing an object and inspecting how it assembles is one loop. A thin
@@ -478,7 +461,7 @@ export class VaultUtilities {
 			throw new Error( `no lens found for "${ name }" ( looked for ${ rel } )` );
 
 		const agent = vault.buildAgent( [ name ] );
-		const lens  = agent.domainLenses[ 0 ];
+		const lens  = agent.lenses[ 0 ];
 		const total = KCDPrimitive._estimateTokens( agent.compile() );
 
 		// A projection, not a second computation — attribution lives on the object that knows the answer.

@@ -2,8 +2,8 @@ export * from './framework';
 export * from './procedure';
 export { KCDParseError, KCDValidationError } from './errors';
 export { SLOT_MODES } from './types';
-export { POLICIES, SURFACES, holds } from './ToolAccess';
-export type { Policy, Surface } from './ToolAccess';
+export { POLICIES, TOOL_MODES, holds, carries, policyForMode } from './ToolAccess';
+export type { Policy, ToolMode } from './ToolAccess';
 export type {
 	ArtifactType,
 	ContextSegment,
