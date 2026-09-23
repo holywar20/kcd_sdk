@@ -161,6 +161,32 @@ describe( 'AgentCompiler', () => {
 		expect( text ).not.toContain( 'Available on request' );
 	} );
 
+	/**
+	 * CONTRACTS ARE THE PROJECT'S ( plan agents-own-behaviour, task 75 ). Every agent holds all of them,
+	 * which is why there is no mode and nothing to author — and why the section appears whether or not the
+	 * agent carries a lens. The roster is derived from `contracts/`, so this pins the shape, not the list.
+	 */
+	it( 'rides the project\'s contracts, each with the trigger it fires on', () => {
+		const { text, contracts } = AgentCompiler.compile( { name: 'T', lenses: [], habits: [], tools: [], contracts: [
+			{ name: 'close', path: 'contracts/close.html', when: 'a task or group of tasks is done' },
+			{ name: 'plan',  path: 'contracts/plan.html',  when: 'a plan is created, promoted, or retired' }
+		] } );
+
+		expect( contracts ).toEqual( [ 'close', 'plan' ] );
+		expect( text ).toContain( '# Contracts' );
+		expect( text ).toContain( '- close — when a task or group of tasks is done' );
+		expect( text ).toContain( '- plan — when a plan is created, promoted, or retired' );
+		// The one instruction a summarised contract would lose, said here rather than in every document.
+		expect( text ).toContain( 'fetched, not compiled' );
+	} );
+
+	it( 'writes no contracts section for a project that holds none', () => {
+		const { text, contracts } = AgentCompiler.compile( { name: 'T', lenses: [], habits: [], tools: [] } );
+
+		expect( contracts ).toEqual( [] );
+		expect( text ).not.toContain( '# Contracts' );
+	} );
+
 	it( 'falls back to the why line for a loaded habit whose file did not load', () => {
 		const { text, habits } = AgentCompiler.compile( { name: 'T', lenses: [], tools: [], habits: [
 			{ name: 'gone', path: 'habits/gone/gone.html', why: 'when it existed', loaded: true, habit: null }

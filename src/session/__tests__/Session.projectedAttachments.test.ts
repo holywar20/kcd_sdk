@@ -103,7 +103,6 @@ describe( 'Session.projectedAttachments', () => {
 			throughTurnId: 'turn-1',
 			summary:       'the first exchange',
 			model:         'test',
-			mode:          'on',
 			tokensIn:      0,
 			tokensOut:     0
 		} ] );

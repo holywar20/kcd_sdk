@@ -327,7 +327,7 @@ export class LensObject extends KCDPrimitive {
 	/** Whether an entry's routing row takes its why from the child — the sentinel cells `resolveWhy` reads through. */
 	private static whyFromChild( entry: PolicyEntry ): boolean {
 		const cell = entry.why.trim().toLowerCase();
-		return cell === '' || cell === 'habit' || cell === 'always';
+		return cell === '' || cell === 'habit';
 	}
 
 	// ── Dredge orchestration ──────────────────────────────────────────────────
@@ -523,15 +523,15 @@ export class LensObject extends KCDPrimitive {
 		return { region: 'know', section: 'stub', mergeKey: null, text: `# Available on request\n\n${ rows }`, sourceLayer: 'lens', path: this.path, artifactType: 'lens', habitClass: null };
 	}
 
-	/** The reason text a routing/stub row shows. The Care-table Why cell is now a tri-state: real
-	 *  hand-written prose is an override and rides as-is; `always`, `habit`, or an empty cell are all
-	 *  "no override" sentinels — Bryan, 2026-07-13 — that DEFER to the target's own declared `why`
+	/** The reason text a routing/stub row shows. The Care-table Why cell is a two-state: real
+	 *  hand-written prose is an override and rides as-is; `habit` and an empty cell are both "no
+	 *  override" sentinels — Bryan, 2026-07-13 — that DEFER to the target's own declared `why`
 	 *  ( `habit` is the authoring default, so most rows never restate a reason at all ). Duck-typed
 	 *  ( `getWhy` ) rather than importing `HabitObject` here — only habits carry this field today, and
 	 *  the check degrades safely for any other artifact type or an unfetched target. */
 	private static resolveWhy( entry: PolicyEntry, node: KCDPrimitive | undefined ): string {
 		const cell = entry.why.trim().toLowerCase();
-		const isSentinel = cell === '' || cell === 'habit' || cell === 'always';
+		const isSentinel = cell === '' || cell === 'habit';
 		if ( !isSentinel ) return entry.why;
 		const getWhy = ( node as unknown as { getWhy?: () => string } | undefined )?.getWhy;
 		const why = typeof getWhy === 'function' ? getWhy.call( node ) : '';

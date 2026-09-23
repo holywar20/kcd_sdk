@@ -162,7 +162,7 @@ const LAYOUT: readonly LayoutEntry[] = [
 	},
 	{
 		dir: 'logs', type: 'unknown', layer: 'data', indexed: false,
-		purpose: 'Session log plus per-lens completed/, todo/, and agent-status/.'
+		purpose: 'Per-lens todo/ and agent-status/, plus raw chat capture. What happened is the action log, a table, not a file here.'
 	},
 	{
 		dir: 'reports', type: 'audit', layer: 'data', indexed: false,

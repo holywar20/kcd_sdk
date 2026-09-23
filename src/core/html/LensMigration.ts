@@ -15,6 +15,9 @@ import { KcdAddress } from './KcdAddress';
  * a person wrote comes across byte for byte; only the scaffolding around it is new. Null for a document that is
  * not a lens or is already flat.
  */
+// The helpers below carry the `_` prefix and NOT `private`. This const is an anonymous-class instance, so
+// declaration emit has no name to write for a private member and refuses the whole build ( TS4094 ). The `_`
+// is the signal a reader acts on either way; `private` here buys nothing and costs `npm run build`.
 export const LensMigration = new class LensMigration {
 
 	flatten( html: string ): string | null {
@@ -66,33 +69,33 @@ export const LensMigration = new class LensMigration {
 
 	// ── internals ────────────────────────────────────
 
-	private _section( name: string, heading: string, body: string[] ): string {
+	_section( name: string, heading: string, body: string[] ): string {
 		if( !body.length ) return '';
 		return [ `<section data-kcd-section="${ name }">`, `\t${ heading }`, ...body.map( ( b ) => b.startsWith( '\t' ) ? b : '\t' + b ), '</section>' ].join( '\n' );
 	}
 
 	/** An element's exact source. */
-	private _span( html: string, el: HtmlEl ): string {
+	_span( html: string, el: HtmlEl ): string {
 		return html.slice( el.start!, el.end! ).trim();
 	}
 
 	/** Where an element's open tag ends. */
-	private _openEnd( html: string, el: HtmlEl ): number {
+	_openEnd( html: string, el: HtmlEl ): number {
 		return html.indexOf( '>', el.start! ) + 1;
 	}
 
 	/** A section's own heading, verbatim — the author's title stands. */
-	private _heading( html: string, sec: HtmlEl ): string {
+	_heading( html: string, sec: HtmlEl ): string {
 		const h = this._firstHeading( sec );
 		return h ? this._span( html, h ) : '';
 	}
 
-	private _firstHeading( sec: HtmlEl ): HtmlEl | undefined {
+	_firstHeading( sec: HtmlEl ): HtmlEl | undefined {
 		return sec.kids.find( ( k ): k is HtmlEl => HtmlTree.isEl( k ) && /^h[1-6]$/.test( k.tag ) );
 	}
 
 	/** What a section says, without its heading: the source between the heading ( or the open tag ) and the close. */
-	private _content( html: string, sec: HtmlEl | null ): string {
+	_content( html: string, sec: HtmlEl | null ): string {
 		if( !sec ) return '';
 		const heading = this._firstHeading( sec );
 		const from    = heading ? heading.end! : this._openEnd( html, sec );
@@ -101,7 +104,7 @@ export const LensMigration = new class LensMigration {
 	}
 
 	/** The frontmatter without its `base` row — a lens inherits from nothing. */
-	private _dropBase( dl: string ): string {
+	_dropBase( dl: string ): string {
 		return dl.replace( /[ \t]*<dt>\s*base\s*<\/dt>\s*<dd\b[^>]*data-kcd-field=["']base["'][^>]*>[^<]*<\/dd>[ \t]*\r?\n?/i, '' );
 	}
 }();

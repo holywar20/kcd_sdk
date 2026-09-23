@@ -553,9 +553,8 @@ export class Vault {
 	 * live routing surfaces and the actual source of the pain — a todo pointing at a retired plan
 	 * three days after a triage declared the repair held.
 	 *
-	 * `logs/session.md` and `logs/{lens}/completed/` are deliberately OUT. Those are historical
-	 * records, and rewriting a path inside a dated entry makes the corpus more consistent and the entry
-	 * less true. A WHITELIST, never a blacklist: a new log sub-folder is out of scope until somebody
+	 * Everything else under `logs/` is deliberately OUT. Those are historical records, and rewriting a
+	 * path inside a dated entry makes the corpus more consistent and the entry less true. A WHITELIST, never a blacklist: a new log sub-folder is out of scope until somebody
 	 * rules it in, which is the safe direction for a verb that writes.
 	 */
 	static readonly LOGS_DIR           = 'logs';

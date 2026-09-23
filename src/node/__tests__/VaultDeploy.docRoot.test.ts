@@ -131,28 +131,6 @@ describe( 'a vault installed under a non-default doc root', () => {
 		expect( seed.payload ).not.toContain( DOC_ROOT );
 	} );
 
-	// ── The entry document's lens table ───────────────────────────────────────
-
-	it( 'computes lens-table hrefs against the real vault', () => {
-		const lensDir = join( root, DOC_ROOT, 'lenses', 'sample' );
-		mkdirSync( lensDir, { recursive: true } );
-		writeFileSync( join( lensDir, 'sample.html' ),
-			`<!DOCTYPE html><html><head><meta charset="utf-8"><title>sample</title></head><body>\n`
-			+ `<article data-kcd="lens">\n`
-			+ `<dl data-kcd-frontmatter>`
-			+ `<dt>name</dt><dd data-kcd-field="name" data-kcd-type="slug">sample</dd>`
-			+ `<dt>description</dt><dd data-kcd-field="description" data-kcd-type="text">A lens.</dd>`
-			+ `<dt>type</dt><dd data-kcd-field="type" data-kcd-type="enum">lens</dd>`
-			+ `<dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>`
-			+ `</dl>\n<h1>sample</h1>\n`
-			+ `<section data-kcd-section="personality"><p>Who it is.</p></section>\n`
-			+ `<section data-kcd-section="philosophy"><p>What it believes.</p></section>\n`
-			+ `</article>\n</body></html>\n` );
-
-		const rows = VaultUtilities.lensIndex( new Vault( root, DOC_ROOT ) );
-		const row  = rows.find( r => r.what === 'sample' );
-		expect( row?.where ).toBe( `${ DOC_ROOT }/lenses/sample/sample.html` );
-	} );
 } );
 
 

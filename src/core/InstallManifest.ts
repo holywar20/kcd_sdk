@@ -54,12 +54,8 @@ const MANIFEST: readonly ManifestEntry[] = [
 		purpose: 'The invocable procedures the bundled lenses and generators are evaluated against.'
 	},
 	{
-		bundleSource: 'references/kcd_sdk', vaultHome: 'references/kcd_sdk', required: true,
-		purpose: 'The protocol and primitives references the framework itself assumes a vault can link to.'
-	},
-	{
-		bundleSource: 'references/how-to', vaultHome: 'references/how-to', required: true,
-		purpose: 'Procedural references the bundled lenses link into by path. Currently read-a-survey, which the documentation lens loads when proposing artifacts for an unfamiliar codebase — the "read this INSTEAD of exploring" instruction that the whole survey-as-anchor design rests on.'
+		bundleSource: 'references', vaultHome: 'references', required: true,
+		purpose: 'Every reference the bundle carries, whatever category it sits in: the protocol and primitives the framework assumes a vault can link to ( `kcd_sdk` ), and the procedural references the bundled lenses and habits link into by path ( `how-to` ). ONE DIRECTORY ROW ON PURPOSE — a row per category meant a canonical reference filed under a new one silently failed to deploy, and the first sign of it was a shipped habit pointing at a link that did not exist in a fresh vault.'
 	},
 	{
 		bundleSource: 'prompts', vaultHome: 'prompts', required: true,

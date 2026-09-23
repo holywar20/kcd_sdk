@@ -804,7 +804,7 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 			'in `<code>`/`<pre>` content or a markdown fence, i.e. quoted speech the corpus uses to teach ' +
 			'agents what to SAY, never rewritten. An empty `edits` alongside an empty `reported` therefore ' +
 			'means nothing pointed at it, not that nothing could be seen. Ephemeral space is swept only ' +
-			'where ruled in ( `logs/*/todo/` ); `logs/session.md` and `completed/` are historical records ' +
+			'where ruled in ( `logs/*/todo/` ); everything else under `logs/` is a historical record ' +
 			'and are left alone. Refuses if `from` is missing or `to` already exists ( structured error ), ' +
 			'and asserts afterward that no rewritable reference still resolves to `from` — a residual ' +
 			'fails loud rather than leaving the vault dangling. Both paths are PathGuard-jailed. ' +

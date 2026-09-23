@@ -51,7 +51,7 @@ function compactThrough( session: Session, turnId: string ): void {
 	const compaction: SessionCompaction = {
 		id: 'c1', sessionId: 'session-1', createdAt: 10,
 		fromTurnId: 'turn-1', throughTurnId: turnId,
-		summary: 'the earlier exchanges', model: 'test', mode: 'on', tokensIn: 0, tokensOut: 0
+		summary: 'the earlier exchanges', model: 'test', tokensIn: 0, tokensOut: 0
 	};
 	session.bindCompactions( [ compaction ] );
 	session.transcript.compactThrough( turnId );

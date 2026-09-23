@@ -540,22 +540,10 @@ export const KEEP_TOOL_RESULT_TURNS = 3;
  * is regenerated on every reload ). `fromTurnId` is what the pass actually READ, which diverges the
  * moment a second compaction reads the first one plus what followed; it feeds display, never the window.
  *
- * `mode` is a two-state, and `'off'` is the one that carries the meaning: an inert compaction stays in
- * the timeline as history, and its summary stops riding to the wire. It was typed `SlotMode` until
- * 2026-09-16 — incidental sharing, never a shared axis, and it made the slot three-state's rename reach
- * a column that has no dredge question to answer ( Bryan: compaction is session-level ).
- *
- * It is NOT an undo, and this block said it was until 2026-08-10. Under the flag model the span the
- * summary covered was marked `compacted: true` + `include: false` by `compactThrough()` and PERSISTED,
- * and nothing re-includes a compacted turn ( the writers that could have are gone with the turn window ).
- * So turning a compaction off drops the summary AND leaves its span dropped — a deliberate
- * "discard this whole stretch", not a recovery. Nothing here deletes a turn from the RECORD; `turnRows()`
+ * The span a summary covers is marked `compacted: true` + `include: false` by `compactThrough()` and
+ * persisted, and nothing re-includes a compacted turn. Nothing deletes a turn from the RECORD; `turnRows()`
  * still shows every one. What is gone is their place in the context sent to the model.
  */
-/** Whether a compaction's summary rides. `off` = inert, history only. No third state: every reader in
- *  both processes tests `=== 'off'` and nothing else. */
-export const COMPACTION_MODES = [ 'off', 'on' ] as const;
-export type CompactionMode = typeof COMPACTION_MODES[number];
 
 export interface SessionCompaction {
 	id:            string;
@@ -565,7 +553,6 @@ export interface SessionCompaction {
 	throughTurnId: string;
 	summary:       string;
 	model:         string;
-	mode:          CompactionMode;
 	tokensIn:      number;
 	tokensOut:     number;
 }
@@ -716,17 +703,42 @@ export function frameFile( name: string, text: string ): string {
 }
 
 /** The one schema this projection understands. A `.sig` declaring anything else keeps its raw body — see
- *  `frameSig`, which explains why that is the safe direction. */
+ *  `projectSig`, which explains why that is the safe direction. */
 const SIG_SCHEMA = 'insight/1';
 
 /**
- * A `.sig` insight graph, projected for the agent: geometry stripped, nodes and edges flattened to a typed
- * edge list. The studio stores rich JSON so the canvas can paint it; this is the lean view the model reads,
- * from the same one file.
+ * A `.sig` insight graph, FRAMED for the wire — the projection below, wrapped as pinned reference material
+ * a person attached. The gutter's door; the agent's own door frames the same body differently ( `sm_file.read` ).
+ *
+ * AN UNKNOWN SCHEMA FALLS BACK TO THE RAW BODY rather than projecting on a guess, and the frame says why.
+ * If the field names move, a projection built on the old ones returns a confidently empty graph — the worst
+ * outcome, because it looks like a document that says nothing. Falling back is bigger and correct, so a
+ * version bump makes this visibly stop instead of quietly emptying.
+ */
+export function frameSig( name: string, text: string ): string {
+	const seen = projectSig( text );
+	if( !seen.ok ) {
+		// NOT JSON AT ALL — it is just a file, and the ordinary file frame is the honest one.
+		if( seen.why === 'not-json' ) return frameFile( name, text );
+		return `[injected file — ${ name } — insight schema ${ seen.schema } is not ${ SIG_SCHEMA }, so it is not projected]\n${ text }`;
+	}
+	if( !seen.nodes && !seen.edges ) return `[injected insight graph — ${ name } — empty: no nodes, no edges]`;
+	return `[injected insight graph — ${ name } — ${ seen.nodes } nodes, ${ seen.edges } edges; layout stripped]\n${ seen.body }`;
+}
+
+/** A `.sig` that was read and understood, or the reason it was not. `not-json` and a foreign `schema` want
+ *  different words from every caller, so the cause travels rather than collapsing into a null. */
+export type SigProjection =
+	| { ok: true; nodes: number; edges: number; body: string }
+	| { ok: false; why: 'not-json' }
+	| { ok: false; why: 'schema'; schema: string };
+
+/**
+ * THE PROJECTION ITSELF, with no frame around it — the lean edge list and its two counts.
  *
  * WHY IT EARNS ITS PLACE: over half of a real `.sig` is `x` / `y` / `w` / `h` / `shape` / `color`, and an
  * edge carries seven pure-rendering fields ( `style`, `dashed`, `color`, `headFrom`, `headTo`, and both
- * anchors ) beside the four that mean anything. Attaching one un-projected ships a picture's pixel
+ * anchors ) beside the four that mean anything. Handing one over un-projected ships a picture's pixel
  * coordinates to the model as if they were content. Measured on the two real documents in this vault:
  * 52% and 64% smaller, and everything removed is something the model could not have used.
  *
@@ -736,22 +748,23 @@ const SIG_SCHEMA = 'insight/1';
  * save six field names. The loose local shape below is the honest amount of type for a glue seam; the
  * shared currency here is the FILE FORMAT, which both sides already speak.
  *
- * AN UNKNOWN SCHEMA FALLS BACK TO THE RAW BODY rather than projecting on a guess. If the field names move,
- * a projection built on the old ones returns a confidently empty graph — the worst outcome, because it
- * looks like a document that says nothing. Falling back is bigger and correct, and the frame says why, so
- * a version bump makes this visibly stop instead of quietly emptying.
+ * Split out from `frameSig` on 2026-09-22, when the agent's own read path was wired to it. A wire message
+ * and a tool result want DIFFERENT frames around the same body: one is pinned reference material a person
+ * attached, the other is an answer to a call the agent made and has to say so, because the file on disk is
+ * JSON and an agent that edits what it read here would be editing text it never saw. One body, two frames,
+ * and the body has one author — the alternative was a second flattener that agrees with this one by
+ * coincidence until the day it does not.
  */
-export function frameSig( name: string, text: string ): string {
+export function projectSig( text: string ): SigProjection {
 	let doc: { schema?: unknown; nodes?: unknown; edges?: unknown };
 	try { doc = JSON.parse( text ) as typeof doc; }
-	catch { return frameFile( name, text ); }   // not JSON at all — it is just a file
+	catch { return { ok: false, why: 'not-json' }; }
 
-	if( doc?.schema !== SIG_SCHEMA )
-		return `[injected file — ${ name } — insight schema ${ String( doc?.schema ?? 'absent' ) } is not ${ SIG_SCHEMA }, so it is not projected]\n${ text }`;
+	if( doc?.schema !== SIG_SCHEMA ) return { ok: false, why: 'schema', schema: String( doc?.schema ?? 'absent' ) };
 
 	const nodes = Array.isArray( doc.nodes ) ? doc.nodes as Record<string, unknown>[] : [];
 	const edges = Array.isArray( doc.edges ) ? doc.edges as Record<string, unknown>[] : [];
-	if( !nodes.length && !edges.length ) return `[injected insight graph — ${ name } — empty: no nodes, no edges]`;
+	if( !nodes.length && !edges.length ) return { ok: true, nodes: 0, edges: 0, body: '' };
 
 	const str  = ( v: unknown ): string => typeof v === 'string' ? v : '';
 	const flat = ( v: unknown ): string => str( v ).replace( /\s*\n\s*/g, ' · ' ).trim();
@@ -788,7 +801,7 @@ export function frameSig( name: string, text: string ): string {
 		lines.push( `- ${ name_( str( e.from ) ) } --[${ rel }]--> ${ name_( str( e.to ) ) }` );
 	}
 
-	return `[injected insight graph — ${ name } — ${ nodes.length } nodes, ${ edges.length } edges; layout stripped]\n${ lines.join( '\n' ) }`;
+	return { ok: true, nodes: nodes.length, edges: edges.length, body: lines.join( '\n' ) };
 }
 
 /**
@@ -1091,19 +1104,14 @@ export class Transcript {
 	}
 
 	/**
-	 * This transcript with the active summary put in FRONT of it — a PURE query exactly as `windowed` is:
+	 * This transcript with the newest summary put in FRONT of it — a PURE query exactly as `windowed` is:
 	 * a new Transcript, nothing mutated and nothing dropped from the original. Compose it after
 	 * windowed( retention ), which reads naturally rather than because the order is load-bearing: the turns
 	 * this summary covers already left, at `compactThrough()` time, and cannot come back.
 	 *
-	 * The NEWEST active compaction wins — an older one covers a prefix of what the newer one covers, since
+	 * The NEWEST compaction wins — an older one covers a prefix of what the newer one covers, since
 	 * the newer pass read the older summary plus everything after it. That is what makes compacting twice
 	 * compose instead of conflict.
-	 *
-	 * `mode: 'off'` skips a compaction, and what that MEANS has changed with the flag model: the summary
-	 * stops riding, and the span it covered stays gone rather than coming back. An inert compaction is a
-	 * deliberate "drop this whole stretch", not an undo — a compacted turn is history, not context, and
-	 * nothing re-includes it.
 	 *
 	 * The summary rides as a synthetic USER turn: it stands in for turns that were BOTH roles, and
 	 * attributing it to the assistant would have the model reading a paraphrase as its own verbatim words.
@@ -1111,10 +1119,7 @@ export class Transcript {
 	 * real turn, so `turnRows()` still shows what actually happened.
 	 */
 	compacted( compactions: SessionCompaction[] ): Transcript {
-		const active = compactions
-			.filter( ( c ) => c.mode !== 'off' )
-			.sort( ( a, b ) => a.createdAt - b.createdAt );
-		const newest = active[ active.length - 1 ];
+		const newest = [ ...compactions ].sort( ( a, b ) => a.createdAt - b.createdAt ).pop();
 		if ( !newest ) return new Transcript( [ ...this.turns ] );
 		// No prefix is cut here any more. The turns a summary covers were marked `include: false` once, by
 		// compactThrough(), so `windowed()` has already dropped them before this runs — there is nothing

@@ -6,12 +6,15 @@ import type { TaggedBlock } from '../primitives/types';
 /**
  * AgentCompiler — an agent's context, built from its record ( plan agents-own-behaviour, task 55 ).
  *
- * An agent is its system prompt, its lenses, its habits and its tools, and that is all this reads. The lenses come in stack
+ * An agent is its system prompt, its lenses, its habits and its tools, plus the contracts its PROJECT
+ * holds, and that is all this reads. The lenses come in stack
  * order, and THE FIRST LOADED WINS: it alone supplies the personality, every later lens adds only its philosophy
  * and its references, and a reference two lenses share stands as the first has it ( see `_lensBlocks` ). A lens's own habit and tool tables are NOT read — behaviour belongs to the agent now, and a
  * lens is documentation. Habits the agent loads ride in full; the rest ride as one line of why, so the agent
  * knows they exist and where to find them. The tools are described, never granted here: what an agent may call
- * is its passport's business, or Claude Code's.
+ * is its passport's business, or Claude Code's. The contracts are the project's rather than the agent's —
+ * every agent holds all of them, derived from `contracts/` so the roster has one home and nothing to
+ * synchronise.
  *
  * IT NEVER WALKS LENS INHERITANCE. No base lens is appended and nothing a lens points at is followed except the
  * references it loads. What the agent is, is what its record names.
@@ -39,12 +42,22 @@ export interface CompileTool {
 	mode?:        ToolMode;
 }
 
+/** One of the PROJECT's contracts. Not the agent's — every agent in a project holds all of them, which is
+ *  why there is no mode here and nothing to author per agent. `when` is the trigger, read from the
+ *  document; the roster is derived from `contracts/`, so there is no second copy to keep in step. */
+export interface CompileContract {
+	name: string;
+	path: string;          // vault-relative — where the agent fetches it
+	when: string;
+}
+
 export interface AgentCompileInput {
 	name:    string;
 	systemPrompt?: string | null;   // the agent's own words — they lead, above every lens
 	lenses:  LensObject[];
 	habits:  CompileHabit[];
 	tools:   CompileTool[];
+	contracts?: CompileContract[];
 	host?:   CompileHost;
 }
 
@@ -54,6 +67,7 @@ export interface AgentCompiled {
 	lenses:  string[];        // what compiled, in order — the first is primary
 	habits:  { loaded: string[]; listed: string[] };
 	tools:   string[];
+	contracts: string[];
 }
 
 /** The Care section a stacked lens still contributes when it is not first. Everything else in its Care is who
@@ -112,6 +126,18 @@ function _toolLine( t: CompileTool ): string {
 	return t.description ? `- ${ t.id } — ${ t.description }` : `- ${ t.id }`;
 }
 
+function _contractLine( c: CompileContract ): string {
+	return c.when ? `- ${ c.name } — when ${ c.when }` : `- ${ c.name }`;
+}
+
+/** How to invoke one, said once here rather than in every contract document. The fetch-whole rule is the
+ *  load-bearing half: a contract summarised on the way in has lost the steps that are the whole point of it. */
+const CONTRACT_NOTE =
+	'A contract is a procedure you follow. Invoke one explicitly as `#name`, or by describing it — "let\'s '
+	+ 'make a plan" invokes plan exactly as `#plan` does. Match the request against the trigger below, then '
+	+ 'fetch it whole with `sm_documentation__get_doc { path: "contracts/{name}.html" }` and read it before '
+	+ 'starting: a contract is fetched, not compiled, and one summarised on the way in has lost its steps.';
+
 export const AgentCompiler = {
 
 	compile( input: AgentCompileInput ): AgentCompiled {
@@ -151,6 +177,13 @@ export const AgentCompiler = {
 			parts.push( habit.join( '\n\n' ) );
 		}
 
+		// EVERY agent gets the project's contracts, whatever lenses it wears — that is what makes `#close`
+		// dependable: a session wraps up the same way regardless of which agent was driving it.
+		const contractRows = input.contracts ?? [];
+		const contracts    = contractRows.map( c => c.name );
+		if ( contractRows.length )
+			parts.push( [ '# Contracts', CONTRACT_NOTE, contractRows.map( _contractLine ).join( '\n' ) ].join( '\n\n' ) );
+
 		const tools = input.tools.map( t => t.id );
 		if ( input.tools.length ) {
 			const note = host === 'claude-code'
@@ -160,6 +193,6 @@ export const AgentCompiler = {
 		}
 
 		const text = parts.join( '\n\n---\n\n' );
-		return { text, tokens: KCDPrimitive._estimateTokens( text ), lenses, habits: { loaded, listed }, tools };
+		return { text, tokens: KCDPrimitive._estimateTokens( text ), lenses, habits: { loaded, listed }, tools, contracts };
 	}
 };

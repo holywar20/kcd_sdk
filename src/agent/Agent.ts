@@ -121,6 +121,8 @@ export interface SerializedAgent {
 	baseHabitNodes?: SerializedArtifact[];
 	/** Lenses the record names that did not load — see `BrokenLens`. */
 	brokenLenses?: BrokenLens[];
+	/** Habits the record names that did not load — see `BrokenHabit`. */
+	brokenHabits?: BrokenHabit[];
 	/**
 	 * WHAT THIS AGENT CARRIES, and how much of each one is put in front of it — keyed by tool IDENTITY
 	 * ( `group.tool` ).
@@ -163,6 +165,30 @@ export interface BrokenLens {
 	message?: string;
 }
 
+/**
+ * A habit an agent's record names that could not be loaded — the habit twin of `BrokenLens`, kept for the
+ * same two reasons: so the agent can say which habit it lost, and so a record write puts the id back
+ * rather than dropping it.
+ *
+ * NO `position`, unlike a lens. A lens stack is ordered — the primary supplies the personality — so a
+ * broken lens has to return to its own place. Habits are a SET, deduped on write, and one habit is never
+ * ahead of another; a position here would be a field that means nothing and drifts.
+ *
+ * `loaded` rides along so a repair restores the habit intact rather than at its why: the record's
+ * `{ id, loaded }` pair survives whole, which is the difference between remembering a habit and
+ * remembering only that there was one.
+ */
+export interface BrokenHabit {
+	/** the doc-index id the record holds */
+	id:       string;
+	/** the habit's last known name, or its id when the index never had one */
+	name:     string;
+	/** whether the record carried it loaded in full */
+	loaded:   boolean;
+	reason:   'missing' | 'invalid';
+	message?: string;
+}
+
 /** The roster form of an Agent — who it is and what it stacks, never loaded content. A list read answers
  *  this; the whole graph is `SerializedAgent`, reached by naming the agent. */
 export interface AgentSummary {
@@ -170,7 +196,8 @@ export interface AgentSummary {
 	projectId: string;
 	name: string;
 	model: string | null;
-	/** The authored lens stack as paths, primary first. The auto-appended base lens is not in it. */
+	/** The lens stack as paths, primary first. Nothing is appended under it — the base lens that used to
+	 *  sit beneath every stack was retired with the flat agent model. */
 	lensPaths: string[];
 }
 
@@ -338,6 +365,9 @@ export class Agent {
 	baseHabitNodes: KCDPrimitive[] = [];
 	/** Lenses the record names that did not load — set by the host that loaded the record. */
 	brokenLenses: BrokenLens[] = [];
+	/** Habits the record names that did not load, or whose file would not read — set by the host. A habit
+	 *  here is NOT in `baseHabits`: the paths are what the agent actually carries, exactly as `lenses` is. */
+	brokenHabits: BrokenHabit[] = [];
 
 	// ── Bound environment: the wire's EXTERNAL layers, injected post-hydration ( `bindEnv` ) ──
 	// The inputs the compiled context needs that aren't the agent's own object graph: the model-bound
@@ -528,6 +558,7 @@ export class Agent {
 		// yet", never a loss.
 		agent.baseHabitNodes = ( json.baseHabitNodes ?? [] ).map( ( n ) => KCDPrimitive.fromSerialized( n ) );
 		agent.brokenLenses   = ( json.brokenLenses ?? [] ).map( ( b ) => ( { ...b } ) );
+		agent.brokenHabits   = ( json.brokenHabits ?? [] ).map( ( b ) => ( { ...b } ) );
 		return agent;
 	}
 
@@ -574,6 +605,7 @@ export class Agent {
 			notes:          this.notes,
 			baseHabitNodes: this.baseHabitNodes.map( ( n ) => n.serialize() ),
 			brokenLenses:   this.brokenLenses.map( ( b ) => ( { ...b } ) ),
+			brokenHabits:   this.brokenHabits.map( ( b ) => ( { ...b } ) ),
 		};
 	}
 

@@ -180,20 +180,7 @@ export interface IgnoreReport {
 	applied:         boolean;
 }
 
-/** One row of the entry document's Lenses table — a real lens's picker identity. */
-export interface LensIndexRow {
-	what:  string;
-	where: string;
-	why:   string;
-}
 
-/** The result of a `lens-index` splice — the recomputed rows, the spliced document, and whether
- *  applying it would actually change anything. */
-export interface LensIndexReport {
-	rows:    LensIndexRow[];
-	html:    string;
-	changed: boolean;
-}
 
 /** The result of a `reset` — a report always, a write only when `applied` is true. */
 export interface ResetReport {
@@ -816,71 +803,6 @@ export class VaultUtilities {
 		if ( changed && opts?.confirm ) fs.writeFileSync( targetAbs, next, 'utf-8' );
 
 		return { target: '.gitignore', scope, entries, targetExisted: existed, hadManagedBlock: hadBlock, changed, applied: !!opts?.confirm && changed };
-	}
-
-	/**
-	 * The entry document's Lenses table, freshly computed from the vault's real lens files —
-	 * `what`/`where`/`why` sourced from each lens's OWN frontmatter, never hand-copied. This is
-	 * deliberately authoritative-over-editorial: a lens's description is the one place its pitch is
-	 * written, and a curated-but-separate copy in the entry document is exactly the kind of thing
-	 * that drifts silently. `_lens-base` ( and any other `_`-prefixed, auto-loaded infrastructure
-	 * lens ) is excluded — it is never picked, it is automatic.
-	 */
-	static lensIndex( vault: Vault ): LensIndexRow[] {
-		return vault.scan()
-			.filter( f => vault.classify( f.path ) === 'lens' )
-			.filter( f => !path.basename( f.relativePath ).startsWith( '_' ) )
-			.map( f => ( {
-				// The FOLDER name, not frontmatter.name — this is the slug `!name` and
-				// `compile_lenses`'s own `lenses/{name}/{name}.html` convention actually resolve. At
-				// least three lenses' authored `name` disagrees with their folder ( hyphen vs.
-				// underscore ) — using frontmatter here would put an unresolvable slug in the one
-				// table whose whole job is telling an agent what to type.
-				what:  path.basename( path.dirname( f.relativePath ) ),
-				where: `${ vault.docRoot }/${ f.relativePath }`.replace( /\\/g, '/' ),
-				why:   typeof f.frontmatter[ 'description' ] === 'string' ? f.frontmatter[ 'description' ] as string : '',
-			} ) )
-			.sort( ( a, b ) => a.what.localeCompare( b.what ) );
-	}
-
-	/**
-	 * Splice freshly-computed rows into the entry document's `data-kcd-section="lenses"` table,
-	 * leaving every other section — hard rules, stacking, framework reference, all hand-authored
-	 * prose — untouched. Locates the table by its OWN structural markers ( the section id, the
-	 * head row, the section's own closing tag ), not a line-number or whitespace assumption, so a
-	 * human editing prose elsewhere in the document cannot break the splice. Throws rather than
-	 * guessing if the section is not found in the expected shape — a silent wrong-place write to a
-	 * hard-rule-protected document is worse than a loud refusal.
-	 */
-	static spliceLensIndex( rootHtml: string, rows: LensIndexRow[] ): LensIndexReport {
-		// This project's entry document is CRLF ( Windows-authored ) — every line-ending match here
-		// is `\r?\n`, and every line the splice EMITS uses `\r\n` too, so the write never mixes
-		// conventions mid-file. A bare `\n` assumption is exactly what broke this on the first real run.
-		const sectionRe = /<section data-kcd-section="lenses">[\s\S]*?<\/section>/;
-		const section    = sectionRe.exec( rootHtml );
-		if ( !section ) throw new Error( 'spliceLensIndex: no <section data-kcd-section="lenses"> found in the entry document' );
-
-		const headRe = /<div data-kcd-head>[\s\S]*?<\/div>\r?\n/;
-		const head   = headRe.exec( section[ 0 ] );
-		if ( !head ) throw new Error( 'spliceLensIndex: found the lenses section but not its table head row' );
-
-		const headEndInSection = head.index + head[ 0 ].length;
-		const closeRe          = /\r?\n(\t*)<\/div>\r?\n(\t*)<\/section>$/;
-		const close             = closeRe.exec( section[ 0 ] );
-		if ( !close ) throw new Error( 'spliceLensIndex: found the lenses table head but not its closing tags' );
-
-		const rendered = rows.map( r =>
-			`\t\t\t<div data-kcd-slot="reference" data-kcd-mode="on">\r\n` +
-			`\t\t\t\t<span data-kcd-field="what"  data-kcd-type="text">${ r.what }</span>\r\n` +
-			`\t\t\t\t<a    data-kcd-field="where" data-kcd-type="path" href="${ r.where }">${ r.what }</a>\r\n` +
-			`\t\t\t\t<span data-kcd-field="why"   data-kcd-type="text">${ r.why }</span>\r\n` +
-			`\t\t\t</div>`
-		).join( '\r\n' );
-
-		const newSection = section[ 0 ].slice( 0, headEndInSection ) + rendered + section[ 0 ].slice( close.index );
-		const html        = rootHtml.slice( 0, section.index ) + newSection + rootHtml.slice( section.index + section[ 0 ].length );
-
-		return { rows, html, changed: html !== rootHtml };
 	}
 
 	/**

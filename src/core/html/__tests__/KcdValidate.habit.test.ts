@@ -145,3 +145,38 @@ describe( 'KcdValidate — a projected field may not defer to a section that is 
 		expect( where ).toEqual( [ 'section:action', 'section:rules' ] );
 	} );
 } );
+
+/**
+ * INCLUSION IS THE AGENT'S, NOT THE DOCUMENT'S ( plan agents-own-behaviour, task 64 ).
+ *
+ * A habit used to be able to declare that it ALWAYS applied, and a lens's habit slot could write
+ * `always` in its Why cell to say the same thing. Both are gone: an agent decides which habits it
+ * holds and which of those load in full, and a habit that is held but not loaded contributes the
+ * `why` text authored here. The document says what it is for; it does not say who gets it.
+ *
+ * The second case is the one that matters. The idiom is absent rather than handled, so nothing in
+ * `checkHabit` would notice its return — what refuses it is the locked frontmatter set, and that is
+ * the guard worth pinning.
+ */
+describe( 'KcdValidate — a habit declares no inclusion of its own', () => {
+
+	it( 'a habit carrying a why and no inclusion field validates clean', () => {
+		const report = KcdValidate.validate( habit( 'plain-habit', `
+			<section data-kcd-section="action"><h3>Action</h3><p>do the thing the why names</p></section>` ) , { docRoot: '_Claude' });
+
+		expect( report.errors ).toEqual( [] );
+		expect( codes( report ) ).toEqual( [] );
+	} );
+
+	it( 'an `always` written back into the frontmatter is REFUSED, not ignored', () => {
+		const withAlways = habit( 'reinstated', `
+			<section data-kcd-section="action"><h3>Action</h3><p>do the thing</p></section>` )
+			.replace(
+				'<dt>status</dt>',
+				'<dt>always</dt><dd data-kcd-field="always" data-kcd-type="enum">true</dd><dt>status</dt>'
+			);
+		const report = KcdValidate.validate( withAlways, { docRoot: '_Claude' } );
+
+		expect( codes( report ) ).toContain( 'unknown-field' );
+	} );
+} );
