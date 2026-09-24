@@ -1,4 +1,5 @@
 import { HtmlTree, type HtmlEl, type HtmlNode } from './HtmlTree';
+import { KcdSynth } from './KcdSynth';
 
 /**
  * KcdEdit — the pure slot-mutation head of the parser family, the composition-editing twin of KcdExcise
@@ -150,6 +151,57 @@ export const KcdEdit = new class KcdEdit {
 		if( !sec ) return null;
 		const head = sec.kids.find( ( k ): k is HtmlEl => k.type === 'el' && /^h[1-6]$/.test( k.tag ) );
 		sec.kids = [ ...( head ? [ head ] : [] ), this.el( 'p', {}, [ this.text( text ) ] ) ];
+		return HtmlTree.innerHtml( root );
+	}
+
+	// ── section prose ─────────────────────────────────────────────────────────────
+
+	/**
+	 * One section's inner markup, WITHOUT its heading — the editable buffer behind "edit lens text".
+	 * Null when the document carries no such section, which is how a caller tells "not here" from "here
+	 * and empty" ( a section that exists but holds nothing answers `''` ).
+	 *
+	 * HTML OUT, NOT PROSE, and that is the whole design of this pair. Going the other way — projecting
+	 * the markup down to plain text for editing — would mean every save round-tripped a lens through a
+	 * lossy flattening, and the loss would be silent: a table, a nested list, an `<a>` in a philosophy
+	 * paragraph would survive being READ and vanish on being WRITTEN. So the buffer is the markup, and
+	 * `setSection` passes authored markup straight back through ( `proseToHtml` only converts input that
+	 * is NOT already block HTML ). Read-then-write with no change is a no-op, which is the property that
+	 * makes an editor on this safe.
+	 *
+	 * The heading comes off because `setSection` puts it back — it is the section's name rendered, not
+	 * content, and an editor that showed it would invite someone to rename a section by retyping a word,
+	 * which is not what that would do.
+	 */
+	sectionProse( body: string, section: string ): string | null {
+		const root = HtmlTree.parse( body );
+		const sec  = HtmlTree.first( root, ( el ) => HtmlTree.get( el, 'data-kcd-section' ) === section );
+		if( !sec ) return null;
+		const kids = sec.kids.filter( ( k ) => !( k.type === 'el' && /^h[1-6]$/.test( k.tag ) ) );
+		return HtmlTree.innerHtml( { type: 'el', tag: 'div', attrs: {}, kids } ).trim();
+	}
+
+	/**
+	 * Rewrite one section's prose, keeping its heading and its place. Takes either plain text or authored
+	 * block HTML — `KcdSynth.proseToHtml` decides which, by the same crude-but-safe test every authoring
+	 * path uses, so a human typing paragraphs and an agent emitting `<p>` land identically.
+	 *
+	 * Null when the section does not exist, or when the text is blank. BLANK IS A REFUSAL RATHER THAN A
+	 * CLEAR: an empty section trips the validator's own `empty-section` rule, so writing one would produce
+	 * a draft that cannot be saved — a failure discovered at Save, far from the keystroke that caused it.
+	 * Removing a section is a different act and does not belong on the text-editing op.
+	 *
+	 * NOT A VALIDATION GATE. This shapes one section; whether the DOCUMENT still stands is `KcdValidate`'s
+	 * question at save, and it stays the only one asking — the same division `KcdSynth` documents.
+	 */
+	setSection( body: string, section: string, prose: string ): string | null {
+		const html = KcdSynth.proseToHtml( prose );
+		if( !html ) return null;
+		const root = HtmlTree.parse( body );
+		const sec  = HtmlTree.first( root, ( el ) => HtmlTree.get( el, 'data-kcd-section' ) === section );
+		if( !sec ) return null;
+		const head = sec.kids.find( ( k ): k is HtmlEl => k.type === 'el' && /^h[1-6]$/.test( k.tag ) );
+		sec.kids = [ ...( head ? [ head ] : [] ), ...HtmlTree.parse( html ).kids ];
 		return HtmlTree.innerHtml( root );
 	}
 

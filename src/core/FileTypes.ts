@@ -66,4 +66,12 @@ export type GrepScan = {
 	 *  directory down. A hit that teaches the wrong rule is worse than a miss, and this number is what
 	 *  lets the refusal say `**\/App.vue` instead of "widen your glob". */
 	nearMisses: number
+	/** The root was a FILE, not a directory — a legitimate search of exactly one file.
+	 *
+	 *  Carried because it is the only thing that tells an empty result from a misaimed one: every other
+	 *  number here reads identically for "a directory holding nothing searchable" and "a path that is
+	 *  not a directory at all", and the second used to be reported as the first. A caller that says
+	 *  "nothing under this root" about a single .png has told the user to go and check a path that was
+	 *  perfectly correct. */
+	rootIsFile: boolean
 }

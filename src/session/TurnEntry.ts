@@ -821,6 +821,24 @@ export function framePointer( name: string, path?: string ): string {
 }
 
 /**
+ * How an IMAGE reads on a lane that cannot carry one — and it needed its own form, because every clause
+ * `framePointer` adds after the path is wrong for an image.
+ *
+ * "Read it if you need its contents" is the part that had to go. A read of an image answers with base64 as
+ * prose: unreadable to the model, and large enough to displace the context it was meant to add. On a tier
+ * whose built-ins are stripped there is not even a second tool that could do better. So the advice was not
+ * merely unhelpful, it was a loop with no exit — and an agent that follows it spends a call and a window to
+ * arrive back here.
+ *
+ * What replaces it is the reason. A model told the lane cannot show it an image asks the person to describe
+ * it, which is a good turn; a model told to go and read it cannot discover otherwise until it has paid.
+ */
+export function frameImagePointer( name: string, path?: string ): string {
+	return `[image — ${ name }${ path ? ` at ${ path }` : '' } — NOT SHOWN: this model cannot receive images, `
+		+ 'and reading the file returns base64, not a picture. Ask the person to describe it.]';
+}
+
+/**
  * How a FAILED injection reads — the file was asked for and could not be read.
  *
  * The model is TOLD, deliberately. A user who injects a file and gets silence reasonably assumes it
@@ -1340,7 +1358,7 @@ export class Transcript {
 								this._appendBlock( messages, 'user', { type: 'image', mediaType: entry.mediaType, data: entry.contents } );
 								break;
 							}
-							this._appendBlock( messages, 'user', { type: 'text', text: framePointer( entry.name, entry.path ) } );
+							this._appendBlock( messages, 'user', { type: 'text', text: frameImagePointer( entry.name, entry.path ) } );
 							break;
 						}
 						this._appendBlock( messages, 'user', { type: 'text', text: Transcript._grantText( entry, isLiveTurn ) } );

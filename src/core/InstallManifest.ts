@@ -71,7 +71,7 @@ const MANIFEST: readonly ManifestEntry[] = [
 	},
 	{
 		bundleSource: 'agent-defaults.json', vaultHome: 'agent-defaults.json', required: true,
-		purpose: 'The shipped agents — Basic, Lane and Lens Crafter — named in strings: their lenses, system prompt, habits and tools. The project\'s own copy, edited by a person; its agents follow it at the next load. Laid down here so the entry document\'s link to it resolves from the first open, before the agents are seeded.'
+		purpose: 'The shipped agents — Lens Crafter and Lane — named in strings: their lenses, system prompt, habits and tools. The project\'s own copy, edited by a person; its agents follow it at the next load. Laid down here so the entry document\'s link to it resolves from the first open, before the agents are seeded.'
 	},
 	{
 		bundleSource: 'root-context.html', vaultHome: 'root-context.html', required: true,

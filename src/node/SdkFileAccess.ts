@@ -107,7 +107,10 @@ export type GrepScanOptions = {
 	/** Only search files whose path, relative to the root, matches this glob. Omitted searches every text
 	 *  file under it. Narrows WHICH FILES ARE OPENED, never which directories are walked — an extension
 	 *  filter cannot be turned into a prune, because the directory holding a match is unknown until the
-	 *  walk reaches it. */
+	 *  walk reaches it.
+	 *
+	 *  IGNORED WHEN THE ROOT IS A FILE: a filter over a set of one narrows nothing, and honouring it
+	 *  would let a leftover pattern silently empty a search the caller aimed by hand. */
 	glob?:            string
 	/** Largest file to open, in bytes. Default GREP_READ_BYTES. */
 	maxBytes?:        number
@@ -373,6 +376,10 @@ export class SdkFileAccess {
 	/**
 	 * LITERAL content search under one root — walk, open, match, one row per matching LINE.
 	 *
+	 * ── THE ROOT MAY BE A FILE ──
+	 * A directory is walked; a single file is searched directly and reported with `rootIsFile`. Both are
+	 * ordinary uses, and the second used to be indistinguishable from a bad path — see the branch.
+	 *
 	 * ── WHY THIS IS NOT `glob` + READ ──
 	 * It was, and on a real project it silently returned the wrong answer. `glob` descends into every
 	 * directory unconditionally and stops at GLOB_CAP matches; pointed at a project root, it spends its
@@ -393,7 +400,7 @@ export class SdkFileAccess {
 	 */
 	async grepText( root: string, query: string, opts: GrepScanOptions = {}, token: SearchToken = { cancelled: false } ): Promise<GrepScan> {
 		const rows: GrepRow[] = []
-		if( !query || token.cancelled ) return { rows, searched: 0, capped: false, cancelled: token.cancelled, candidates: 0, nearMisses: 0 }
+		if( !query || token.cancelled ) return { rows, searched: 0, capped: false, cancelled: token.cancelled, candidates: 0, nearMisses: 0, rootIsFile: false }
 
 		// Fold the needle ONCE here rather than per line. Every comparison below is against this value,
 		// so a caller passing `caseInsensitive` never pays for the fold in the inner loop.
@@ -421,6 +428,60 @@ export class SdkFileAccess {
 		// A single unweighted counter tuned for the walk yields far too rarely once the reads begin.
 		let budget = 0
 
+		/** Open one candidate and take its matching lines. TRUE when the file was actually read, which is
+		 *  what `searched` counts — unstattable, empty, oversized and unreadable are all skips, not
+		 *  searches. Sets `capped` when it stops early. A closure rather than a method because every
+		 *  ceiling it honours is already in scope here; passed as parameters they would be eight
+		 *  arguments restating what one line above already says. */
+		const scanFile = ( full: string ): boolean => {
+			let size: number
+			try { size = statSync( full ).size }
+			catch( err ) { this._warn( 'grep_stat_failed', { path: full, message: this._msg( err ) } ); return false }
+			if( size === 0 || size > maxBytes ) return false
+
+			let body: string
+			try { body = String( readFileSync( full, 'utf-8' ) ) }
+			catch( err ) { this._warn( 'grep_read_failed', { path: full, message: this._msg( err ) } ); return false }
+
+			let hits = 0
+			const lines = body.split( /\r?\n/ )
+			for( let i = 0; i < lines.length; i++ ) {
+				if( hits >= maxFile || rows.length >= maxRows ) { capped = true; break }
+				const line = lines[ i ] ?? ''
+				if( !_lineHas( line, needle, fold, opts.wholeWord === true ) ) continue
+				hits += 1
+				// THE LINE IS TRUNCATED, NOT THE MATCH DROPPED. A generated file that slipped past
+				// every filter above would otherwise ship one 400 KB "line" and eat the whole result.
+				rows.push( { path: full, line: i + 1, text: line.length > GREP_LINE_CHARS ? line.slice( 0, GREP_LINE_CHARS ) + ' …' : line } )
+			}
+			return true
+		}
+
+		// ── A FILE IS A LEGITIMATE ROOT ──
+		// Searching one known file is the first thing anybody asks of a grep, and it used to land in the
+		// walk below: `readdirSync` threw ENOTDIR, the throw was swallowed as an unreadable directory, and
+		// the caller was handed "nothing under this root is searchable text — check the path" for a path
+		// that was exactly right. Handled here rather than refused, because refusing would still be a
+		// caller doing the obvious thing and being told no.
+		//
+		// THE GLOB IS NOT CONSULTED. A filter over a set of one narrows nothing, and honouring it would
+		// let a leftover `glob` silently empty a search the caller aimed by hand — the same class of
+		// wrong answer this branch exists to end. The noise and deny rules DO still apply: they are
+		// about what may be opened, which one explicit path does not overrule.
+		// Stat'd here rather than through `this.stat`, which warns on a miss: a root that does not exist is
+		// the WALK's to report, exactly as it always has, and a `stat_failed` line beside it would make one
+		// bad path look like two separate faults.
+		let rootIsFile = false
+		try { rootIsFile = !statSync( root ).isDirectory() } catch { /* missing or unreadable — the walk says so */ }
+		if( rootIsFile ) {
+			const searchable = ( !noise || !Noise.skipsFile( basename( root ) ) )
+				&& TextTypes.isText( root )
+				&& !Blacklist.excludes( root, deny )
+			if( !searchable ) return { rows, searched: 0, capped: false, cancelled: false, candidates: 0, nearMisses: 0, rootIsFile: true }
+			const read = scanFile( root )
+			return { rows, searched: read ? 1 : 0, capped, cancelled: false, candidates: 1, nearMisses: 0, rootIsFile: true }
+		}
+
 		while( stack.length > 0 ) {
 			const dir = stack.pop() as string
 
@@ -437,7 +498,7 @@ export class SdkFileAccess {
 				budget  += 1
 				if( visited > GREP_WALK_CAP ) {
 					this._warn( 'grep_walk_capped', { root, query, cap: GREP_WALK_CAP } )
-					return { rows, searched, capped: true, cancelled: false, candidates, nearMisses }
+					return { rows, searched, capped: true, cancelled: false, candidates, nearMisses, rootIsFile: false }
 				}
 
 				const full = join( dir, d.name )
@@ -469,45 +530,26 @@ export class SdkFileAccess {
 				}
 				if( Blacklist.excludes( full, deny ) ) continue
 
-				let size: number
-				try { size = statSync( full ).size }
-				catch( err ) { this._warn( 'grep_stat_failed', { path: full, message: this._msg( err ) } ); continue }
-				if( size === 0 || size > maxBytes ) continue
-
-				let body: string
-				try { body = String( readFileSync( full, 'utf-8' ) ) }
-				catch( err ) { this._warn( 'grep_read_failed', { path: full, message: this._msg( err ) } ); continue }
+				if( !scanFile( full ) ) continue
 				searched += 1
 				budget   += GREP_READ_COST
-
-				let hits = 0
-				const lines = body.split( /\r?\n/ )
-				for( let i = 0; i < lines.length; i++ ) {
-					if( hits >= maxFile || rows.length >= maxRows ) { capped = true; break }
-					const line = lines[ i ] ?? ''
-					if( !_lineHas( line, needle, fold, opts.wholeWord === true ) ) continue
-					hits += 1
-					// THE LINE IS TRUNCATED, NOT THE MATCH DROPPED. A generated file that slipped past
-					// every filter above would otherwise ship one 400 KB "line" and eat the whole result.
-					rows.push( { path: full, line: i + 1, text: line.length > GREP_LINE_CHARS ? line.slice( 0, GREP_LINE_CHARS ) + ' …' : line } )
-				}
 
 				// The row cap ends the WALK, not just this file — there is no point opening more once
 				// the answer is already known to be partial.
 				if( rows.length >= maxRows ) {
 					this._warn( 'grep_truncated', { root, query, cap: maxRows } )
-					return { rows, searched, capped: true, cancelled: false, candidates, nearMisses }
+					return { rows, searched, capped: true, cancelled: false, candidates, nearMisses, rootIsFile: false }
 				}
 
 				if( budget >= GREP_YIELD_BUDGET ) {
 					budget = 0
 					await _tick()
-					if( token.cancelled ) return { rows, searched, capped, cancelled: true, candidates, nearMisses }
+					if( token.cancelled ) return { rows, searched, capped, cancelled: true, candidates, nearMisses, rootIsFile: false }
 				}
 			}
 		}
 
-		return { rows, searched, capped, cancelled: false, candidates, nearMisses }
+		return { rows, searched, capped, cancelled: false, candidates, nearMisses, rootIsFile: false }
 	}
 
 	/** The fast path: ask a real, already-live Everything instance instead of walking disk. Returns

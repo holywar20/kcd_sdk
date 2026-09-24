@@ -92,6 +92,76 @@ describe( 'containment through links', () => {
 	} )
 } )
 
+/**
+ * A FILE IS A ROOT. The walk used to be the only shape: `readdirSync` on a file throws ENOTDIR, the
+ * throw was swallowed as an unreadable directory, and the scan came back with zero candidates — which
+ * every caller above reads as "this root holds nothing searchable" and reports as a bad path.
+ * `rootIsFile` is what lets them tell the two apart.
+ */
+describe( 'SdkFileAccess.grepText with a FILE as the root', () => {
+
+	it( 'searches the one file and flags which shape of root it got', async () => {
+		const root = tmpDir()
+		const file = join( root, 'notes.md' )
+		writeFileSync( file, 'alpha\nbeta\ngamma\n' )
+
+		const scan = await new SdkFileAccess().grepText( file, 'beta' )
+
+		expect( scan.rows ).toEqual( [ { path: file, line: 2, text: 'beta' } ] )
+		expect( scan.rootIsFile ).toBe( true )
+		expect( scan.searched ).toBe( 1 )
+		expect( scan.candidates ).toBe( 1 )
+	} )
+
+	it( 'separates a real MISS from an unsearchable root, which used to look identical', async () => {
+		const root = tmpDir()
+		const file = join( root, 'notes.md' )
+		writeFileSync( file, 'alpha\n' )
+
+		const miss = await new SdkFileAccess().grepText( file, 'nowhere' )
+		// Searched it and found nothing — the path was never in question.
+		expect( miss.searched ).toBe( 1 )
+		expect( miss.candidates ).toBe( 1 )
+		expect( miss.rootIsFile ).toBe( true )
+
+		const binary = join( root, 'blob.png' )
+		writeFileSync( binary, Buffer.from( [ 0x89, 0x50, 0x4e, 0x47 ] ) )
+		const unsearchable = await new SdkFileAccess().grepText( binary, 'PNG' )
+		// Never opened — but still plainly a file, so a caller cannot report it as a missing directory.
+		expect( unsearchable.searched ).toBe( 0 )
+		expect( unsearchable.candidates ).toBe( 0 )
+		expect( unsearchable.rootIsFile ).toBe( true )
+	} )
+
+	it( 'ignores a glob over a set of one', async () => {
+		const root = tmpDir()
+		const file = join( root, 'notes.md' )
+		writeFileSync( file, 'gamma\n' )
+
+		const scan = await new SdkFileAccess().grepText( file, 'gamma', { glob: '**/*.rs' } )
+
+		expect( scan.rows ).toHaveLength( 1 )
+	} )
+
+	it( 'leaves a DIRECTORY root reporting exactly as it always has', async () => {
+		const root = tmpDir()
+		writeFileSync( join( root, 'notes.md' ), 'gamma\n' )
+
+		const scan = await new SdkFileAccess().grepText( root, 'gamma' )
+
+		expect( scan.rootIsFile ).toBe( false )
+		expect( scan.rows ).toHaveLength( 1 )
+	} )
+
+	it( 'still reports a path that is neither, so a bad root is a bad root', async () => {
+		const scan = await new SdkFileAccess().grepText( join( tmpDir(), 'no-such-dir' ), 'anything' )
+
+		expect( scan.rootIsFile ).toBe( false )
+		expect( scan.candidates ).toBe( 0 )
+		expect( scan.rows ).toEqual( [] )
+	} )
+} )
+
 describe( 'SdkFileAccess.search', () => {
 
 	it( 'finds a nested match under a single root ( subfolder scope )', async () => {

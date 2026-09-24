@@ -58,8 +58,18 @@ export interface ContextContribution {
  *
  * 180 000 is a LIVENESS ceiling, not a budget. Every installed server's measured worst case is SECONDS
  * ( a 16 158-file survey walks in ~243ms; grep is capped at 100 files ), so this is ~100x margin. What
- * picks the number is the far end: it must fire well inside `TURN_TIMEOUT_MS` so a wedge surfaces as
- * "server X tool Y timed out" with the turn still live. Those two are ONE budget — if that moves, move this.
+ * picks the number is what a tool call IS: a bounded piece of machine work, and three minutes of it means
+ * something is wedged rather than slow. The point of cutting it loose is that the wedge surfaces as
+ * "server X tool Y timed out" — naming the server and the tool — with the turn still live to report it.
+ *
+ * THIS IS NOW THE OUTERMOST CLOCK ON THE WORK ITSELF ( 2026-09-23 ). It used to be sized to fire inside a
+ * wall-clock cap on the whole turn; that cap is gone, because a turn is not a bounded thing and counting
+ * an agent's working time against a deadline killed real work. Nothing above this ceiling expires. A turn
+ * ends when it finishes, when a person stops it, or when the child dies.
+ *
+ * NOT the permission prompt's clock either ( `PERMISSION_ASK_TIMEOUT_MS`, ten minutes ). That one is
+ * deliberately LONGER than this and measures human patience, not liveness — which is why a gated call's
+ * wait is not charged against this ceiling.
  */
 export const DEFAULT_TOOL_TIMEOUT_MS = 180_000;
 
