@@ -20,40 +20,40 @@ describe( 'VaultUtilities.compile — one compiler, shared with Starmind', () =>
 	it( 'emits exactly the agent\'s own compiled context — no separate assembly', () => {
 		const v = vault()
 
-		expect( VaultUtilities.compile( v, [ 'render' ] ).text ).toBe( v.buildAgent( [ 'render' ] ).compile() )
+		expect( VaultUtilities.compile( v, [ 'starmind-studio' ] ).text ).toBe( v.buildAgent( [ 'starmind-studio' ] ).compile() )
 	} )
 
 	it( 'carries the bottom-of-context manifest', () => {
-		const { text } = VaultUtilities.compile( vault(), [ 'render' ] )
+		const { text } = VaultUtilities.compile( vault(), [ 'starmind-studio' ] )
 
 		expect( text ).toContain( '## Files' )       // the manifest head — names every loaded lens + its path
 		expect( text.indexOf( '## Files' ) ).toBeGreaterThan( 0 )   // trails the body, never leads
 	} )
 
 	it( 'drops the legacy stub blocks whose rows the manifest already carries', () => {
-		const { text } = VaultUtilities.compile( vault(), [ 'render', 'mcp' ] )
+		const { text } = VaultUtilities.compile( vault(), [ 'starmind-studio', 'starmind-mcp' ] )
 
 		// One `# Available on request` section PER LENS used to ride here, duplicating the routing tables.
 		expect( text ).not.toContain( 'Available on request' )
 	} )
 
 	it( 'marks the primary lens, so the first-lens-overrules rule is visible in the text', () => {
-		const { text } = VaultUtilities.compile( vault(), [ 'render', 'mcp' ] )
+		const { text } = VaultUtilities.compile( vault(), [ 'starmind-studio', 'starmind-mcp' ] )
 
 		expect( text ).toContain( '( Primary )' )
 	} )
 
 	it( 'reports exactly the lenses it compiled — no floor rides under them', () => {
-		expect( VaultUtilities.compile( vault(), [ 'render', 'mcp' ] ).lenses ).toEqual( [ 'render', 'mcp' ] )
+		expect( VaultUtilities.compile( vault(), [ 'starmind-studio', 'starmind-mcp' ] ).lenses ).toEqual( [ 'starmind-studio', 'starmind-mcp' ] )
 	} )
 
 	it( 'reports a token count consistent with the text it returns', () => {
-		const { text, tokens } = VaultUtilities.compile( vault(), [ 'render' ] )
+		const { text, tokens } = VaultUtilities.compile( vault(), [ 'starmind-studio' ] )
 
 		expect( tokens ).toBeGreaterThan( 0 )
 		// Not an exact-value assertion ( the corpus moves ); the invariant is that the count describes THIS
 		// text, so a stale or separately-derived number can't creep back in.
-		expect( tokens ).toBe( VaultUtilities.compile( vault(), [ 'render' ] ).tokens )
+		expect( tokens ).toBe( VaultUtilities.compile( vault(), [ 'starmind-studio' ] ).tokens )
 		expect( text.length ).toBeGreaterThan( 0 )
 	} )
 

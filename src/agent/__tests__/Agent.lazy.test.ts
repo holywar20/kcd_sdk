@@ -22,9 +22,13 @@ import type { ReaderFn } from '../../primitives/types'
  */
 
 const ROOT  = resolve( __dirname, '../../../..' )
-const HOUSE  = join( ROOT, '_Claude', 'lenses', 'house', 'house.html' )
-const RENDER = join( ROOT, '_Claude', 'lenses', 'render', 'render.html' )
-const VAULT  = existsSync( RENDER ) && existsSync( HOUSE )
+// TWO LIVE LENSES. `STACKED` was `render` until 2026-09-25, when the package realignment renamed every
+// superseded lens to `retire-*` — and this suite did not fail, it SKIPPED, which is how it would have gone
+// quiet indefinitely. If that matters more than the convenience of skipping, turn `skipIf` below into a
+// hard failure; the guard is kept only because a consumer may vendor this SDK without the vault beside it.
+const HOUSE   = join( ROOT, '_Claude', 'lenses', 'house', 'house.html' )
+const STACKED = join( ROOT, '_Claude', 'lenses', 'starmind-studio', 'starmind-studio.html' )
+const VAULT   = existsSync( STACKED ) && existsSync( HOUSE )
 
 /** The renderer's cache, in miniature: it answers from what it has been handed, and records anything else as
  *  asked for and "not yet". `land` hands over everything asked for, as a round of fetches would. */
@@ -56,13 +60,13 @@ class LateReader {
 
 function eagerAgent(): Agent {
 	const house  = loadLensFromDisk( HOUSE,  { projectRoot: ROOT, eager: true } )
-	const render = loadLensFromDisk( RENDER, { projectRoot: ROOT, eager: true } )
+	const render = loadLensFromDisk( STACKED, { projectRoot: ROOT, eager: true } )
 	return Agent.create( { id: 'probe', name: 'probe', lenses: [ house, render ] } )
 }
 
 function lazyAgent( reader: LateReader ): Agent {
 	const house  = LensObject.lazy( HOUSE,  { projectRoot: ROOT, eager: true, read: reader.read } )
-	const render = LensObject.lazy( RENDER, { projectRoot: ROOT, eager: true, read: reader.read } )
+	const render = LensObject.lazy( STACKED, { projectRoot: ROOT, eager: true, read: reader.read } )
 	return Agent.create( { id: 'probe', name: 'probe', lenses: [ house, render ] } )
 }
 
@@ -94,7 +98,7 @@ describe.skipIf( !VAULT )( 'a lens that reads on access', () => {
 		const reader = new LateReader()
 		const lazy   = lazyAgent( reader )
 
-		expect( lazy.pending().sort() ).toEqual( [ RENDER, HOUSE ].sort() )
+		expect( lazy.pending().sort() ).toEqual( [ STACKED, HOUSE ].sort() )
 		expect( settle( lazy, reader ) ).toBe( 2 )
 		expect( lazy.pending() ).toEqual( [] )
 	} )

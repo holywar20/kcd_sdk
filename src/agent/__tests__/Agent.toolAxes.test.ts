@@ -171,7 +171,7 @@ describe( 'Agent — the one tool axis', () => {
  */
 describe( 'a lens contributes no tools', () => {
 	const PROJECT_ROOT = path.resolve( __dirname, '../../../..' );   // kcd_sdk/src/agent/__tests__ → repo root
-	const LENS_PATH    = path.join( PROJECT_ROOT, '_Claude/lenses/documentation/documentation.html' );
+	const LENS_PATH    = path.join( PROJECT_ROOT, '_Claude/lenses/sm-documentation/sm-documentation.html' );
 
 	it( 'composes nothing onto the agent from a real lens it wears', () => {
 		const lens  = LensObject.load( LENS_PATH, { projectRoot: PROJECT_ROOT, read: ( abs ) => fs.readFileSync( abs, 'utf-8' ) } );

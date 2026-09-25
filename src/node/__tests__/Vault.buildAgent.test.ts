@@ -20,9 +20,11 @@ const PROJECT_ROOT = path.resolve( __dirname, '../../../..' )   // kcd_sdk/src/n
 
 const vault = (): Vault => new Vault( PROJECT_ROOT )
 
-/** Lenses that exist in this vault — the stand-ins for "some authored lens". */
-const LENS = 'render'
-const SECOND = 'mcp'
+/** Lenses that exist in this vault — the stand-ins for "some authored lens". PACKAGE lenses since
+ *  2026-09-25: the previous pair ( `render`, `mcp` ) was renamed to `retire-*` by the package realignment
+ *  and took this suite down with it. One-per-package is the stable roster now. */
+const LENS = 'starmind-studio'
+const SECOND = 'starmind-mcp'
 
 describe( 'Vault.buildAgent — the dumb-agent factory', () => {
 

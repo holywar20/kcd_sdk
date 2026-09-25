@@ -200,6 +200,15 @@ ${ LENS_BODY( '<div data-kcd-slot="reference" data-kcd-mode="off"><span data-kcd
 const PROJECT_ROOT = path.resolve( __dirname, '../../../..' );   // kcd_sdk/src/primitives/__tests__ → repo root
 const HABITS_DIR   = path.join( PROJECT_ROOT, '_Claude/habits' );
 
+// THE REAL LENS THESE SUITES LOAD IS THE DEPLOYED ONE, and it was `documentation` until 2026-09-25, when
+// the package realignment renamed every superseded lens to `retire-*` and took this file down as a block.
+// It is `sm-documentation` now — the package lens that succeeded it.
+//
+// DO NOT "FIX" THIS BY EDITING `InstallManifest`. That table's `lenses/documentation` row names the
+// CANONICAL lens in the shipped substrate ( starmind/resources/substrate/lenses/documentation ), which is
+// a different artifact that has not moved and must not. Canonical and deployed diverge by design; this
+// vault's rename says nothing about what a fresh vault is given.
+
 // NOTE: the link below sits in the KNOW region, not Do, even though a habit is a Do-role artifact.
 // `KcdParse.policy()` no longer cares which region carried the link (mode alone gates dredging), but
 // the fixture keeps a Know-region placement anyway — SlotResolver only cares about a block's
@@ -214,7 +223,7 @@ const slotLensHtml = ( mode: 'on' | 'load' ) => `<!DOCTYPE html>
 <dt>type</dt><dd data-kcd-field="type" data-kcd-type="enum">lens</dd>
 <dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>
 </dl>
-${ LENS_BODY( `<div data-kcd-slot="reference"${ mode === 'load' ? ' data-kcd-mode="load"' : '' } data-kcd-habit-class="log-action"><span data-kcd-field="what" data-kcd-type="text">log-action</span><a data-kcd-field="where" data-kcd-type="path" href="_Claude/habits/log-action/log-action.html">log-action</a><span data-kcd-field="why" data-kcd-type="text">default</span></div>` ) }
+${ LENS_BODY( `<div data-kcd-slot="reference"${ mode === 'load' ? ' data-kcd-mode="load"' : '' } data-kcd-habit-class="log-action"><span data-kcd-field="what" data-kcd-type="text">log-action</span><a data-kcd-field="where" data-kcd-type="path" href="_Claude/habits/log-action/log-action-often.html">log-action-often</a><span data-kcd-field="why" data-kcd-type="text">default</span></div>` ) }
 </article>
 </body></html>
 `;
@@ -237,18 +246,18 @@ describe( 'habit slot dredge follows MODE once the lens is loaded the way a comp
 		const beforeInject = lens.serializeForContext();
 		expect( beforeInject ).not.toMatch( /WRITE THE FINDING, NOT THE ACTIVITY/ );
 
-		// Inject the "never" pole too — same habit-class, higher specificity (injected > lens) — makes
+		// Inject the "ask" setting too — same habit-class, higher specificity (injected > lens) — makes
 		// no difference to the LENS's own on-mode slot; injection is a separate, deliberate act.
-		const neverHabitPath = path.join( HABITS_DIR, 'log-action/log-action-never.html' );
-		const neverHabit = fs.readFileSync( neverHabitPath, 'utf-8' );
-		lens.addInjected( KCDPrimitive.fromHtml( neverHabit, neverHabitPath , '_Claude') );
+		const askHabitPath = path.join( HABITS_DIR, 'log-action/log-action-ask.html' );
+		const askHabit = fs.readFileSync( askHabitPath, 'utf-8' );
+		lens.addInjected( KCDPrimitive.fromHtml( askHabit, askHabitPath , '_Claude') );
 
 		// addInjected is itself always a "load" act (the GUI "drop context" gesture) — the
 		// injected habit's OWN body now rides as its DENSE four-field form ( KcdContext.projectHabit ),
 		// not a raw dump, same as any other injected habit. What's proven here is that the LENS's
 		// `on`-mode dredge stays silent while the injected habit's directive rides.
 		const afterInject = lens.serializeForContext();
-		expect( afterInject ).toContain( 'do nothing; record no entry' );
+		expect( afterInject ).toContain( 'nobody asked, write nothing' );
 		expect( afterInject ).not.toMatch( /WRITE THE FINDING, NOT THE ACTIVITY/ );
 
 		const slots = SlotResolver.describe( lens.getContextBlocks() );
@@ -284,7 +293,7 @@ describe( 'habit slot dredge follows MODE once the lens is loaded the way a comp
 		// The routing row survives under both — that is what a mode never takes away.
 		for ( const ctx of [ eagerCtx, lazyCtx ] ) {
 			expect( ctx ).toContain( 'log-action' );
-			expect( ctx ).toContain( '_Claude/habits/log-action/log-action.html' );
+			expect( ctx ).toContain( '_Claude/habits/log-action/log-action-often.html' );
 		}
 	} );
 } );
@@ -309,7 +318,7 @@ ${ LENS_BODY( `<div data-kcd-slot="reference" data-kcd-mode="load"><span data-kc
 
 describe( 'Agent.compile — the context-compiler surface: merged body first, then the manifest at the bottom', () => {
 	const loadBase = (): Agent => {
-		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/documentation/documentation.html' ), {
+		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/sm-documentation/sm-documentation.html' ), {
 			projectRoot: PROJECT_ROOT, read: ( abs ) => fs.readFileSync( abs, 'utf-8' ), depth: 2
 		} );
 		return Agent.create( { lenses: [ lens ] } );
@@ -328,7 +337,7 @@ describe( 'Agent.compile — the context-compiler surface: merged body first, th
 		// A lens carries no habits any more — behaviour is the agent's.
 		expect( out ).not.toContain( '## Habits' );
 		// The Files row is the lens's own vault-relative path ( the file ID ), not an absolute OS path.
-		expect( out ).toContain( '(_Claude/lenses/documentation/documentation.html)' );
+		expect( out ).toContain( '(_Claude/lenses/sm-documentation/sm-documentation.html)' );
 		expect( out ).not.toContain( 'C:/Code' );
 	} );
 
@@ -344,7 +353,7 @@ describe( 'Agent.compile — the context-compiler surface: merged body first, th
 
 describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Phase 1)', () => {
 	const loadBase = (): Agent => {
-		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/documentation/documentation.html' ), {
+		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/sm-documentation/sm-documentation.html' ), {
 			projectRoot: PROJECT_ROOT, read: ( abs ) => fs.readFileSync( abs, 'utf-8' ), depth: 2
 		} );
 		return Agent.create( { lenses: [ lens ] } );
@@ -464,7 +473,7 @@ describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Ph
 
 describe( 'a real deployed lens, flat', () => {
 	it( 'compiles with no Know / Care / Do label, and its sections and reference rows survive', () => {
-		const p = path.join( PROJECT_ROOT, '_Claude/lenses/documentation/documentation.html' );
+		const p = path.join( PROJECT_ROOT, '_Claude/lenses/sm-documentation/sm-documentation.html' );
 		const lens = KCDPrimitive.fromHtml( fs.readFileSync( p, 'utf-8' ), p , '_Claude');
 		const joined = lens.getContextBlocks().map( b => b.text ).join( '\n\n' );
 
@@ -711,7 +720,7 @@ describe( 'the Grants section reaches the wire, or does not ride at all', () => 
 	// `loadBase` is a per-describe local by convention in this file rather than a file-level helper, so
 	// this block declares its own instead of reaching into a sibling's scope.
 	const loadBase = (): Agent => {
-		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/documentation/documentation.html' ), {
+		const lens = LensObject.load( path.join( PROJECT_ROOT, '_Claude/lenses/sm-documentation/sm-documentation.html' ), {
 			projectRoot: PROJECT_ROOT, read: ( abs ) => fs.readFileSync( abs, 'utf-8' ), depth: 2
 		} );
 		return Agent.create( { lenses: [ lens ] } );

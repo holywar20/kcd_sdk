@@ -17,12 +17,15 @@ function leftoverVault(): { root: string, clean: () => void } {
 	const root = fs.mkdtempSync( path.join( os.tmpdir(), 'no-floor-' ) )
 	const src  = new Vault( PROJECT_ROOT )
 
-	const lensRel = src.lensPath( 'render' )
+	// A LIVE lens, copied out of the real vault. Was `render` until 2026-09-25, when the package realignment
+	// renamed every superseded lens to `retire-*`; a package lens is the stable pin now.
+	const LENS    = 'starmind-studio'
+	const lensRel = src.lensPath( LENS )
 	fs.mkdirSync( path.join( root, '_Claude', path.dirname( lensRel ) ), { recursive: true } )
-	const render = fs.readFileSync( path.join( PROJECT_ROOT, '_Claude', lensRel ), 'utf8' )
-	fs.writeFileSync( path.join( root, '_Claude', lensRel ), render )
+	const body = fs.readFileSync( path.join( PROJECT_ROOT, '_Claude', lensRel ), 'utf8' )
+	fs.writeFileSync( path.join( root, '_Claude', lensRel ), body )
 	for( const floor of [ '_lens-base', '_lane-base' ] )
-		fs.writeFileSync( path.join( root, '_Claude', 'lenses', `${ floor }.html` ), render.replace( /data-kcd-type="slug">render</, `data-kcd-type="slug">${ floor }<` ) )
+		fs.writeFileSync( path.join( root, '_Claude', 'lenses', `${ floor }.html` ), body.replace( `data-kcd-type="slug">${ LENS }<`, `data-kcd-type="slug">${ floor }<` ) )
 
 	return { root, clean: () => fs.rmSync( root, { recursive: true, force: true } ) }
 }
@@ -32,8 +35,8 @@ describe( 'Vault.buildAgent — no floor', () => {
 	it( 'stacks nothing under the named lens, whatever old floor files the vault still holds', () => {
 		const { root, clean } = leftoverVault()
 		try {
-			const built = new Vault( root ).buildAgent( [ 'render' ] )
-			expect( built.lenses.map( l => l.getName() ) ).toEqual( [ 'render' ] )
+			const built = new Vault( root ).buildAgent( [ 'starmind-studio' ] )
+			expect( built.lenses.map( l => l.getName() ) ).toEqual( [ 'starmind-studio' ] )
 		} finally { clean() }
 	} )
 } )

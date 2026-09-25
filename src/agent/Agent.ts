@@ -854,7 +854,26 @@ export class Agent {
 		// A lens compiles as it was authored — its dredged nodes carry the mode its policy gave them. The agent's
 		// own habits are the only thing this layer decides: `load` rides the full body, anything else held
 		// rides as its one-line routing row ( `setIncluded( false )` ). Taking a habit off is removing it.
-		const lensBlocks  = this.lenses.flatMap( lens => lens.getContextBlocks() );
+		//
+		// ONE ARTIFACT, ONE CONTRIBUTOR ( bug-report-26 ). Lenses are walked in STACK ORDER and each artifact
+		// path is claimed by the first lens to contribute it; a later lens's copy of that path is dropped
+		// whole. A path is the id — no file shares one — so this is a dictionary insert and nothing here has
+		// to reason about what a block contains.
+		//
+		// CLAIMED PER LENS, NOT PER BLOCK, and that is the whole trick: an artifact hands over all its regions
+		// inside ONE lens's pass, so they all ride, while the same artifact reached through a second lens finds
+		// its path already taken. Deduping a flat block list cannot draw that line — one artifact's three
+		// regions and three lenses' copies of one region are both "three blocks sharing a path" by then, which
+		// is why the fix belongs here and not downstream in `dedupeBySource`.
+		const claimed: Set<string> = new Set();
+		const lensBlocks: TaggedBlock[] = [];
+		for ( const lens of this.lenses ) {
+			const blocks = lens.getContextBlocks();
+			for ( const b of blocks ) if ( !claimed.has( b.path ) ) lensBlocks.push( b );
+			// Claimed AFTER the lens is drained, never during — claiming as we go would let an artifact's own
+			// second region collide with its first.
+			for ( const b of blocks ) claimed.add( b.path );
+		}
 		const habitBlocks = this.baseHabitNodes.flatMap( node => {
 			node.setIncluded( this.isHabitLoaded( node.getPath() ) );
 			return node.getContextBlocks().map( b => ( { ...b, sourceLayer: 'agent' as const } ) );
@@ -868,6 +887,15 @@ export class Agent {
 	 * node already loaded — the more specific layer's blocks win and every block of the losing layer is
 	 * dropped BEFORE slot resolution, so a duplicate can never survive into the corpus. Same-path,
 	 * same-rank blocks all stay ( one artifact's several regions ), and load order is preserved throughout.
+	 *
+	 * THE LAYER AXIS IS ALL THIS OWNS ( bug-report-26, 2026-09-25 ). It once carried the whole burden and
+	 * could not: every lens tags its blocks `lens`, so a reference three stacked lenses each load arrived as
+	 * three same-path, SAME-RANK blocks, all tied for best, all kept — `js-style-guide` rode three times in
+	 * Churchill's context, ~5-6k tokens every turn. The carve-out above was the hole, and it cannot be
+	 * closed here: by this point one artifact's several regions and several lenses' copies of one region are
+	 * the same shape, and dropping either would cost real content. Sibling lenses are now settled upstream
+	 * in `getContextBlocks`, where the lens boundary is still visible and a path is a clean key. Every block
+	 * reaching here has already contributed exactly once per layer.
 	 */
 	static dedupeBySource( blocks: TaggedBlock[] ): TaggedBlock[] {
 		const best = new Map<string, number>();
@@ -881,8 +909,8 @@ export class Agent {
 
 	/**
 	 * The recursive context query as one source-blind string: `getContextBlocks()` run through
-	 * `SlotResolver` ( habit-class contention resolved — a losing log-action-never never rides alongside
-	 * the log-action it lost to ) and `ContextAssembler` ( merged by `data-kcd-merge-key`,
+	 * `SlotResolver` ( habit-class contention resolved — a losing log-action-ask never rides alongside
+	 * the log-action-often it lost to ) and `ContextAssembler` ( merged by `data-kcd-merge-key`,
 	 * sorted Care-first / injected-last ). A draft contributes nothing. ( The `systemPrompt` lever rides the
 	 * wire but is not prepended here — `wireSystem` folds it in. )
 	 */

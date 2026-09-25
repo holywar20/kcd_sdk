@@ -1,8 +1,8 @@
 /**
  * SlotResolver — the habit-class mutual-exclusion cascade over a merged `TaggedBlock[]`
  * ( context-optimization plan, Phase 3, protocol §6 ). A `habit-class` is a named group where
- * exactly one member may apply ( "textual radio buttons" — `log-action` = { log-action,
- * log-action-never } ). Classless blocks are additive and never enter this cascade —
+ * exactly one member may apply ( "textual radio buttons" — `log-action` = { log-action-often,
+ * log-action-ask } ). Classless blocks are additive and never enter this cascade —
  * `ContextAssembler` alone governs them. Classed blocks compete: for each class, the most specific
  * source layer that contributes a member WINS; every other member of that class is dropped
  * (not merged, not stacked — genuinely absent from the compiled corpus), and the winner renders at

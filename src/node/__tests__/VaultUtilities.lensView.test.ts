@@ -11,10 +11,14 @@ import { VaultUtilities } from '../VaultUtilities'
  * carries a real cost, inheritance is visible, and the rows still reconcile against the compile.
  */
 
+// PINNED TO A LIVE LENS, and it has to be one that exists on disk today. It was `render` until 2026-09-25,
+// when the package realignment renamed every superseded lens to `retire-*` and this suite failed as a block.
+// A PACKAGE lens is the stable choice now — the roster is one-per-package and a rename would be a package
+// rename — but the dependency is real: renaming this lens breaks this file, and the error says so plainly.
 const PROJECT_ROOT = path.resolve( __dirname, '../../../..' )
 
 const vault = (): Vault => new Vault( PROJECT_ROOT )
-const view  = () => VaultUtilities.lensView( vault(), 'render' )
+const view  = () => VaultUtilities.lensView( vault(), 'starmind-studio' )
 
 describe( 'VaultUtilities.lensView — the composition of a compiled object', () => {
 
@@ -25,7 +29,7 @@ describe( 'VaultUtilities.lensView — the composition of a compiled object', ()
 	} )
 
 	it( 'reports the same total `compile` reports for the same lens', () => {
-		expect( view().tokens ).toBe( VaultUtilities.compile( vault(), [ 'render' ] ).tokens )
+		expect( view().tokens ).toBe( VaultUtilities.compile( vault(), [ 'starmind-studio' ] ).tokens )
 	} )
 
 	it( 'prices an `on` file by its real routing row, not zero', () => {
@@ -45,7 +49,7 @@ describe( 'VaultUtilities.lensView — the composition of a compiled object', ()
 	it( 'charts one lens row — the lens itself, with a real weight, and no floor beside it', () => {
 		const lenses = view().slots.filter( s => s.kind === 'lens' )
 
-		expect( lenses.map( s => s.source ) ).toEqual( [ 'render' ] )
+		expect( lenses.map( s => s.source ) ).toEqual( [ 'starmind-studio' ] )
 		expect( lenses[ 0 ].tokens ).toBeGreaterThan( 0 )
 	} )
 
@@ -53,8 +57,8 @@ describe( 'VaultUtilities.lensView — the composition of a compiled object', ()
 		// No lens in this vault currently declares an `off` slot or an unfilled placeholder, so asserting such
 		// a row EXISTS would only test the corpus. What matters is that nothing gets dropped: every policy
 		// entry a lens declares reaches the chart, whatever its mode.
-		const lens = vault().buildAgent( [ 'render' ] ).lenses[ 0 ]
-		const own  = view().slots.filter( s => s.source === 'render' )
+		const lens = vault().buildAgent( [ 'starmind-studio' ] ).lenses[ 0 ]
+		const own  = view().slots.filter( s => s.source === 'starmind-studio' )
 
 		expect( own.length ).toBe( lens.getPolicy().length + 1 )      // + the lens's own row
 	} )
@@ -95,7 +99,7 @@ describe( 'VaultUtilities.lensView — the composition of a compiled object', ()
 	} )
 
 	it( 'lists each file once, even when several lenses declare it', () => {
-		const v     = VaultUtilities.lensView( vault(), 'render' )
+		const v     = VaultUtilities.lensView( vault(), 'starmind-studio' )
 		const files = v.slots.filter( s => s.what !== 'structure' ).map( s => `${ s.source }:${ s.what }` )
 
 		expect( new Set( files ).size ).toBe( files.length )
