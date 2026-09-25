@@ -107,6 +107,10 @@ export interface QueryOptions {
 	type?:    string;
 	text?:    string;
 	groupBy?: 'type';
+	/** Which page of refs to return, 1-based. Out of range clamps to the last page rather than
+	 *  answering empty — an off-by-one should cost a reader nothing. Ignored by a census, which is
+	 *  never paged. */
+	page?:    number;
 }
 
 /** Either the matching refs, or — with `groupBy: 'type'` — a type census sorted by count descending. */
@@ -120,6 +124,13 @@ export type QueryMatches = ArtifactRef[] | { type: string; count: number }[];
 export interface QueryResult {
 	matches:    QueryMatches;
 	unreadable: string[];
+	/** How many refs matched IN TOTAL, before the page was cut — so a caller holding 20 rows knows
+	 *  whether it is holding the answer or the start of one. A census reports its own length. */
+	total:      number;
+	/** The page returned, 1-based, and how many there are. Both `1` for a census, and for any result
+	 *  that fits on one page — which is what lets a caller emit the bare array it always did. */
+	page:       number;
+	pages:      number;
 }
 
 /** One artifact's link graph: what it points at, its addresses ( occupied or not ), and who points at it. */
@@ -292,6 +303,17 @@ export interface StylesheetFixReport {
  * here, so a validation behaviour can never exist for one caller and not another.
  */
 export class VaultUtilities {
+
+	/**
+	 * How many refs one page of `query` carries.
+	 *
+	 * A CONSTANT AND NOT A PARAMETER, deliberately. The reason to page at all is that an unscoped query
+	 * over a real vault spends hundreds of refs on a reader who usually wanted three, and a per-call
+	 * limit would be honoured by whoever already knew to set it — which is never the caller paying the
+	 * cost. Fixing it here makes the saving default. Twenty is the number a reader can actually scan
+	 * before deciding to narrow; change it here and every face changes with it.
+	 */
+	static readonly QUERY_PAGE_SIZE = 20;
 
 	/**
 	 * Validate one artifact ( `onlyFile` given ) or the whole vault ( omitted ) on two axes:
@@ -493,6 +515,23 @@ export class VaultUtilities {
 	}
 
 	/**
+	 * Does this glob deliberately reach into EPHEMERAL space — `work/`, `logs/`, `reports/`, `audits/`?
+	 *
+	 * The same prefix test as its archival twin above, and for the same reason: naming a bucket is a
+	 * caller asking for it, anything looser is a sweep that should not be handed it. Kept as a separate
+	 * predicate rather than folded into one, because the two exclusions are not the same fact —
+	 * ephemeral content never ships and may not be linked into, archival content ships and must stay
+	 * linkable — and a single helper would make that distinction unreadable at the call sites.
+	 *
+	 * Top-level segment only, matching `isEphemeralHref`, which is what it gates.
+	 */
+	private static globReachesEphemeral( pattern: string | undefined ): boolean {
+		if ( !pattern ) return false;
+		const top = pattern.replace( /\\/g, '/' ).replace( /^\.\//, '' ).replace( /^_Claude\//, '' ).split( '/' )[ 0 ];
+		return top !== undefined && VaultLayout.ephemeralDirs().includes( top );
+	}
+
+	/**
 	 * The single read-query over a vault — glob, type, and text, AND-combined over one scan.
 	 * `glob` short-circuits through the Vault's own path filter; `type`/`text` narrow the
 	 * survivors. `groupBy: 'type'` returns a census instead of refs — the cheapest orientation
@@ -511,8 +550,14 @@ export class VaultUtilities {
 	 * it, and an ordinary read is the one where the silence actually costs something.
 	 *
 	 * NOT FILTERED BY `type` OR `text`, deliberately. Both need a parsed document, so applying them to a
-	 * document that has none would be inventing an answer. `glob` and the archival rule DO apply — those are
-	 * path facts, true of a file whatever is inside it, and reporting outside the caller's scope is noise.
+	 * document that has none would be inventing an answer. `glob`, the archival rule and the EPHEMERAL rule
+	 * DO apply — those are path facts, true of a file whatever is inside it, and reporting outside the
+	 * caller's scope is noise. The ephemeral gate is what makes the advisory affordable at all; see the
+	 * comment at the filter.
+	 *
+	 * ── IT ANSWERS ONE PAGE ──
+	 * Refs come back `QUERY_PAGE_SIZE` at a time, with `total` and `pages` saying what the whole answer is,
+	 * so a reader holding twenty rows can tell the answer from the start of one. A census is never paged.
 	 *
 	 * ARCHIVAL BUCKETS ARE EXCLUDED from an unscoped query, on the same rule the grading gate uses:
 	 * naming them still returns them, because the caller asked. A retired plan answers "what did we
@@ -533,7 +578,28 @@ export class VaultUtilities {
 		if ( opts.type ) files = files.filter( f => vault.classify( f.path ) === opts.type );
 		if ( needle )     files = files.filter( f => ( f.body + '\n' + JSON.stringify( f.frontmatter ) ).toLowerCase().includes( needle ) );
 
-		const unreadable = report.faults.filter( inScope );
+		// THE ADVISORY IS SCOPED TO GRADED SPACE, which is the whole reason it is affordable.
+		//
+		// The fault list rides on EVERY query, so anything in it is a tax on every documentation call in
+		// the project. Ephemeral space — `work/`, `logs/`, `reports/`, `audits/` — is where this vault's
+		// agents write scratch by the hundred, none of it KCD and none of it meant to be: measured live
+		// 2026-09-25, forty-eight such files were named on every call, roughly 800 tokens of advice about
+		// documents nobody intends to fix. An advisory whose lines cannot be acted on trains a reader to
+		// skip the whole block, which costs the one case it exists for.
+		//
+		// Same rule the health sweep already applies through `isLibraryPath`, arriving here late: a sweep
+		// was not the only reader that needed the ephemeral gate, exactly as it was not the only reader
+		// that needed the fault list. And the same courtesy as the archival rule beside it — NAMING the
+		// bucket still reports it, because then the caller is asking about that space and a silent drop
+		// would be the original bug wearing different clothes.
+		//
+		// Note what this does NOT touch: `matches`. A parseable document under `work/` is still returned,
+		// because it is a real document and the caller may well want it. What is withdrawn is the
+		// unsolicited complaint about the ones that are not.
+		const reachesEphemeral = VaultUtilities.globReachesEphemeral( opts.glob );
+		const unreadable = report.faults
+			.filter( inScope )
+			.filter( p => reachesEphemeral || !VaultLayout.isEphemeralHref( p ) );
 
 		if ( opts.groupBy === 'type' ) {
 			const counts: Record<string, number> = {};
@@ -544,10 +610,31 @@ export class VaultUtilities {
 			const census = Object.entries( counts )
 				.sort( ( a, b ) => b[ 1 ] - a[ 1 ] )
 				.map( ( [ type, count ] ) => ( { type, count } ) );
-			return { matches: census, unreadable };
+			// A CENSUS IS NEVER PAGED. It is one row per artifact type — a dozen at the outside — and it is
+			// the call a reader makes to find out how big the vault is before asking for any of it. Cutting
+			// the orientation answer into pages would be paging the map.
+			return { matches: census, unreadable, total: census.length, page: 1, pages: 1 };
 		}
 
-		return { matches: files.map( f => vault.toRef( f ) ), unreadable };
+		// PAGED, because an unscoped query over a real vault answers with hundreds of refs and every one of
+		// them is spent whether or not the reader wanted the list. The page size is a constant rather than a
+		// parameter ( see `QUERY_PAGE_SIZE` ); the page NUMBER is the caller's, so this is pagination and
+		// not a cap — a ceiling with no way to reach record 21 is data loss wearing a helpful face.
+		const refs  = files.map( f => vault.toRef( f ) );
+		const pages = Math.max( 1, Math.ceil( refs.length / VaultUtilities.QUERY_PAGE_SIZE ) );
+		// Clamped both ends. `page: 0`, a negative, a fraction and a page past the end are all reader
+		// errors that should cost nothing: answering empty for an off-by-one hides the results entirely and
+		// reads exactly like a query that matched nothing.
+		const page  = Math.min( Math.max( 1, Math.floor( opts.page ?? 1 ) ), pages );
+		const from  = ( page - 1 ) * VaultUtilities.QUERY_PAGE_SIZE;
+
+		return {
+			matches: refs.slice( from, from + VaultUtilities.QUERY_PAGE_SIZE ),
+			unreadable,
+			total:   refs.length,
+			page,
+			pages,
+		};
 	}
 
 	/**

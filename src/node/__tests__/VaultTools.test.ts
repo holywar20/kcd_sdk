@@ -157,6 +157,94 @@ describe( 'VaultTools — reads', () => {
 		} );
 	} );
 
+	/**
+	 * THE PREAMBLE TAX — the fault advisory is only affordable while every line of it deserves a look.
+	 *
+	 * Ephemeral space is where this project's agents write scratch by the hundred, none of it KCD and
+	 * none of it meant to be. Measured live 2026-09-25: forty-eight such files named on EVERY
+	 * documentation call, roughly 800 tokens of advice about documents nobody intends to fix. An
+	 * advisory whose lines cannot be acted on trains a reader to skip the block, which costs the one
+	 * case it exists for.
+	 */
+	describe( 'an unparseable file in ephemeral space', () => {
+
+		beforeEach( () => { put( '_Claude/work/notes/scratch.html', '<h1>not an artifact, and never meant to be' ); } );
+
+		it( 'is not named on an ordinary query', () => {
+			expect( text( tools().query( {} ) ) ).not.toContain( 'scratch.html' );
+			expect( text( tools().query( { type: 'reference' } ) ) ).not.toContain( 'could not be parsed' );
+		} );
+
+		it( 'IS named when the glob reaches into that space — the caller asked about it', () => {
+			// The same courtesy the archival rule carries. A silent drop for a caller who NAMED the bucket
+			// would be the original "the file is there and no query finds it" bug wearing different clothes.
+			expect( text( tools().query( { glob: 'work/**' } ) ) ).toContain( 'scratch.html' );
+		} );
+
+		it( 'still reports a graded document that cannot be parsed', () => {
+			// The gate is about WHERE, not about relaxing the advisory. A broken file in the library is
+			// exactly what the list is for, and it must survive the fix for the noise.
+			put( '_Claude/references/patterns/broken.html', '<not an artifact at all' );
+			const said = text( tools().query( {} ) );
+			expect( said ).toContain( 'references/patterns/broken.html' );
+			expect( said ).not.toContain( 'scratch.html' );
+		} );
+	} );
+
+	/** A PARSEABLE document in ephemeral space is still a document, and still returned. What the gate
+	 *  above withdraws is the unsolicited complaint about the ones that are not — not the results. */
+	it( 'still returns a readable document from ephemeral space', () => {
+		put( '_Claude/work/notes/real.html', doc( 'real', '<p>Drafted here.</p>' ) );
+		const refs = JSON.parse( text( tools().query( {} ) ) ) as { path: string }[];
+		expect( refs.map( r => r.path ) ).toContain( 'work/notes/real.html' );
+	} );
+
+	/**
+	 * PAGING — an unscoped query over a real vault answers with hundreds of refs, and every one of them
+	 * is spent whether or not the reader wanted the list.
+	 */
+	describe( 'more refs than fit on a page', () => {
+
+		/** 25 more, on top of the two the fixture plants — 27 total, so page 2 is a short one. */
+		beforeEach( () => {
+			for ( let i = 0; i < 25; i++ ) put( `_Claude/references/domain/d${ i }.html`, doc( `d${ i }`, '<p>Filler.</p>' ) );
+		} );
+
+		const refsIn = ( said: string ): { path: string }[] =>
+			JSON.parse( said.slice( said.indexOf( '[' ) ) ) as { path: string }[];
+
+		it( 'returns one page and says what the whole answer is', () => {
+			const said = text( tools().query( {} ) );
+			expect( refsIn( said ) ).toHaveLength( 20 );
+			expect( said ).toContain( 'showing 1–20 of 27' );
+			expect( said ).toContain( 'page 1 of 2' );
+		} );
+
+		it( 'walks to the next page, and the pages do not overlap', () => {
+			const one = refsIn( text( tools().query( {} ) ) ).map( r => r.path );
+			const two = refsIn( text( tools().query( { page: 2 } ) ) ).map( r => r.path );
+
+			expect( two ).toHaveLength( 7 );
+			expect( one.some( p => two.includes( p ) ) ).toBe( false );
+			expect( new Set( [ ...one, ...two ] ).size ).toBe( 27 );
+		} );
+
+		it( 'clamps a page out of range instead of answering empty', () => {
+			// An off-by-one should cost a reader nothing. Answering empty hides the results entirely and
+			// reads exactly like a query that matched nothing — the failure this whole file is about.
+			for ( const page of [ 0, -3, 99 ] ) {
+				const said = text( tools().query( { page } ) );
+				expect( refsIn( said ).length ).toBeGreaterThan( 0 );
+			}
+			expect( text( tools().query( { page: 99 } ) ) ).toContain( 'page 2 of 2' );
+		} );
+
+		it( 'never pages a census — the orientation call stays whole', () => {
+			const census = JSON.parse( text( tools().query( { groupBy: 'type' } ) ) ) as { type: string; count: number }[];
+			expect( census ).toEqual( [ { type: 'reference', count: 27 } ] );
+		} );
+	} );
+
 	it( 'answers a clean query with the bare array it always did, and no preamble', () => {
 		// The advisory is a fact about the query rather than a row of it, so a vault with nothing wrong
 		// pays nothing for the feature — not a wrapper, not a header, not a token.

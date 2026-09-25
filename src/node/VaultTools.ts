@@ -112,23 +112,46 @@ export class VaultTools {
 				type:    typeof args[ 'type' ] === 'string' ? args[ 'type' ] as string : undefined,
 				text:    typeof args[ 'text' ] === 'string' ? args[ 'text' ] as string : undefined,
 				groupBy: args[ 'groupBy' ] === 'type' ? 'type' : undefined,
+				page:    typeof args[ 'page' ] === 'number' ? args[ 'page' ] as number : undefined,
 			} );
 
-			// THE CLEAN CASE IS BYTE-IDENTICAL TO WHAT IT ALWAYS WAS. An advisory is a fact about the QUERY,
-			// not a member of the result set, so it does not join the payload — it leads it, where the reader
-			// meets it before deciding the list is the whole answer. Wrapping every clean result in an
-			// envelope to carry a field that is almost always empty would spend tokens on every call to
-			// report nothing.
-			if ( answer.unreadable.length === 0 ) return VaultTools.result( answer.matches );
+			// EVERY NOTE IS A FACT ABOUT THE QUERY, never a member of the result set — so none of them join
+			// the payload, they LEAD it, where the reader meets them before deciding the list is the whole
+			// answer. Wrapping a clean result in an envelope to carry fields that are usually empty would
+			// spend tokens on every call to report nothing.
+			const notes: string[] = [];
 
-			const n     = answer.unreadable.length;
-			const named = answer.unreadable.map( p => `  ${ p }` ).join( '\n' );
-			const note  = `NOTE: ${ n } document${ n === 1 ? '' : 's' } in scope could not be parsed, and `
-				+ `${ n === 1 ? 'is' : 'are' } therefore ABSENT from the results below — not missing from disk, `
-				+ `unreadable on it. This is the answer to "the file is there and no query finds it".\n`
-				+ `${ named }\n`
-				+ `Run ${ this.names.health } on one to see why it fails to parse.\n\n`;
-			return VaultTools.text( note + JSON.stringify( answer.matches, null, 2 ) );
+			// Paging first, because it qualifies the list itself: a reader who takes twenty refs for the
+			// whole answer has been misled about what matched, which is a worse error than not knowing a
+			// file failed to parse.
+			if ( answer.pages > 1 ) {
+				const from = ( answer.page - 1 ) * VaultUtilities.QUERY_PAGE_SIZE + 1;
+				const to   = from + ( answer.matches as unknown[] ).length - 1;
+				notes.push(
+					`NOTE: showing ${ from }–${ to } of ${ answer.total } ( page ${ answer.page } of ${ answer.pages } ). `
+					+ `Pass \`page: ${ Math.min( answer.page + 1, answer.pages ) }\` for the next, or narrow with `
+					+ `\`glob\` / \`type\` / \`text\` — narrowing is nearly always the better move.`
+				);
+			}
+
+			if ( answer.unreadable.length > 0 ) {
+				const n     = answer.unreadable.length;
+				const named = answer.unreadable.map( p => `  ${ p }` ).join( '\n' );
+				notes.push(
+					`NOTE: ${ n } document${ n === 1 ? '' : 's' } in scope could not be parsed, and `
+					+ `${ n === 1 ? 'is' : 'are' } therefore ABSENT from the results below — not missing from disk, `
+					+ `unreadable on it. This is the answer to "the file is there and no query finds it".\n`
+					+ `${ named }\n`
+					+ `Run ${ this.names.health } on one to see why it fails to parse.`
+				);
+			}
+
+			// THE CLEAN CASE IS BYTE-IDENTICAL TO WHAT IT ALWAYS WAS — a bare array, no wrapper, no header,
+			// not a token. A vault with nothing to say about a query pays nothing for the ability to say it,
+			// and that is what keeps both advisories worth reading when they do appear.
+			if ( notes.length === 0 ) return VaultTools.result( answer.matches );
+
+			return VaultTools.text( notes.join( '\n\n' ) + '\n\n' + JSON.stringify( answer.matches, null, 2 ) );
 		} catch ( e ) {
 			return VaultTools.error( errorText( e ) );
 		}
@@ -566,7 +589,9 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 			'the cheapest orientation call. ARCHIVAL buckets ( plans/plans_complete, plans/plans_deferred ) ' +
 			'are EXCLUDED unless the glob names one — retired and parked plans answer "what did we do", not ' +
 			'"what is true now". So `type: "plan"` returns the live plans, and ' +
-			'`glob: "plans/plans_complete/**"` returns the retired ones. Read-only.',
+			'`glob: "plans/plans_complete/**"` returns the retired ones. PAGED at 20 refs: when more match, ' +
+			'a note says how many and `page` ( 1-based ) walks them — though narrowing with `glob` / `type` ' +
+			'/ `text` is nearly always the better move. A `groupBy` census is never paged. Read-only.',
 		inputSchema: {
 			type:       'object',
 			properties: {
@@ -578,6 +603,7 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 				},
 				text:    { type: 'string', description: 'Case-insensitive substring across body + serialized frontmatter.' },
 				groupBy: { type: 'string', enum: [ 'type' ], description: 'Return { type, count }[] instead of refs.' },
+				page:    { type: 'number', description: 'Which page of 20 refs, 1-based. Out of range clamps to the last page. Ignored by a census.' },
 			},
 			required: [],
 		},

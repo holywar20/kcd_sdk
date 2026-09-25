@@ -90,7 +90,14 @@ export function scanReport( root: string, docRoot: string, opts?: ScanOptions ):
 	for ( const absPath of walked ) {
 		const parsed = parseFile( absPath, absRoot, docRoot );
 		if ( !parsed ) {
-			faults.push( path.relative( absRoot, absPath ).replace( /\\/g, '/' ) );
+			// ONLY AN `.html` FILE CAN BE A FAULT, and the guard states that rather than leaving it to be
+			// inferred. It is true today by accident of `parseFile`: the `.js` path never returns null,
+			// because a utility's comment-frontmatter is best-effort metadata on a code file and failing to
+			// read it is not the file failing to be what it is. Nothing records that, so a future failure
+			// mode on the `.js` branch would start reporting code as unreadable documents — an advisory
+			// nobody can act on, in the one list whose whole value is that every line deserves a look.
+			if ( /\.html?$/i.test( absPath ) )
+				faults.push( path.relative( absRoot, absPath ).replace( /\\/g, '/' ) );
 			continue;
 		}
 		if ( opts?.filter && !parsed.relativePath.includes( opts.filter ) ) continue;
