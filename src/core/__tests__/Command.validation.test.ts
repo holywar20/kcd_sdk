@@ -379,6 +379,47 @@ describe( 'argv', () => {
 	} );
 } );
 
+/**
+ * INTENT IS OPTIONAL ( Bryan, 2026-09-28 ) — "Agents don't need context to know when to type check."
+ *
+ * Two halves, and the second is the one that bites. Making the fault advisory is easy; the manifest was
+ * printing a WARNING STRING in the intent's place, which was harmless only while an intent-less command
+ * was filtered out before any model saw it. It is not filtered out any more.
+ */
+describe( 'a command with no intent', () => {
+
+	const bare = (): Command => new Command( 'typecheck', '', [ { kind: 'literal', text: 'npm run typecheck' } ] );
+
+	it( 'is REMARKED ON but not pinned — the fault is raised, and it does not block', () => {
+		const c = bare();
+
+		expect( c.getErrors() ).toContain( Command.NO_INTENT );
+		expect( c.fetchCode( Command.NO_INTENT ).blocking ).toBe( false );
+		// `ready` is what the manifest filters on and what `CommandService.run` refuses on.
+		expect( c.ready ).toBe( true );
+	} );
+
+	it( 'NEVER PUTS A WARNING WHERE A PERSON\'S JUDGEMENT GOES', () => {
+		// The one slot in an agent's tool description reserved for a person's sentence. A defect report
+		// delivered into it reads as guidance, which is the whole reason this case exists.
+		const text = bare().manifest();
+
+		expect( text ).not.toContain( '⚠' );
+		expect( text ).not.toMatch( /draft/i );
+		expect( text ).not.toMatch( /intent/i );
+		// Silence, not a neutral stand-in: the name, then straight to what it runs.
+		expect( text.split( '\n' )[ 0 ] ).toBe( 'typecheck' );
+		expect( text ).toContain( 'Runs: npm run typecheck' );
+	} );
+
+	it( 'still prints an authored intent, in the same place', () => {
+		const c = new Command( 'typecheck', 'Run after an edit.', [ { kind: 'literal', text: 'npm run typecheck' } ] );
+
+		expect( c.manifest().split( '\n' ).slice( 0, 2 ) ).toEqual( [ 'typecheck', 'Run after an edit.' ] );
+		expect( c.getErrors() ).not.toContain( Command.NO_INTENT );
+	} );
+} );
+
 describe( 'a part authored as a kind that no longer exists', () => {
 
 	it( 'LOADS, BLOCKS, AND SAYS SO rather than crashing or guessing', () => {

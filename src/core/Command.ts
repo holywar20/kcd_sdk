@@ -115,8 +115,8 @@ export interface CommandCodeInfo {
 	field:    'name' | 'intent' | 'parts';
 	/** What a person reads. Authored here, once, so four surfaces cannot word the same fault four ways. */
 	message:  string;
-	/** Stops it being handed to an agent. A non-blocking code is a remark; every one below blocks, and the
-	 *  flag exists so the first advisory code does not force this to become two lists. */
+	/** Stops it being handed to an agent. A non-blocking code is a remark — `no_intent` is the first and so
+	 *  far only one ( Bryan, 2026-09-28 ), which is what the flag was put here in anticipation of. */
 	blocking: boolean;
 }
 
@@ -282,7 +282,19 @@ export class Command {
 		 * AUTHORED, NEVER DERIVED ( Bryan, 2026-08-22 ). Everything else about a command can be produced from
 		 * its parts. This cannot, and a generated stand-in would be worse than an empty one: an empty intent is
 		 * visibly missing, and a plausible sentence assembled from the binary's name reads as though somebody
-		 * decided it. So a command without one is a draft — see `Command.NO_INTENT`.
+		 * decided it. That rule is untouched by everything below — the choice is between a person's sentence
+		 * and NO sentence, and it is never between a person's sentence and a machine's.
+		 *
+		 * OPTIONAL ( Bryan, 2026-09-28 ). "Agents don't need context to know when to type check." Requiring
+		 * this made a command with no intent a DRAFT, which is a blocking state: the manifest filtered it out
+		 * and `CommandService.run` refused it as `unfinished_draft`. So the commonest command anybody authors
+		 * — one binary, one subcommand, no holes, nothing to explain — could not be used at all until a
+		 * sentence was invented for it, and an invented sentence is the thing the paragraph above refuses.
+		 *
+		 * `Command.NO_INTENT` SURVIVES AS AN ADVISORY rather than being deleted. The nudge is still worth
+		 * making for the command where the judgement genuinely is not obvious; what changed is that it no
+		 * longer pins the command. And the manifest prints NOTHING where an empty intent would go — see
+		 * `manifest()`, where a warning string was once handed to a model as though it were guidance.
 		 */
 		readonly intent: string = '',
 		/**
@@ -330,9 +342,21 @@ export class Command {
 			code: 'no_name', field: 'name', blocking: true,
 			message: 'No name. An agent calls this by name and has nothing to call.'
 		},
+		/*
+		 * ADVISORY, NOT BLOCKING ( Bryan, 2026-09-28 ). "Agents don't need context to know when to type
+		 * check." A command whose line is self-evident is a usable command, and pinning it as a draft made
+		 * the commonest thing anybody authors — one binary, one subcommand, no holes — unreachable until
+		 * somebody wrote a sentence nobody needed.
+		 *
+		 * KEPT RATHER THAN DELETED, because the nudge is still worth making. A command whose judgement is
+		 * NOT self-evident is the case intent exists for, and a surface that says nothing about the empty
+		 * field stops asking the question entirely. Non-blocking is exactly the shape for that: the editor
+		 * still remarks on it, `ready` does not care, the manifest offers the command, and nothing refuses
+		 * to run it.
+		 */
 		no_intent: {
-			code: 'no_intent', field: 'intent', blocking: true,
-			message: 'No intent. Nobody has written when an agent should reach for this.'
+			code: 'no_intent', field: 'intent', blocking: false,
+			message: 'No intent authored. Not required — but if WHEN to reach for this is not obvious from the line above, this is the only place to say so.'
 		},
 		no_command: {
 			code: 'no_command', field: 'parts', blocking: true,
@@ -487,9 +511,24 @@ export class Command {
 			return `  ${ p.name } — ${ type?.describe ?? p.kind }${ p.optional ? '   ( may be omitted )' : '' }`;
 		} );
 
+		/*
+		 * NO INTENT MEANS NO LINE — not a line saying there is no intent ( Bryan, 2026-09-28 ).
+		 *
+		 * This printed `⚠ no intent authored — this command is a draft` in the intent's place, which was
+		 * harmless only for as long as an intent-less command was filtered out before any model saw it. It
+		 * is not filtered out any more, so that string would be delivered INTO an agent's tool description
+		 * in the one slot reserved for a person's judgement — a defect report read as guidance.
+		 *
+		 * Nor a neutral stand-in like "no guidance authored", which is the tempting compromise and is worse
+		 * than silence: it spends a line telling a model about the authoring process rather than about the
+		 * command. The point of the ruling is that some commands need no explanation, and the manifest
+		 * should LOOK like that.
+		 */
+		const intent = this.intent.trim();
+
 		return [
 			`${ this.name.trim() || '⚠ unnamed' }`,
-			`${ this.intent.trim() || '⚠ no intent authored — this command is a draft' }`,
+			...( intent ? [ intent ] : [] ),
 			``,
 			`Runs: ${ this.describe() }`,
 			slots.length ? `Arguments, in order:` : `Takes no arguments.`,
@@ -605,8 +644,28 @@ export class Command {
 		return out;
 	}
 
+	/**
+	 * THE WIRE FORM — and it is PLAIN DATA all the way down, rebuilt rather than spread ( 2026-09-28 ).
+	 *
+	 * This spread `this.parts` into a new array, which copies the element REFERENCES. A renderer that had
+	 * let a `Command` be deep-proxied by Vue therefore handed a fresh array of reactive Proxies into an IPC
+	 * payload, where structured clone refuses them — and the caller's save vanished with no error anybody
+	 * saw. That happened, cost a defect, and the comment warning about it sat one layer away from the
+	 * mistake in a component that was already obeying it.
+	 *
+	 * So the invariant is enforced where the wire form is MADE rather than asked of every surface that
+	 * builds one. Each part is rebuilt as a literal, so whatever wrapper a caller's framework put around it
+	 * is left behind here and cannot cross.
+	 */
 	serialize(): SerializedCommand {
-		return { name: this.name, intent: this.intent, parts: [ ...this.parts ] };
+		const parts = this.parts.map( ( p ): CommandPart => {
+			if( p.kind === 'literal' ) return { kind: 'literal', text: p.text };
+			if( p.kind === 'retired' ) return { kind: 'retired', was: p.was };
+			// `optional` only when it is actually set — a key carrying `undefined` is a key, and it would
+			// turn an equality check between a stored row and a round-tripped one into a puzzle.
+			return p.optional ? { kind: p.kind, name: p.name, optional: true } : { kind: p.kind, name: p.name };
+		} );
+		return { name: this.name, intent: this.intent, parts };
 	}
 
 	/**
