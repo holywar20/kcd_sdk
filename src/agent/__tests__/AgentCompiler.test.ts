@@ -8,8 +8,14 @@ import { loadLensFromDisk } from '../../node/io';
 import { KCDPrimitive } from '../../primitives/framework/KCDPrimitive';
 
 /**
- * The agent compiler ( plan agents-own-behaviour, task 55 ) — lenses in order with the first primary, loaded
- * habits in full, the rest as their why, the tools described, and no inheritance walked.
+ * The agent compiler ( plan agents-own-behaviour, task 55 ) — lenses in stack order and none of them leading,
+ * loaded habits in full, the rest as their why, the tools described, and no inheritance walked.
+ *
+ * NO PRIMARY, SINCE 2026-09-26. The first lens used to contribute its whole Care as the agent's persona while
+ * every later one contributed only its philosophy. Personality is authored on the AGENT now ( `systemPrompt` ),
+ * so every lens contributes the same thing: its philosophy, its Know tables and the references it loads. The
+ * cases below are the ones that pin that — in particular that a lens's personality section reaches the text
+ * from NO position, first included.
  */
 
 let root = '';
@@ -86,24 +92,51 @@ function compile() {
 
 describe( 'AgentCompiler', () => {
 
-	it( 'compiles the lenses in order, the first marked primary, each with its loaded references', () => {
+	it( 'compiles the lenses in stack order, each with its loaded references, and ranks none of them', () => {
 		const { text, lenses } = compile();
 
 		expect( lenses ).toEqual( [ 'alpha', 'beta' ] );
-		expect( text ).toContain( 'The first, alpha, is your persona and overrules the others where they conflict.' );
-		expect( text ).toContain( '## alpha — primary' );
-		expect( text.indexOf( '## alpha — primary' ) ).toBeLessThan( text.indexOf( '## beta' ) );
+		expect( text ).toContain( '## alpha' );
+		expect( text.indexOf( '## alpha' ) ).toBeLessThan( text.indexOf( '## beta' ) );
 		expect( text ).toContain( 'Alpha reference body.' );
 		expect( text ).toContain( 'Beta reference body.' );
+
+		// The heading carries no rank, and the order line no longer appoints one.
+		expect( text ).not.toContain( '— primary' );
+		expect( text ).not.toContain( 'overrules the others' );
 	} );
 
-	it( 'takes the personality from the first lens only — a later lens brings its philosophy, not who it is', () => {
+	/**
+	 * EVERY LENS BRINGS ITS PHILOSOPHY AND ONLY ITS PHILOSOPHY. Several at once is the point rather than a
+	 * collision: the agent holds the competing prerogatives and does the weighing ( Bryan, 2026-09-26 ).
+	 */
+	it( 'takes the philosophy from every lens, and the personality from none of them', () => {
 		const { text } = compile();
 
-		expect( text ).toContain( 'Alpha cares about first things.' );
 		expect( text ).toContain( 'alpha believes in its own way.' );
-		expect( text ).not.toContain( 'Beta cares about second things.' );
 		expect( text ).toContain( 'beta believes in its own way.' );
+
+		// A lens's own personality section is dead weight now — not first-lens-wins, just never read.
+		expect( text ).not.toContain( 'Alpha cares about first things.' );
+		expect( text ).not.toContain( 'Beta cares about second things.' );
+	} );
+
+	/** …and the words the agent is actually built from are the AGENT's, above every lens. */
+	it( 'leads with the agent\'s own personality, above the lens stack', () => {
+		const text = AgentCompiler.compile( {
+			name: 'Tester', systemPrompt: 'You are blunt and you show your work.', habits: [], tools: [],
+			lenses: [ lens( '_Claude/lenses/alpha/alpha.html' ) ]
+		} ).text;
+
+		expect( text ).toContain( 'You are blunt and you show your work.' );
+		expect( text.indexOf( 'You are blunt and you show your work.' ) ).toBeLessThan( text.indexOf( '## alpha' ) );
+	} );
+
+	/** A multi-lens stack is told the tension is deliberate, rather than told which lens wins. */
+	it( 'asks for the trade-off to be named when several lenses are worn', () => {
+		const { text } = compile();
+		expect( text ).toContain( 'wearing 2 lenses at once: alpha, beta' );
+		expect( text ).toContain( 'that tension is' );
 	} );
 
 	it( 'rides a reference two lenses share once, as the first lens has it', () => {

@@ -212,6 +212,62 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 } );
 
 /**
+ * The environment layer — what the host says about the INSTALLATION an agent is running in.
+ *
+ * Its own describe, on an agent that binds it, because `fullAgent` deliberately does not: the snapshots above
+ * are a characterization of the layers that existed before this one, and adding a block to that fixture would
+ * have re-pinned every one of them to prove a new layer works.
+ *
+ * WHAT IS WORTH HOLDING is the POSITION and the PRICING, not the text — the text is the host's, composed
+ * main-side in starmind, and this side only carries it. A layer that quietly sorted into the lens band would
+ * be charged to the wrong bucket in the gauge and read as lens identity in the breakdown, which are both
+ * silent failures: everything still renders, and the numbers are wrong.
+ */
+describe( 'Agent — the environment layer', () => {
+
+	function withEnvironment(): Agent {
+		const agent = fullAgent();
+		agent.bindEnv( { hostEnvironment: '## Environment\nYou are running inside Starmind Dev.' } );
+		return agent;
+	}
+
+	it( 'sits directly beneath the host prompt, above the agent own identity', () => {
+		const sections = withEnvironment().compiledContext().map( b => b.section ).filter( s => s !== null );
+
+		// Adjacent, in this order, and ahead of the name — the prefix-cache argument the block is placed on:
+		// shared by every agent in the instance, so it belongs above everything that varies per agent.
+		expect( sections.slice( 0, 3 ) ).toEqual( [ 'host-prompt', 'host-environment', 'agent-name' ] );
+	} );
+
+	it( 'carries no block at all when nothing binds one', () => {
+		// Every layer in this tier has to be able to go back to EMPTY — an SDK-built agent outside a dispatch
+		// binds no environment, and must not carry a heading with nothing under it.
+		expect( fullAgent().compiledContext().some( b => b.section === 'host-environment' ) ).toBe( false );
+	} );
+
+	it( 'prices as SYSTEM rather than as lens identity', () => {
+		const agent = withEnvironment();
+
+		expect( Agent.bucketOf( agent.compiledContext().find( b => b.section === 'host-environment' )! ) ).toBe( 'system' );
+		expect( agent.compiledBudget().system ).toBeGreaterThan( fullAgent().compiledBudget().system );
+	} );
+
+	it( 'names itself in the breakdown, and still reproduces the wire exactly', () => {
+		const agent = withEnvironment();
+
+		expect( agent.contextSegments().filter( s => s.source === 'system' ).map( s => s.label ) ).toContain( 'environment' );
+		expect( agent.contextSegments().map( s => s.text ).join( '\n\n' ) ).toBe( agent.wireSystem() );
+	} );
+
+	it( 'puts its text on the wire where the block sits', () => {
+		const wire = withEnvironment().wireSystem();
+
+		expect( wire ).toContain( 'You are running inside Starmind Dev.' );
+		expect( wire.indexOf( 'You are running inside Starmind Dev.' ) ).toBeLessThan( wire.indexOf( 'You are baseline.' ) );
+	} );
+} );
+
+/**
  * The per-source breakdown, held to being a PROJECTION of the wire rather than a second account of it.
  *
  * The first test here is the real gate, and it is an invariant rather than a snapshot: a snapshot can be

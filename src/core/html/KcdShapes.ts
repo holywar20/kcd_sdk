@@ -133,14 +133,19 @@ export const SHAPES: Record<string, TypeShape> = {
 		],
 	},
 
-	// THE ONE CLOSED TYPE. A lens is information — personality + philosophy + references — and nothing
-	// that changes what an agent DOES: habits, tools and contracts belong to the agent ( plan
+	// THE ONE CLOSED TYPE. A lens is information — philosophy + references, and optionally a personality —
+	// and nothing that changes what an agent DOES: habits, tools and contracts belong to the agent ( plan
 	// agents-own-behaviour ). Flat sections; the Know / Care / Do regions are retired. `KcdValidate.checkLens`
 	// enforces the closure, so a lens in the old shape is refused whole.
+	//
+	// PERSONALITY IS OPTIONAL SINCE 2026-09-26, and is no longer read by the compiler at all. An agent's
+	// personality is authored on the AGENT ( `systemPrompt` ); it was required here back when the first lens
+	// in a stack supplied one. The section stays LEGAL so the lenses that carry one still parse — and stays
+	// unrequired so nothing has to write prose nothing consumes.
 	lens: {
-		purpose: 'Information for an agent: who it is, what it believes, and what it reads.',
+		purpose: 'Information for an agent: what it believes, and what it reads.',
 		sections: [
-			{ name: 'personality', tier: 'required', hint: 'Who this lens is and what it governs. Only the first lens an agent loads supplies one.' },
+			{ name: 'personality', tier: 'optional', hint: 'RETIRED as a lens concern — an agent authors its own personality. Kept legal for the lenses that still carry one; nothing reads it.' },
 			{ name: 'philosophy',  tier: 'required', hint: 'Design stance, push-back style, prerogatives, flags, and what it does NOT do.' },
 			{ name: 'references',  tier: 'expected', slot: 'reference', hint: 'Rows pointing at the documents and code this lens brings — each off, on or load.' },
 		],

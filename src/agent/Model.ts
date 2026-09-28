@@ -83,6 +83,19 @@ export interface ModelDescriptor {
 	 */
 	conversation?: 'managed' | 'owned';
 	/**
+	 * WHICH COMPONENT DRAWS THIS MODEL'S ACCOUNT READING — a name a surface resolves against its own table,
+	 * carried here so the renderer can ask the question off the model it already holds.
+	 *
+	 * Declared by the CONNECTOR and copied onto every model it mints, because the answer is a property of
+	 * the connection rather than of the model: the same Claude model reached two ways has a plan behind it
+	 * on one tier and a bill on the other, and those are not the same panel.
+	 *
+	 * ABSENT IS THE COMMON CASE and means the space is simply empty for this model — a local model has no
+	 * account, and a provider that publishes nothing has nothing to draw. A name the drawing surface does
+	 * not recognise means the same thing: nothing renders. The SDK never resolves this; it only carries it.
+	 */
+	usagePanel?: string;
+	/**
 	 * Working tier — how heavy the model is / where it runs. Orthogonal to provider:
 	 * a 'remote' connector may front a remote-tier self-host OR a frontier endpoint,
 	 * so tier is declared, not derived. Widgets constrain their model choice by it.

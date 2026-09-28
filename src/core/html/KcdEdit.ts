@@ -186,22 +186,51 @@ export const KcdEdit = new class KcdEdit {
 	 * block HTML — `KcdSynth.proseToHtml` decides which, by the same crude-but-safe test every authoring
 	 * path uses, so a human typing paragraphs and an agent emitting `<p>` land identically.
 	 *
-	 * Null when the section does not exist, or when the text is blank. BLANK IS A REFUSAL RATHER THAN A
-	 * CLEAR: an empty section trips the validator's own `empty-section` rule, so writing one would produce
-	 * a draft that cannot be saved — a failure discovered at Save, far from the keystroke that caused it.
-	 * Removing a section is a different act and does not belong on the text-editing op.
+	 * Null when the text is blank. BLANK IS A REFUSAL RATHER THAN A CLEAR: an empty section trips the
+	 * validator's own `empty-section` rule, so writing one would produce a draft that cannot be saved — a
+	 * failure discovered at Save, far from the keystroke that caused it. Removing a section is a different
+	 * act and does not belong on the text-editing op.
+	 *
+	 * A SECTION THE DOCUMENT DOES NOT CARRY IS CREATED, but only when the caller names a `title` for it
+	 * ( Bryan, 2026-09-26 ). It used to be a flat refusal, which is defensible for a machine caller and was
+	 * wrong for a person: a lens written before `philosophy` existed had no such section, so the editor drew
+	 * "this document carries no philosophy section" and there was no gesture anywhere in the app that could
+	 * give it one. A section you cannot create is a section older documents can never grow.
+	 *
+	 * The title is the caller's because only the caller knows what the heading should READ — the section id
+	 * is a slug and the heading is prose. No title means the old behaviour, so nothing that calls this to
+	 * edit an existing section can accidentally start authoring new ones.
+	 *
+	 * WHERE IT LANDS: immediately before `references` when the document has one, else at the end of the
+	 * article. Prose before tables is the shape every artifact type here keeps, and appending blindly would
+	 * put a philosophy under the reference list of every lens that has one.
 	 *
 	 * NOT A VALIDATION GATE. This shapes one section; whether the DOCUMENT still stands is `KcdValidate`'s
 	 * question at save, and it stays the only one asking — the same division `KcdSynth` documents.
 	 */
-	setSection( body: string, section: string, prose: string ): string | null {
+	setSection( body: string, section: string, prose: string, title?: string ): string | null {
 		const html = KcdSynth.proseToHtml( prose );
 		if( !html ) return null;
 		const root = HtmlTree.parse( body );
 		const sec  = HtmlTree.first( root, ( el ) => HtmlTree.get( el, 'data-kcd-section' ) === section );
-		if( !sec ) return null;
-		const head = sec.kids.find( ( k ): k is HtmlEl => k.type === 'el' && /^h[1-6]$/.test( k.tag ) );
-		sec.kids = [ ...( head ? [ head ] : [] ), ...HtmlTree.parse( html ).kids ];
+		if( sec ) {
+			const head = sec.kids.find( ( k ): k is HtmlEl => k.type === 'el' && /^h[1-6]$/.test( k.tag ) );
+			sec.kids = [ ...( head ? [ head ] : [] ), ...HtmlTree.parse( html ).kids ];
+			return HtmlTree.innerHtml( root );
+		}
+		if ( !title ) return null;
+
+		const made = this.el( 'section', { 'data-kcd-section': section }, [
+			this.el( 'h3', { 'data-kcd-heading': '' }, [ this.text( title ) ] ),
+			...HtmlTree.parse( html ).kids
+		] );
+		// The article is where a section belongs; a document with no article element is malformed enough
+		// that appending at the root is as good an answer as refusing, and the validator will say so.
+		const host = HtmlTree.first( root, ( el ) => el.tag === 'article' ) ?? root;
+		const refs = host.kids.findIndex(
+			( k ) => k.type === 'el' && HtmlTree.get( k, 'data-kcd-section' ) === 'references' );
+		if ( refs >= 0 ) host.kids.splice( refs, 0, made );
+		else host.kids.push( made );
 		return HtmlTree.innerHtml( root );
 	}
 

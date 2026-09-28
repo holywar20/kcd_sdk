@@ -318,12 +318,21 @@ export const KcdValidate = new class KcdValidate {
 			if ( n > 1 ) err( 'dup-habit-class', `habit-class:${ hc }`, `${ n } slots share habit-class "${ hc }" — at most one per file ( §6 )` );
 	}
 
-	// ── Lens pass — personality + philosophy + references, and nothing that behaves ─────
+	// ── Lens pass — philosophy + references, an optional personality, and nothing that behaves ─────
 	/**
 	 * A lens is information ( plan agents-own-behaviour ). Its top-level sections are exactly the closed
-	 * `LENS_SECTIONS` — personality and philosophy required — and it carries no behaviour: no habit, tool or
-	 * contract rows, and no `base` to inherit from, because nothing inherits. A lens in the old Know / Care /
-	 * Do shape fails here whole — the migration is a hard cut, and a half-read lens is a different agent.
+	 * `LENS_SECTIONS` — PHILOSOPHY required — and it carries no behaviour: no habit, tool or contract rows,
+	 * and no `base` to inherit from, because nothing inherits. A lens in the old Know / Care / Do shape
+	 * fails here whole — the migration is a hard cut, and a half-read lens is a different agent.
+	 *
+	 * PERSONALITY IS NO LONGER REQUIRED ( Bryan, 2026-09-26 ). It was, back when the first lens in a stack
+	 * supplied the agent's persona; personality is authored on the AGENT now and nothing here reads the
+	 * section. Requiring prose that nothing consumes is how a document type acquires ceremony, and the
+	 * ruling was plain: there is no reason to prevent compilation over it.
+	 *
+	 * It stays LEGAL rather than banned, which is the half that matters for the vault as it stands: every
+	 * lens written before today carries one, and turning those into validation errors would be a vault-wide
+	 * edit bought for nothing. They simply go unread, and drain out as lenses are touched.
 	 */
 	checkLens( article: HtmlEl, err: Emit ): void {
 		const top = HtmlTree.collect( article, el => KcdAddress.isSection( el ) && !this.insideSection( article, el ) );
@@ -331,8 +340,9 @@ export const KcdValidate = new class KcdValidate {
 		for ( const v of names )
 			if ( v && !KcdAddress.LENS_SECTIONS.includes( v ) )
 				err( 'bad-lens-section', `section:${ v }`, `a lens section is one of { ${ KcdAddress.LENS_SECTIONS.join( ' | ' ) } } — "${ v }" is not ( behaviour belongs to the agent; code areas are references )` );
-		for ( const need of [ 'personality', 'philosophy' ] )
-			if ( !names.includes( need ) ) err( 'lens-no-' + need, `section:${ need }`, `a lens must carry a \`${ need }\` section` );
+		// PHILOSOPHY ALONE. `personality` came out of this pair on 2026-09-26 — see the note above.
+		if ( !names.includes( 'philosophy' ) )
+			err( 'lens-no-philosophy', 'section:philosophy', 'a lens must carry a `philosophy` section' );
 
 		for ( const slot of HtmlTree.collect( article, el => KcdAddress.isSlot( el ) ) ) {
 			const kind = HtmlTree.get( slot, 'data-kcd-slot' );

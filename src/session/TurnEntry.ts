@@ -651,6 +651,19 @@ export interface TranscriptRow {
 	 *  has recorded yet, and for one whose turn predates typed entries; a surface offering a per-row action
 	 *  gates on it rather than assuming. */
 	rowId?: number;
+	/**
+	 * The thing this row NAMES, unqualified — a tool's name, a file's, a folder's. Absent on the kinds that
+	 * name nothing ( user, assistant, thinking, error ).
+	 *
+	 * It is already inside `label`, which is exactly the problem: `label` is a SENTENCE for a person
+	 * ( `→ tool grep` ), and a surface that wants to group rows by what they touched had to parse one. A
+	 * display string is the worst possible grouping key — it is free to gain a prefix or an arrow the day
+	 * somebody improves the wording, and the grouping fails silently when it does.
+	 *
+	 * Added 2026-09-27 for the chat's tool strip, which groups a turn's calls by tool so that a repeat
+	 * reads as a repeat. `label` stays what it is; this is the machine-readable half beside it.
+	 */
+	name?: string;
 	/** Wire token weight — 0 for a display-only ( thinking ) row, else the entry's projected cost. A row
 	 *  carrying a `stub` prices as THAT, not as its full text: the wire pays for the stub. */
 	tokens: number;
@@ -884,9 +897,18 @@ export function frameFolder( path: string ): string {
  * IT RESEMBLES THE SURFACE AXIS AND IS NOT IT. `manifest` against `preload` decides how much of a HELD tool
  * the prompt carries; this decides what the conversation's record of a GRANT says. Each has its own framing
  * because they report different things: the manifest's line describes a capability, this one an event.
+ *
+ * ── IT INVITES NO CALL, AND THAT IS THE FIX RATHER THAN THE OMISSION ( 2026-09-26 ) ──
+ * This used to end "call it when you need it". The identity it prints is `group.tool`, which is the POLICY
+ * spelling — a model calls `group__tool`, and on a harness lane something else again. The SDK cannot spell
+ * the wire form ( the separator is the app's and this layer must not import it ), so the one thing this line
+ * could not do is name the call. Inviting one anyway handed an agent an instruction it could only carry out
+ * by guessing, and a guessed name is held on the barbed wire exactly as a real one is — so the guess is not
+ * even discoverable as wrong. The manifest names every callable tool in its callable spelling and states the
+ * calling rule; this says only that the grant stands, which is all its own docblock ever claimed for it.
  */
 export function frameTool( server: string, name: string ): string {
-	return `[available tool — ${ server }.${ name } — granted to you; call it when you need it]`;
+	return `[available tool — ${ server }.${ name } — granted to you and still in force]`;
 }
 
 /**
@@ -1190,6 +1212,23 @@ export class Transcript {
 		target.entries.push( entry );
 	}
 
+	/**
+	 * One turn by id, or undefined — so a caller that knows WHICH turn it is appending to can say so.
+	 *
+	 * `append` takes a `Turn` for the reason its own note gives: the last-open-turn fallback lands a second
+	 * concurrent turn's entries on the first turn's object. That argument only helps a caller holding the
+	 * object, which the dispatch loop does and an out-of-band recorder does not — the harness lane knows a
+	 * trace id and nothing else, because its tool calls arrive over HTTP from another process.
+	 *
+	 * Added 2026-09-27 so `CapabilityRouter` can record a harness child's tool calls onto the right turn
+	 * instead of onto whichever one happened to be last. Undefined for a trace that names no turn here, and
+	 * the caller is expected to record NOTHING rather than fall back — a tool call filed against the wrong
+	 * turn is worse than one that went unrecorded.
+	 */
+	turnById( id: string ): Turn | undefined {
+		return this.turns.find( ( t ) => t.id === id );
+	}
+
 	// ── Compaction ( the covered prefix is marked once, here ) ──
 
 	/**
@@ -1470,6 +1509,7 @@ export class Transcript {
 			tokens: displayOnly ? 0 : stub ? KCDPrimitive._estimateTokens( stub ) : Transcript._entryTokens( entry ),
 			...( entry.rowId !== undefined ? { rowId: entry.rowId } : {} ),
 			...( stub ? { stub } : {} ),
+			...( Transcript._name( entry ) ? { name: Transcript._name( entry ) } : {} ),
 			displayOnly,
 			display: Transcript._display( entry )
 		};
@@ -1843,6 +1883,26 @@ export class Transcript {
 			// so it reads as a flag to act on rather than a death to investigate.
 			case 'unreadable':    return { icon: 'warning',   color: '--error' };
 			default:              return Assert.never( entry );
+		}
+	}
+
+	/**
+	 * WHAT AN ENTRY NAMES — the machine-readable half of `_label`, and undefined for the kinds that name
+	 * nothing.
+	 *
+	 * A tool-result is deliberately unnamed even though it belongs to a call that has one: the result
+	 * carries a `toolUseId`, not a name, and resolving one to the other means walking the turn's other
+	 * entries. A row describes itself here; joining rows is the caller's job if it ever needs it.
+	 */
+	static _name( entry: TurnEntry ): string | undefined {
+		switch ( entry.kind ) {
+			case 'tool-call':       return entry.name;
+			case 'injected-file':   return entry.name;
+			case 'injected-folder': return entry.name;
+			case 'image':           return entry.name;
+			// Qualified for the same reason its label is: two servers may ship a tool of one name.
+			case 'injected-tool':   return `${ entry.server }.${ entry.name }`;
+			default:                return undefined;
 		}
 	}
 

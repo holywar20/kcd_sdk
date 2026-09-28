@@ -153,15 +153,20 @@ export interface SerializedAgent {
 }
 
 /** A lens an agent's record names that could not be loaded. Kept on the agent so it can say which lens it
- *  lost, and so a record write puts the id back where it was rather than dropping it. */
+ *  lost, and so a record write puts the id AND ITS NAME back where they were rather than dropping them. */
 export interface BrokenLens {
-	/** the doc-index id the record holds */
+	/** the doc-index id the record holds — frontmatter the document carries, not a key the database minted */
 	id:       string;
-	/** the lens's last known name, or its id when the index never had one */
+	/** The lens's name: the index row's if it has one, else the name the RECORD stored, else the id. That
+	 *  middle step arrived 2026-09-26 and is the point of storing a name at all — before it, an id that
+	 *  resolved to no row left a uuid here, and a surface could not say which lens the agent had lost. */
 	name:     string;
 	/** its place in the authored stack */
 	position: number;
-	reason:   'missing' | 'invalid';
+	/** `missing` — the row is gone or the file left the vault. `invalid` — the file is there and will not
+	 *  validate or load. `ambiguous` — the id found nothing, so the name was tried, and more than one lens
+	 *  answers to it; resolving that by picking the first would be a guess about which agent this is. */
+	reason:   'missing' | 'invalid' | 'ambiguous';
 	message?: string;
 }
 
@@ -293,6 +298,8 @@ export type ContributionSettings = {
 
 export type AgentEnvironment = {
 	hostPrompt?:     string;
+	/** What the host says about the INSTALLATION this agent is running in — see `Agent.hostEnvironment`. */
+	hostEnvironment?: string;
 	rootContext?:    string;
 	toolDefs?:       ToolDef[];
 	/**
@@ -386,6 +393,17 @@ export class Agent {
 	 *  to rewrite the app's own description of its own surfaces. '' when nothing binds it, which is every
 	 *  SDK-built agent outside a dispatch. */
 	hostPrompt: string = '';
+	/**
+	 * What the host says about the INSTALLATION this agent is running in — which copy of the app it is, and
+	 * whatever the person running it wrote about their environment.
+	 *
+	 * ITS OWN LAYER RATHER THAN PART OF `hostPrompt`, and the split is deliberate on both sides. That block is
+	 * the app's account of its own surfaces: authored in code, never user-editable, and priced by a ceiling
+	 * that a free-text field would make meaningless. This one is half derived from live state and half written
+	 * by a person, so it is bound separately, sits just beneath it on the wire, and carries a budget of its
+	 * own. '' when nothing binds it, which is every SDK-built agent outside a dispatch.
+	 */
+	hostEnvironment: string = '';
 	/** The model-bound root-context text ( CLAUDE.md / Winston.html et al. ) — leads the compiled context.
 	 *  '' when the agent's model declares none. */
 	rootContext: string = '';
@@ -638,6 +656,7 @@ export class Agent {
 	 */
 	bindEnv( env: AgentEnvironment ): void {
 		if ( env.hostPrompt  !== undefined ) this.hostPrompt  = env.hostPrompt;
+		if ( env.hostEnvironment !== undefined ) this.hostEnvironment = env.hostEnvironment;
 		if ( env.rootContext !== undefined ) this.rootContext = env.rootContext;
 		if ( env.toolDefs    !== undefined ) this.toolDefs    = env.toolDefs;
 		if ( env.runDeferred !== undefined ) this.runDeferred = env.runDeferred;
@@ -754,7 +773,7 @@ export class Agent {
 		for ( const r of ContextAssembler.manifestRows( survivors.filter( isIndex ) ) )
 			rowWeight.set( norm( r.where ), weigh( r.text ) );
 
-		const root = this.primaryLens;
+		const root = this.firstLens;
 		const rel  = ( abs: string ): string => norm( ( root ?? this.lenses[ 0 ] )?.vaultRelative( abs ) ?? abs );
 
 		// A habit a more specific layer displaced puts nothing on the wire, so the chart must not price
@@ -821,22 +840,30 @@ export class Agent {
 		return out;
 	}
 
-	/** The primary lens — the first in the stack, or null for a draft. */
-	get primaryLens(): LensObject | null { return this.lenses[ 0 ] ?? null; }
+	/**
+	 * The FIRST lens in the stack, or null for a draft.
+	 *
+	 * It was `primaryLens` until 2026-09-26, and the rename is the point rather than tidying: "primary"
+	 * meant the lens that supplied the agent's personality, and personality is authored on the agent now
+	 * ( `systemPrompt` ). No lens outranks another. What position still decides is narrow and mechanical —
+	 * which lens claims a reference two of them name — so the accessor says what it returns, which is the
+	 * first one, and callers that just want "a lens to put a name to" are no longer implying a rank.
+	 */
+	get firstLens(): LensObject | null { return this.lenses[ 0 ] ?? null; }
 
 	/** A draft cannot run: no lens has been COMPOSED onto it yet. */
 	isDraft(): boolean { return this.lenses.length === 0; }
 
-	/** The primary lens's path — the agent's path identity — or null for a draft. */
-	getPath(): string | null { return this.primaryLens?.getPath() ?? null; }
+	/** The first lens's path — the agent's path identity — or null for a draft. */
+	getPath(): string | null { return this.firstLens?.getPath() ?? null; }
 
 	// ── The lens read surface, aggregated across every composed lens (null-safe) ──
 
 	getNodes(): KCDPrimitive[]        { return this.lenses.flatMap( ( l ) => l.getNodes() ); }
 	getPolicy(): PolicyEntry[]        { return this.lenses.flatMap( ( l ) => l.getPolicy() ); }
 	getContributors(): KCDPrimitive[] { return this.lenses.flatMap( ( l ) => l.getContributors() ); }
-	getFrontmatter(): Record<string, unknown> { return this.primaryLens?.getFrontmatter() ?? {}; }
-	getSections(): Record<string, string>      { return this.primaryLens?.getSections() ?? {}; }
+	getFrontmatter(): Record<string, unknown> { return this.firstLens?.getFrontmatter() ?? {}; }
+	getSections(): Record<string, string>      { return this.firstLens?.getSections() ?? {}; }
 
 	// ── Context assembly ────────────────────────────────────────────────────────
 
@@ -1070,6 +1097,12 @@ export class Agent {
 				// every agent in every session, and a cache invalidates from the earliest edit forward, so the
 				// layer that never varies belongs where nothing beneath it can force it to be re-prefilled.
 				this.hostPrompt   ? [ Agent.extraBlock( 'host-prompt',   this.hostPrompt   ) ] : [],
+				// WHICH INSTALLATION THIS IS, directly under the host's voice and above the agent's identity.
+				// Positioned for the prefix cache on the same argument the host prompt is: it is shared by every
+				// agent in this instance and changes only when a person edits their note, so it belongs above
+				// everything that varies per agent and per turn. Beneath the host prompt rather than above it
+				// because that block is identical in every INSTALL as well, and a cache invalidates forward.
+				this.hostEnvironment ? [ Agent.extraBlock( 'host-environment', this.hostEnvironment ) ] : [],
 				// The agent's NAME, straight after the host. Per-agent where the host is shared, and stable across
 				// every turn this agent takes, so it sits above everything that varies more.
 				this.nameBlock()  ? [ Agent.extraBlock( 'agent-name',    this.nameBlock()  ) ] : [],
@@ -1369,7 +1402,7 @@ export class Agent {
 	 *  `compiledBudget()` signature change plus the inspector band, so it lands with the renderer slice
 	 *  rather than being half-done here. `frame` and `mode-line` join for the same reason and carry the same
 	 *  reservation. */
-	private static readonly SYSTEM_SECTIONS = new Set<string>( [ 'host-prompt', 'agent-name', 'system-prompt', 'root-context', 'attachments', 'frame', 'mode-line' ] );
+	private static readonly SYSTEM_SECTIONS = new Set<string>( [ 'host-prompt', 'host-environment', 'agent-name', 'system-prompt', 'root-context', 'attachments', 'frame', 'mode-line' ] );
 	/** The compiled sections that price as TOOLS — the surface, not the identity that may reach for it. */
 	private static readonly TOOL_SECTIONS = new Set<string>( [ 'tool-manifest' ] );
 	/** Every section the bottom-of-context manifest emits — the routing tables a reader finds filed together.
@@ -1398,6 +1431,7 @@ export class Agent {
 	 *  two only ever agree until one of them is edited. */
 	private static readonly SECTION_LABELS: Record<string, string> = {
 		'host-prompt':     'host prompt',
+		'host-environment': 'environment',
 		'agent-name':      'name',
 		'system-prompt':   'agent instruction',
 		'root-context':    'root context',
@@ -1552,7 +1586,7 @@ export class Agent {
 	 */
 	displacedHabitPaths(): Set<string> {
 		const norm = ( s: string ): string => s.replace( /\\/g, '/' );
-		const root = this.primaryLens ?? this.lenses[ 0 ] ?? null;
+		const root = this.firstLens ?? this.lenses[ 0 ] ?? null;
 		const href = ( abs: string ): string => norm( root?.vaultRelative( abs ) ?? abs );
 
 		const best = new Map<string, { path: string; rank: number }>();
@@ -1587,7 +1621,7 @@ export class Agent {
 	}
 
 	manifestBlocks( index: TaggedBlock[] ): TaggedBlock[] {
-		const root = this.primaryLens;
+		const root = this.firstLens;
 		const out: TaggedBlock[] = [];
 
 		const fileRows = this.lenses.map( l => KcdContext.renderRow( {

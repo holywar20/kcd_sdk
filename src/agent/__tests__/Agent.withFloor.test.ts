@@ -29,7 +29,7 @@ describe( 'Agent — no base floor', () => {
 		const agent = Agent.create( { lenses: [ render(), mcp() ] } )
 
 		expect( agent.lenses.map( l => l.getName() ) ).toEqual( [ 'render', 'mcp' ] )
-		expect( agent.primaryLens?.getName() ).toBe( 'render' )
+		expect( agent.firstLens?.getName() ).toBe( 'render' )
 		expect( agent.name ).toBe( 'render' )
 	} )
 
@@ -37,14 +37,14 @@ describe( 'Agent — no base floor', () => {
 		const agent = Agent.create( { lenses: [ lens( '_lens-base', '/vault/_Claude/lenses/_lens-base.html' ) ] } )
 
 		expect( agent.isDraft() ).toBe( false )
-		expect( agent.primaryLens?.getName() ).toBe( '_lens-base' )
+		expect( agent.firstLens?.getName() ).toBe( '_lens-base' )
 	} )
 
 	it( 'is a draft with no lens, and compiles to nothing', () => {
 		const agent = Agent.create( {} )
 
 		expect( agent.isDraft() ).toBe( true )
-		expect( agent.primaryLens ).toBeNull()
+		expect( agent.firstLens ).toBeNull()
 		expect( agent.name ).toBe( 'agent' )
 		expect( agent.compile() ).toBe( '' )
 	} )

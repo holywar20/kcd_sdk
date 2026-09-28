@@ -6,10 +6,24 @@ import type { TaggedBlock } from '../primitives/types';
 /**
  * AgentCompiler — an agent's context, built from its record ( plan agents-own-behaviour, task 55 ).
  *
- * An agent is its system prompt, its lenses, its habits and its tools, plus the contracts its PROJECT
- * holds, and that is all this reads. The lenses come in stack
- * order, and THE FIRST LOADED WINS: it alone supplies the personality, every later lens adds only its philosophy
- * and its references, and a reference two lenses share stands as the first has it ( see `_lensBlocks` ). A lens's own habit and tool tables are NOT read — behaviour belongs to the agent now, and a
+ * An agent is its personality, its lenses, its habits and its tools, plus the contracts its PROJECT
+ * holds, and that is all this reads.
+ *
+ * THE PERSONALITY IS THE AGENT'S ( Bryan, 2026-09-26 ). It rides `systemPrompt` and leads, above every lens.
+ * It used to come from the FIRST lens in the stack — the "primary" — which alone contributed its whole Care
+ * while every later lens contributed only its philosophy. That made stack POSITION carry a meaning nothing
+ * about a lens justified: the same lens was a persona in one agent and a footnote in the next depending on
+ * where it sat in a list. There is no primary now. Every lens contributes the same thing as every other.
+ *
+ * SEVERAL PHILOSOPHIES IS THE POINT, NOT A COLLISION. Each lens brings what IT defends, and an agent wearing
+ * two holds two sets of prerogatives that will not always agree. Nothing here reconciles them and nothing
+ * should: the agent is the system of judgement, and the tension is what it is being asked to trade off
+ * ( Bryan, 2026-09-26 ). A compiler that flattened this would be answering a question that belongs to the
+ * agent — and quietly, where the answer could not be seen.
+ *
+ * A reference two lenses share still stands as the FIRST has it ( see `_lensBlocks` ) — that one is not about
+ * primacy, it is about not shipping the same document twice under two different modes. A lens's own habit and
+ * tool tables are NOT read — behaviour belongs to the agent now, and a
  * lens is documentation. Habits the agent loads ride in full; the rest ride as one line of why, so the agent
  * knows they exist and where to find them. The tools are described, never granted here: what an agent may call
  * is its passport's business, or Claude Code's. The contracts are the project's rather than the agent's —
@@ -53,7 +67,10 @@ export interface CompileContract {
 
 export interface AgentCompileInput {
 	name:    string;
-	systemPrompt?: string | null;   // the agent's own words — they lead, above every lens
+	/** The agent's PERSONALITY — its own words, and they lead, above every lens. Still spelled
+	 *  `systemPrompt` because that is the field on the record; what a person writes into it is who the
+	 *  agent is, which is why the editor calls it Personality. */
+	systemPrompt?: string | null;
 	lenses:  LensObject[];
 	habits:  CompileHabit[];
 	tools:   CompileTool[];
@@ -64,14 +81,15 @@ export interface AgentCompileInput {
 export interface AgentCompiled {
 	text:    string;
 	tokens:  number;
-	lenses:  string[];        // what compiled, in order — the first is primary
+	lenses:  string[];        // what compiled, in stack order. Order, not rank — none of them leads.
 	habits:  { loaded: string[]; listed: string[] };
 	tools:   string[];
 	contracts: string[];
 }
 
-/** The Care section a stacked lens still contributes when it is not first. Everything else in its Care is who
- *  it is, and there is one of those per agent. */
+/** THE ONE Care section a lens contributes — what it defends, what it refuses, how it decides. Every other
+ *  Care section is who the WEARER is, and that is authored on the agent ( `systemPrompt` ), not here. Read by
+ *  every lens in the stack alike; there is no first-one-wins any more. */
 const PHILOSOPHY = 'philosophy';
 
 const _norm = ( p: string ): string => p.replace( /\\/g, '/' );
@@ -93,23 +111,24 @@ const _claimed = ( claimed: Set<string>, path: string ): boolean => {
 };
 
 /**
- * What a lens contributes. THE FIRST LENS LOADED WINS: the primary brings its whole Care — its personality —
- * and each lens after it brings only its philosophy. Every lens brings its own Know tables and the bodies of the
- * references it loads, EXCEPT a reference an earlier lens already names: that one stands as the earlier lens
- * has it, mode included, so a later lens can neither load what the first kept on the shelf nor load it twice.
+ * What a lens contributes — THE SAME FROM EVERY LENS IN THE STACK: its philosophy, its own Know tables, and
+ * the bodies of the references it loads. No lens brings a personality; the agent has one of those.
+ *
+ * The one thing position still decides is a SHARED REFERENCE: a document an earlier lens already names stands
+ * as that lens has it, mode included, so a later lens can neither load what an earlier one kept on the shelf
+ * nor ship it twice. That is de-duplication, not primacy.
  */
-function _lensBlocks( lens: LensObject, primary: boolean, claimed: Set<string> ): TaggedBlock[] {
+function _lensBlocks( lens: LensObject, claimed: Set<string> ): TaggedBlock[] {
 	const own    = lens.getPath();
-	const care   = lens.getOwnBlocks( 'care' ).filter( b => primary || b.section === PHILOSOPHY );
+	const care   = lens.getOwnBlocks( 'care' ).filter( b => b.section === PHILOSOPHY );
 	const loaded = lens.getContextBlocks().filter( b => b.path !== own && b.artifactType === 'reference' && !_claimed( claimed, b.path ) );
 	return [ ...care, ...lens.getOwnBlocks( 'know' ), ...loaded ];
 }
 
-function _lensSection( lens: LensObject, primary: boolean, claimed: Set<string> ): string {
-	const name  = lens.getName();
-	const head  = primary ? `## ${ name } — primary` : `## ${ name }`;
-	const body  = _lensBlocks( lens, primary, claimed ).map( b => b.text.trim() ).filter( Boolean );
-	return [ head, ...body ].join( '\n\n' );
+function _lensSection( lens: LensObject, claimed: Set<string> ): string {
+	const name = lens.getName();
+	const body = _lensBlocks( lens, claimed ).map( b => b.text.trim() ).filter( Boolean );
+	return [ `## ${ name }`, ...body ].join( '\n\n' );
 }
 
 function _habitLine( h: CompileHabit ): string {
@@ -144,18 +163,30 @@ export const AgentCompiler = {
 		const host  = input.host ?? 'starmind';
 		const parts: string[] = [];
 
+		// EMPTY IS A REAL ANSWER, and nothing is emitted for it — no header, no placeholder, no sentence
+		// saying the agent has no personality ( Bryan, 2026-09-26 ). A personality here is VOICE GUIDANCE:
+		// "talk like Winston Churchill". An agent that names none is not an agent with a hole in it, it is
+		// an agent running on whatever its model was trained to sound like, which is a perfectly good
+		// default. Announcing the absence would spend context telling a model something about itself that
+		// it is better off simply being.
 		const prompt = input.systemPrompt?.trim();
 		if ( prompt ) parts.push( prompt );
 
 		const lenses = input.lenses.map( l => l.getName() );
 		if ( input.lenses.length ) {
+			// NO LENS OVERRULES ANOTHER. This line used to name the first as the persona and give it the
+			// casting vote; both halves were wrong once personality moved to the agent. What it says instead
+			// is what a stack actually is — several sets of prerogatives, held at once, to be weighed rather
+			// than ranked. The weighing is the agent's, which is why it is asked for here in the open.
 			const order = input.lenses.length > 1
-				? `You are ${ input.name }, wearing ${ input.lenses.length } lenses in this order. The first, ${ lenses[ 0 ] }, is your persona and overrules the others where they conflict.`
+				? `You are ${ input.name }, wearing ${ input.lenses.length } lenses at once: ${ lenses.join( ', ' ) }. `
+					+ 'Each brings what it defends. Where two of them pull against each other, that tension is '
+					+ 'deliberate — weigh them and say which you are trading away, rather than pretending they agree.'
 				: `You are ${ input.name }, wearing ${ lenses[ 0 ] }.`;
 			const claimed  = new Set<string>();
 			const sections: string[] = [];
-			input.lenses.forEach( ( l, i ) => {
-				sections.push( _lensSection( l, i === 0, claimed ) );
+			input.lenses.forEach( ( l ) => {
+				sections.push( _lensSection( l, claimed ) );
 				for ( const p of _namedRefs( l ) ) claimed.add( p );
 				for ( const b of l.getContextBlocks() ) if ( b.artifactType === 'reference' ) claimed.add( _norm( b.path ) );
 			} );

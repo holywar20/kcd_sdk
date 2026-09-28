@@ -93,7 +93,7 @@ describe( 'Vault.buildAgent — the dumb-agent factory', () => {
 		const built = vault().buildAgent( [ LENS ] )
 
 		expect( built.isDraft() ).toBe( false )
-		expect( built.primaryLens?.getName() ).toBe( LENS )
+		expect( built.firstLens?.getName() ).toBe( LENS )
 	} )
 
 	it( 'throws on an unresolvable lens name rather than compiling a degraded context', () => {

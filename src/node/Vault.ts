@@ -875,11 +875,23 @@ export class Vault {
 	 *   • Dangling links — an internal link href whose target does not exist on disk. Code-file links
 	 *     count ( a lens Know table legitimately points at `.ts` ); external URLs, `#anchors`, and
 	 *     `{placeholder}` template hrefs are skipped.
-	 *   • Broken identity refs — a `base` / `lens` slug that names no artifact in the vault. The `cross`
-	 *     sentinel ( a multi-lens plan's `lens` ) is not a reference and is skipped.
+	 *   • Broken identity refs — a `base` / `lens` slug that names no artifact in the vault. READ IN BOTH
+	 *     SHAPES: these fields are a list on most document types and a bare string on a few, and until
+	 *     2026-09-26 only the string was read, so the check silently graded almost nothing ( the loop
+	 *     below carries the whole account ). The `cross` sentinel ( a multi-lens plan's `lens` ) is not a
+	 *     reference and is skipped, per member rather than per field.
 	 *
-	 * All findings are `warn`: advisory, never a parse-blocking error. `names` is built from the whole
-	 * scan even when scoped to one file, so a scoped identity ref still resolves against the full vault.
+	 * Identity findings are `warn`: advisory, never a parse-blocking error, because the document still
+	 * parses and the runtime degrades on purpose ( `BrokenLens` ). `error` is reserved for the two facts
+	 * that are not "something is missing" — a wrong-vault link and a duplicated id. `names` is built from
+	 * the whole scan even when scoped to one file, so a scoped identity ref still resolves against the
+	 * full vault.
+	 *
+	 * ONE KNOWN HOLE, stated rather than fixed: `names` is built from the whole scan, INCLUDING scratch
+	 * space, so a copy of a retired lens under `work/` makes a dead reference look alive. `_idsOf` takes
+	 * the opposite view for ids — "a scratch copy of a lens under `work/` is not a second identity" — and
+	 * the same reasoning arguably applies here. Left alone because narrowing it is a behaviour change
+	 * that could surface a lot at once, and it wants to land on its own.
 	 */
 	referenceIssues( onlyFile?: string ): RefIssue[] {
 		const files   = this.scan();
@@ -924,11 +936,44 @@ export class Vault {
 			// never enters `rawLinks` and is never probed — protocol §1.1. Vacancy is a legal state; see
 			// `vacantAddresses` for the on-request report.
 
+			// A `lens` FIELD IS A LIST ON MOST TYPES AND A BARE STRING ON A FEW, and this loop only ever
+			// read the string. `typeof v !== 'string'` sent every array-valued lens field straight to
+			// `continue`, which is every analyzer and every reference naming more than one lens — so the
+			// check existed, looked right, and graded almost none of its subjects.
+			//
+			// FOUND 2026-09-26, and the way it was found is the argument for the repair. A lens retirement
+			// deleted ten lenses; seven of the eight audit analyzers were left declaring a lens that no
+			// longer existed, `audit-rollup` among them; and a whole-vault sweep reported ZERO ISSUES the
+			// whole time. Nothing was wrong with the rule. It was reading one shape of a two-shape field,
+			// and the shape it could not read is the common one.
+			//
+			// This is the project's dominant failure class again — a check that returns the right answer
+			// for an input it never received. `health`'s own docblock says it about a denominator; this is
+			// the same sentence about a type.
 			for ( const key of [ 'base', 'lens' ] ) {
-				const v = f.frontmatter[ key ];
-				if ( typeof v !== 'string' || v === '' || v === 'cross' ) continue;
-				if ( !names.has( v ) )
-					issues.push( { path: f.relativePath, severity: 'warn', message: `${ key } "${ v }" names no artifact in the vault`, ref: v } );
+				const raw  = f.frontmatter[ key ];
+				const refs = typeof raw === 'string' ? [ raw ]
+				           : Array.isArray( raw )    ? raw.filter( ( r ): r is string => typeof r === 'string' )
+				           : [];
+
+				for ( const v of refs ) {
+					// `cross` is a multi-lens plan's sentinel, not a reference. Skipped per member rather
+					// than per field, so it is still skipped when it arrives inside a list.
+					if ( v === '' || v === 'cross' ) continue;
+					if ( names.has( v ) ) continue;
+
+					// WARN, NOT ERROR, and deliberately. Nothing breaks: the document parses, and the
+					// runtime already degrades on purpose — `BrokenLens` keeps a lens an agent's record
+					// names but cannot load, carrying its id, name, stack position and reason, so a record
+					// write puts the id back where it was rather than dropping it. Failing the parse here
+					// would take away the one thing a repair needs, which is a readable document to repair.
+					// The message carries the repair, because a warning nobody can act on is noise.
+					issues.push( {
+						path: f.relativePath, severity: 'warn', ref: v,
+						message: `${ key } "${ v }" names no artifact in the vault — a renamed or retired `
+						       + `${ key } leaves this reference behind, and nothing else reports it`
+					} );
+				}
 			}
 
 			// A DUPLICATED ID IS AN ERROR. The id is the document's identity — an agent names a lens by it — so

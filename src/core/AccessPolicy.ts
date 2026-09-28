@@ -27,6 +27,23 @@ import { ACCESS_LEVELS, accessRank, type AccessLevel } from '../session/Injected
  * looking at two rows can predict the answer without tracing anything. `the deepest level anything grants
  * it` fits in one sentence; `the longest matching prefix unless a grant overrides, except…` does not.
  *
+ * ── THE TIERS DO NOT RESOLVE, AND HIGHEST-WINS SURVIVES BECAUSE OF THAT ( ruled 2026-09-26 ) ──
+ * Four tiers write reach — app default, project, agent, session — and the question was whether a run's floor
+ * should be their MERGE. It is not. Each tier SEEDS the next by copy, exactly as it always has, and a run's
+ * list is its own; editing a tier above reaches nothing already seeded.
+ *
+ * The rule above is why. "Merged across the tiers, and removable at the session" cannot coexist with
+ * highest-wins: a session entry at `none` ranks LOWEST, so an inherited `write` would win and the removal
+ * would silently do nothing. Making it work needs either most-specific resolution — the scheme this file
+ * declines by name, two paragraphs up — or a second, negative list at every tier to record removals as
+ * removals. Both spend the predictability that is this model's whole value, and they spend it to express
+ * something copy-on-seed already expresses: the session's list IS the answer, so removing a row removes it.
+ *
+ * What the ruling costs, stated rather than discovered: an edit above does not flow down, which is the same
+ * cost `PassportSeeds` was built to work around on the tools axis. And a copied entry has forgotten which
+ * tier authored it, so nothing here can label a row with its origin without a provenance field this shape
+ * deliberately does not carry.
+ *
  * ── CONTAINMENT IS NOT HERE ──
  * This module answers what an ENTRY says, never what a PATH resolves to. Deciding whether a path sits
  * inside a root is path math against the real filesystem's rules ( separator boundaries, `..` collapse,
