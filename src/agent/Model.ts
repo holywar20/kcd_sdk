@@ -24,7 +24,7 @@ export interface ModelDescriptor {
 	/** UI display name. */
 	label: string;
 	/** Which connector family serves this model. */
-	provider: 'anthropic' | 'test' | 'local' | 'remote' | 'claude_code_max';
+	provider: 'anthropic' | 'test' | 'local' | 'remote' | 'laguna' | 'claude_code_max';
 	/** The wire id sent to the provider's API. */
 	modelId: string;
 	maxTokens: number;
