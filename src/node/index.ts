@@ -32,6 +32,6 @@ export {
 export {
 	SdkFileAccess, LIST_CAP, READ_CAP_BYTES, GLOB_CAP, GLOB_WALK_CAP,
 	SEARCH_MATCH_CAP, SEARCH_WALK_CAP, SEARCH_YIELD_EVERY, SEARCH_ES_TIMEOUT_MS,
-	GREP_ROW_CAP, GREP_FILE_CAP, GREP_LINE_CHARS, GREP_READ_BYTES, GREP_WALK_CAP,
-	type FileWarn, type SearchToken, type AccessVerdict, type GrepScanOptions
+	GREP_ROW_CAP, GREP_FILE_CAP, GREP_LINE_CHARS, GREP_READ_BYTES, GREP_WALK_CAP, GREP_CONTEXT_CAP,
+	type FileWarn, type SearchToken, type AccessVerdict, type GrepScanOptions, type GrepMode
 } from './SdkFileAccess';

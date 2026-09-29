@@ -29,13 +29,31 @@ export type FileRoots = {
 	drives: string[]
 }
 
-/** One matching LINE from a content search. The path is absolute because that is what a caller acts on
- *  next — a relative one would have to be rejoined against a root the caller then has to remember. The
- *  line is 1-indexed, to match every editor and every `path:line` convention that reads it. */
+/** One LINE from a content search — a match, or a line of context around one. The path is absolute
+ *  because that is what a caller acts on next — a relative one would have to be rejoined against a root
+ *  the caller then has to remember. The line is 1-indexed, to match every editor and every `path:line`
+ *  convention that reads it.
+ *
+ *  `context` is OPTIONAL AND ONLY EVER SET ON A CONTEXT LINE, so absence reads as "this line matched" for
+ *  every consumer written before context existed. A row that did not match is only ever produced when the
+ *  caller asked for surrounding lines. */
 export type GrepRow = {
-	path: string
-	line: number
-	text: string
+	path:     string
+	line:     number
+	text:     string
+	/** True when this line is only NEIGHBOURING a match rather than carrying one. */
+	context?: boolean
+}
+
+/** How many matching lines one FILE holds — the whole payload of a counting search, and a fact carried on
+ *  every search because it costs one entry per file that hit.
+ *
+ *  It is the EXACT count of matching lines in the files that were opened, deliberately unaffected by
+ *  `maxPerFile`: that ceiling governs how many lines are REPORTED, and a count clipped by a display limit
+ *  would answer "how widespread is this" with a number about the row budget instead. */
+export type GrepCount = {
+	path:    string
+	matches: number
 }
 
 /** What a content search returns.
@@ -52,6 +70,9 @@ export type GrepScan = {
 	searched:  number
 	capped:    boolean
 	cancelled: boolean
+	/** One entry per opened file that held a match, in walk order. Always filled — a counting search is
+	 *  this list and nothing else, and a row-returning search gets it for free. */
+	counts:    GrepCount[]
 	/** Text files the walk REACHED — the denominator `searched` is a fraction of, counted before the
 	 *  `glob` filter runs. It exists to tell two empty results apart that look identical to a caller:
 	 *  a root holding nothing searchable, and a root full of files that the pattern excluded. Only the

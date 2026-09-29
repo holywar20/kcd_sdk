@@ -9,7 +9,7 @@ import { NameMatch } from '../core/NameMatch'
 import { Noise } from '../core/Noise'
 import { Blacklist } from '../core/Blacklist'
 import { EsCsv } from '../core/EsCsv'
-import type { FileEntry, FileStat, FileRoots, GrepRow, GrepScan } from '../core/FileTypes'
+import type { FileEntry, FileStat, FileRoots, GrepRow, GrepCount, GrepScan } from '../core/FileTypes'
 import { higherLevel, operationsFor, verbFor, type AccessEntry } from '../core/AccessPolicy'
 import { accessRank, type AccessLevel } from '../session/InjectedItem'
 import type { GrantRef } from '../session/InjectedItem'
@@ -78,6 +78,7 @@ export const SEARCH_ES_TIMEOUT_MS = 5000
 // GREP_READ_COST against a directory entry's 1. Without the weighting the walk yields on schedule and
 // then blocks for seconds at a time once it starts opening files.
 export const GREP_ROW_CAP       = 500       // matching lines, total
+export const GREP_CONTEXT_CAP   = 10        // lines of context either side of a match, at most
 export const GREP_FILE_CAP      = 20        // matching lines from any ONE file
 export const GREP_LINE_CHARS    = 400       // a reported line is truncated past this
 export const GREP_READ_BYTES    = 262_144   // 256 KiB
@@ -121,7 +122,28 @@ export type GrepScanOptions = {
 	 *  floor for a surface where a person is navigating, since twenty of a file's forty hits is a list
 	 *  that silently omits the one they wanted. */
 	maxPerFile?:      number
+	/** Lines of context to report BEFORE each matching line. Clamped to GREP_CONTEXT_CAP. Context lines
+	 *  are rows like any other and are spent out of `maxRows` — a caller asking for five either side is
+	 *  buying up to eleven rows per hit, which is why the ceiling is low. */
+	before?:          number
+	/** Lines of context to report AFTER each matching line. Clamped to GREP_CONTEXT_CAP. */
+	after?:           number
+	/** WHAT THE SEARCH IS FOR, and therefore what it pays for. One axis rather than two booleans, because
+	 *  "count it and also list the files and also give me the lines" is three readings of one question and
+	 *  a pair of flags would have to rule on the combination.
+	 *
+	 *  • `rows` ( default ) — one row per matching line, plus any context. `maxRows` counts LINES.
+	 *  • `count` — no rows; every matching line counted, per file. `maxRows` counts FILES.
+	 *  • `files` — no rows; each file stops at its FIRST hit, so a wide survey is cheap. `maxRows` counts
+	 *    FILES, and each file's count is 1 rather than its true total — the mode answers where, not how many.
+	 *
+	 *  The budget moving from lines to files is what keeps the cap meaningful in the cheap modes: a
+	 *  counting search over a large tree is still bounded, and still says when it stopped early. */
+	mode?:            GrepMode
 }
+
+/** See `GrepScanOptions.mode`. */
+export type GrepMode = 'rows' | 'count' | 'files'
 
 /** Cooperative-cancel handle for `search()` — the caller flips `cancelled` from elsewhere (a new
  *  query, an explicit Cancel click) and the walk notices it at its next yield point. Plain mutable
@@ -380,6 +402,13 @@ export class SdkFileAccess {
 	 * A directory is walked; a single file is searched directly and reported with `rootIsFile`. Both are
 	 * ordinary uses, and the second used to be indistinguishable from a bad path — see the branch.
 	 *
+	 * ── THREE MODES, ONE WALK ──
+	 * `rows` returns matching lines and their context; `count` returns how many each file holds; `files`
+	 * returns which files hold one at all. They differ only in what is RECORDED — the same walk, the same
+	 * prune, the same deny-list, the same per-file admission — so a cheap mode can never reach a file the
+	 * expensive one could not. `counts` is filled in all three, and `maxRows` is spent in the unit the
+	 * mode returns, so every one of them still stops somewhere and still says that it did.
+	 *
 	 * ── WHY THIS IS NOT `glob` + READ ──
 	 * It was, and on a real project it silently returned the wrong answer. `glob` descends into every
 	 * directory unconditionally and stops at GLOB_CAP matches; pointed at a project root, it spends its
@@ -399,8 +428,9 @@ export class SdkFileAccess {
 	 * unreadable directory, an unstattable entry and an undecodable file are each a skip and a warn.
 	 */
 	async grepText( root: string, query: string, opts: GrepScanOptions = {}, token: SearchToken = { cancelled: false } ): Promise<GrepScan> {
-		const rows: GrepRow[] = []
-		if( !query || token.cancelled ) return { rows, searched: 0, capped: false, cancelled: token.cancelled, candidates: 0, nearMisses: 0, rootIsFile: false }
+		const rows:   GrepRow[]   = []
+		const counts: GrepCount[] = []
+		if( !query || token.cancelled ) return { rows, searched: 0, capped: false, cancelled: token.cancelled, counts, candidates: 0, nearMisses: 0, rootIsFile: false }
 
 		// Fold the needle ONCE here rather than per line. Every comparison below is against this value,
 		// so a caller passing `caseInsensitive` never pays for the fold in the inner loop.
@@ -412,6 +442,16 @@ export class SdkFileAccess {
 		const maxBytes = opts.maxBytes ?? GREP_READ_BYTES
 		const maxRows  = opts.maxRows  ?? GREP_ROW_CAP
 		const maxFile  = opts.maxPerFile ?? GREP_FILE_CAP
+		const mode     = opts.mode ?? 'rows'
+		// CLAMPED HERE, not refused. A caller asking for forty lines of context has made a judgement about
+		// readability, not an attack; honouring ten of them answers the question it was really asking.
+		const before   = Math.min( Math.max( Math.trunc( opts.before ?? 0 ), 0 ), GREP_CONTEXT_CAP )
+		const after    = Math.min( Math.max( Math.trunc( opts.after  ?? 0 ), 0 ), GREP_CONTEXT_CAP )
+
+		/** Has this search spent its budget? THE UNIT CHANGES WITH THE MODE — lines when lines are what is
+		 *  returned, files when they are — because a cap counting a payload the mode never produces is a
+		 *  cap that never fires. */
+		const spent = (): boolean => ( mode === 'rows' ? rows.length : counts.length ) >= maxRows
 
 		const stack: string[] = [ root ]
 		let   visited    = 0
@@ -443,17 +483,47 @@ export class SdkFileAccess {
 			try { body = String( readFileSync( full, 'utf-8' ) ) }
 			catch( err ) { this._warn( 'grep_read_failed', { path: full, message: this._msg( err ) } ); return false }
 
-			let hits = 0
 			const lines = body.split( /\r?\n/ )
+
+			// ── FIND, THEN REPORT ──
+			// Two passes over the same array, because a context window can cover a line that is itself a
+			// match: emitted as it is met, that line would be labelled context, and a caller told "this
+			// neighbours a hit" about the hit is being lied to about the only thing the label is for.
+			// Knowing every hit index before any row is written makes the label a lookup rather than a
+			// guess, and costs one pass over lines already in memory.
+			const hitAt: number[] = []
 			for( let i = 0; i < lines.length; i++ ) {
-				if( hits >= maxFile || rows.length >= maxRows ) { capped = true; break }
-				const line = lines[ i ] ?? ''
-				if( !_lineHas( line, needle, fold, opts.wholeWord === true ) ) continue
-				hits += 1
-				// THE LINE IS TRUNCATED, NOT THE MATCH DROPPED. A generated file that slipped past
-				// every filter above would otherwise ship one 400 KB "line" and eat the whole result.
-				rows.push( { path: full, line: i + 1, text: line.length > GREP_LINE_CHARS ? line.slice( 0, GREP_LINE_CHARS ) + ' …' : line } )
+				if( !_lineHas( lines[ i ] ?? '', needle, fold, opts.wholeWord === true ) ) continue
+				hitAt.push( i )
+				// A LOCATING SEARCH STOPS AT THE FIRST HIT. It answers which files, and the rest of a
+				// 4,000-line file cannot change that answer.
+				if( mode === 'files' ) break
 			}
+			if( hitAt.length === 0 ) return true
+			counts.push( { path: full, matches: hitAt.length } )
+			if( mode !== 'rows' ) return true
+
+			const isHit = new Set( hitAt )
+			// The last line index already pushed for this file. Windows around neighbouring matches
+			// overlap, and a line reported twice is a row the caller pays for twice.
+			let emitted = -1
+			let taken   = 0
+			for( const i of hitAt ) {
+				if( taken >= maxFile || spent() ) { capped = true; break }
+				taken += 1
+				const from = Math.max( emitted + 1, i - before )
+				const to   = Math.min( lines.length - 1, i + after )
+				for( let j = from; j <= to; j++ ) {
+					if( spent() ) { capped = true; break }
+					const line = lines[ j ] ?? ''
+					// THE LINE IS TRUNCATED, NOT THE MATCH DROPPED. A generated file that slipped past
+					// every filter above would otherwise ship one 400 KB "line" and eat the whole result.
+					const text = line.length > GREP_LINE_CHARS ? line.slice( 0, GREP_LINE_CHARS ) + ' …' : line
+					rows.push( isHit.has( j ) ? { path: full, line: j + 1, text } : { path: full, line: j + 1, text, context: true } )
+					emitted = j
+				}
+			}
+			if( taken < hitAt.length ) capped = true
 			return true
 		}
 
@@ -477,9 +547,9 @@ export class SdkFileAccess {
 			const searchable = ( !noise || !Noise.skipsFile( basename( root ) ) )
 				&& TextTypes.isText( root )
 				&& !Blacklist.excludes( root, deny )
-			if( !searchable ) return { rows, searched: 0, capped: false, cancelled: false, candidates: 0, nearMisses: 0, rootIsFile: true }
+			if( !searchable ) return { rows, searched: 0, capped: false, cancelled: false, counts, candidates: 0, nearMisses: 0, rootIsFile: true }
 			const read = scanFile( root )
-			return { rows, searched: read ? 1 : 0, capped, cancelled: false, candidates: 1, nearMisses: 0, rootIsFile: true }
+			return { rows, searched: read ? 1 : 0, capped, cancelled: false, counts, candidates: 1, nearMisses: 0, rootIsFile: true }
 		}
 
 		while( stack.length > 0 ) {
@@ -498,7 +568,7 @@ export class SdkFileAccess {
 				budget  += 1
 				if( visited > GREP_WALK_CAP ) {
 					this._warn( 'grep_walk_capped', { root, query, cap: GREP_WALK_CAP } )
-					return { rows, searched, capped: true, cancelled: false, candidates, nearMisses, rootIsFile: false }
+					return { rows, searched, capped: true, cancelled: false, counts, candidates, nearMisses, rootIsFile: false }
 				}
 
 				const full = join( dir, d.name )
@@ -534,22 +604,23 @@ export class SdkFileAccess {
 				searched += 1
 				budget   += GREP_READ_COST
 
-				// The row cap ends the WALK, not just this file — there is no point opening more once
-				// the answer is already known to be partial.
-				if( rows.length >= maxRows ) {
-					this._warn( 'grep_truncated', { root, query, cap: maxRows } )
-					return { rows, searched, capped: true, cancelled: false, candidates, nearMisses, rootIsFile: false }
+				// The budget ends the WALK, not just this file — there is no point opening more once
+				// the answer is already known to be partial. `spent` is the mode's own unit, so a
+				// counting search stops at maxRows FILES rather than running a whole drive.
+				if( spent() ) {
+					this._warn( 'grep_truncated', { root, query, cap: maxRows, mode } )
+					return { rows, searched, capped: true, cancelled: false, counts, candidates, nearMisses, rootIsFile: false }
 				}
 
 				if( budget >= GREP_YIELD_BUDGET ) {
 					budget = 0
 					await _tick()
-					if( token.cancelled ) return { rows, searched, capped, cancelled: true, candidates, nearMisses, rootIsFile: false }
+					if( token.cancelled ) return { rows, searched, capped, cancelled: true, counts, candidates, nearMisses, rootIsFile: false }
 				}
 			}
 		}
 
-		return { rows, searched, capped, cancelled: false, candidates, nearMisses, rootIsFile: false }
+		return { rows, searched, capped, cancelled: false, counts, candidates, nearMisses, rootIsFile: false }
 	}
 
 	/** The fast path: ask a real, already-live Everything instance instead of walking disk. Returns

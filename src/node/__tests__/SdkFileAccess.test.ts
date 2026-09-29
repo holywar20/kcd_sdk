@@ -162,6 +162,96 @@ describe( 'SdkFileAccess.grepText with a FILE as the root', () => {
 	} )
 } )
 
+/**
+ * CONTEXT AND THE TWO CHEAP MODES. What is under test is not that the lines come back — it is that a
+ * caller can always tell a hit from its neighbours, and that a mode returning no rows is still bounded
+ * and still says when it stopped early.
+ */
+describe( 'SdkFileAccess.grepText context and modes', () => {
+
+	/** Two files, one with two matches close enough for their context windows to overlap. */
+	function planted(): { root: string; one: string; two: string } {
+		const root = tmpDir()
+		const one  = join( root, 'one.md' )
+		const two  = join( root, 'two.md' )
+		writeFileSync( one, 'a\nb\nNEEDLE\nd\nNEEDLE\nf\ng\n' )
+		writeFileSync( two, 'x\nNEEDLE\nz\n' )
+		return { root, one, two }
+	}
+
+	it( 'marks context lines and leaves a match unmarked', async () => {
+		const { one } = planted()
+
+		const scan = await new SdkFileAccess().grepText( one, 'NEEDLE', { before: 1, after: 1 } )
+
+		expect( scan.rows.map( ( r ) => [ r.line, r.context === true ] ) )
+			.toEqual( [ [ 2, true ], [ 3, false ], [ 4, true ], [ 5, false ], [ 6, true ] ] )
+	} )
+
+	it( 'reports a line once when two windows overlap, and never labels a match as context', async () => {
+		const { one } = planted()
+
+		const scan = await new SdkFileAccess().grepText( one, 'NEEDLE', { before: 3, after: 3 } )
+
+		// Eight lines, because the trailing newline ends an eighth ( empty ) one.
+		expect( scan.rows.map( ( r ) => r.line ) ).toEqual( [ 1, 2, 3, 4, 5, 6, 7, 8 ] )
+		// Line 5 sits inside line 3's trailing window AND is a match itself — the two-pass scan is what
+		// keeps it reported as the second rather than the first.
+		expect( scan.rows.filter( ( r ) => !r.context ).map( ( r ) => r.line ) ).toEqual( [ 3, 5 ] )
+	} )
+
+	it( 'clamps context rather than refusing it', async () => {
+		const { one } = planted()
+		const scan = await new SdkFileAccess().grepText( one, 'NEEDLE', { before: 500, after: 500 } )
+		expect( scan.rows ).toHaveLength( 8 )
+	} )
+
+	it( 'spends context out of the row budget, and says the answer is partial', async () => {
+		const { one } = planted()
+
+		const scan = await new SdkFileAccess().grepText( one, 'NEEDLE', { after: 1, maxRows: 2 } )
+
+		expect( scan.rows ).toHaveLength( 2 )
+		expect( scan.capped ).toBe( true )
+	} )
+
+	it( 'counts every matching line per file, returning no rows', async () => {
+		const { root, one, two } = planted()
+
+		const scan = await new SdkFileAccess().grepText( root, 'NEEDLE', { mode: 'count' } )
+
+		expect( scan.rows ).toEqual( [] )
+		expect( [ ...scan.counts ].sort( ( a, b ) => a.path.localeCompare( b.path ) ) )
+			.toEqual( [ { path: one, matches: 2 }, { path: two, matches: 1 } ] )
+	} )
+
+	it( 'counts exactly even when maxPerFile would have clipped the rows', async () => {
+		const { one } = planted()
+		const scan = await new SdkFileAccess().grepText( one, 'NEEDLE', { mode: 'count', maxPerFile: 1 } )
+		expect( scan.counts ).toEqual( [ { path: one, matches: 2 } ] )
+	} )
+
+	it( 'locates files at one hit each, and spends the budget in FILES', async () => {
+		const { root } = planted()
+
+		const scan = await new SdkFileAccess().grepText( root, 'NEEDLE', { mode: 'files' } )
+		expect( scan.rows ).toEqual( [] )
+		expect( scan.counts.map( ( c ) => c.matches ) ).toEqual( [ 1, 1 ] )
+
+		const capped = await new SdkFileAccess().grepText( root, 'NEEDLE', { mode: 'files', maxRows: 1 } )
+		expect( capped.counts ).toHaveLength( 1 )
+		expect( capped.capped ).toBe( true )
+	} )
+
+	it( 'gives a cheap mode no reach a row search does not have', async () => {
+		const { root, one } = planted()
+
+		const scan = await new SdkFileAccess().grepText( root, 'NEEDLE', { mode: 'count', deny: [ '**/two.md' ] } )
+
+		expect( scan.counts.map( ( c ) => c.path ) ).toEqual( [ one ] )
+	} )
+} )
+
 describe( 'SdkFileAccess.search', () => {
 
 	it( 'finds a nested match under a single root ( subfolder scope )', async () => {
