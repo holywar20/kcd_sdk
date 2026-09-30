@@ -324,3 +324,121 @@ describe( 'Agent.contextSegments — the breakdown is the wire, decomposed', () 
 		`);
 	} );
 } );
+
+/**
+ * The SLUG — a one-line description of what an agent is for, written by a third party FOR a third party.
+ *
+ * THE DELIVERABLE HERE IS THE INVISIBILITY TEST, not the field. A field that is supposed to be invisible
+ * needs a check that fails the moment it becomes visible, or the invariant is quietly broken by the next
+ * person to add a context block and nobody finds out until an agent is reading its own performance review.
+ * The sentinel is deliberately unlike anything else the compile emits, so a match is a match and not a
+ * coincidence, and it is checked against BOTH doors an agent's context leaves by — the assembled wire and
+ * every block of the structured form, since a block can carry text the wire has not joined yet.
+ *
+ * It lives in this file because this is where the wire is pinned. The snapshots above are the other half of
+ * the same gate: a slug folded into a context block would break one of them too. This one says WHY.
+ */
+describe( 'Agent.slug — held by the record, never shown to the agent', () => {
+
+	/** Nothing in the compile emits a string like this, so a hit is the field leaking and not a false one. */
+	const SENTINEL = 'ZZQX-SLUG-SENTINEL-DO-NOT-COMPILE-ZZQX';
+
+	function slugged(): Agent {
+		const agent = fullAgent();
+		agent.slug  = SENTINEL;
+		return agent;
+	}
+
+	it( 'appears nowhere in wireSystem() — the assembled half', () => {
+		const agent = slugged();
+
+		// The premise first: an agent that is NOT carrying the sentinel must not match it either, or this
+		// test would pass against a compile that emits nothing at all.
+		expect( agent.slug ).toBe( SENTINEL );
+		expect( agent.wireSystem() ).not.toContain( SENTINEL );
+	} );
+
+	it( 'appears in no block of compiledContext() — the structured half', () => {
+		const blocks = slugged().compiledContext();
+
+		expect( blocks.length ).toBeGreaterThan( 0 );
+		expect( blocks.some( b => b.text.includes( SENTINEL ) ) ).toBe( false );
+		expect( blocks.some( b => ( b.section ?? '' ).includes( 'slug' ) ) ).toBe( false );
+	} );
+
+	it( 'appears in no segment of the breakdown either — the third door onto the same text', () => {
+		const segments = slugged().contextSegments();
+
+		expect( segments.some( s => s.text.includes( SENTINEL ) || s.label.includes( SENTINEL ) ) ).toBe( false );
+	} );
+
+	it( 'costs the context nothing — the budget is identical with and without it', () => {
+		// The corollary of invisibility, and the one a reader can check at a glance. If a later change puts
+		// the slug into a block, the price moves whether or not the sentinel survives the formatting.
+		expect( slugged().compiledBudget() ).toEqual( fullAgent().compiledBudget() );
+	} );
+
+	it( 'round-trips through serialize and hydrate', () => {
+		const back = Agent.fromSerialized( slugged().serializeForWire() );
+
+		expect( back.slug ).toBe( SENTINEL );
+		// And the RECORD form too — it is the one main persists.
+		expect( Agent.fromSerialized( slugged().serializeRecord() ).slug ).toBe( SENTINEL );
+	} );
+
+	it( 'is absent by default, and synthesizes nothing in its place', () => {
+		const bare = Agent.create( { name: 'Lincoln', model: 'test.lorem' } );
+
+		expect( bare.slug ).toBeNull();
+		expect( bare.serializeForWire().slug ).toBeNull();
+		expect( Agent.fromSerialized( bare.serializeForWire() ).slug ).toBeNull();
+	} );
+
+	it( 'reads absent from a wire form that predates the field', () => {
+		const wire = fullAgent().serializeForWire();
+		delete wire.slug;
+
+		expect( Agent.fromSerialized( wire ).slug ).toBeNull();
+	} );
+
+	it( 'clamps at the cap rather than refusing — a dropped edit is the worse answer', () => {
+		const agent = fullAgent();
+		agent.slug  = 'x'.repeat( Agent.SLUG_MAX + 40 );
+
+		expect( agent.slug ).toHaveLength( Agent.SLUG_MAX );
+		// And the clamp survives the wire, so nothing downstream sees the unclamped string.
+		expect( Agent.fromSerialized( agent.serializeForWire() ).slug ).toHaveLength( Agent.SLUG_MAX );
+	} );
+
+	it( 'keeps a slug at the cap whole', () => {
+		const agent = fullAgent();
+		const exact = 'y'.repeat( Agent.SLUG_MAX );
+		agent.slug  = exact;
+
+		expect( agent.slug ).toBe( exact );
+	} );
+
+	it( 'folds blank, empty and undefined onto null — absent is ONE state', () => {
+		const agent = fullAgent();
+
+		agent.slug = '   ';
+		expect( agent.slug ).toBeNull();
+		agent.slug = '';
+		expect( agent.slug ).toBeNull();
+		agent.slug = undefined;
+		expect( agent.slug ).toBeNull();
+	} );
+
+	it( 'is one line — a pasted newline is flattened, not carried into a roster read', () => {
+		const agent = fullAgent();
+		agent.slug  = '  fast, less capable\n\n— documentation and book-keeping  ';
+
+		expect( agent.slug ).toBe( 'fast, less capable — documentation and book-keeping' );
+	} );
+
+	it( 'is normalized through Agent.create as well, not only through the accessor', () => {
+		const made = Agent.create( { slug: `  ${ 'z'.repeat( Agent.SLUG_MAX + 5 ) }  ` } );
+
+		expect( made.slug ).toHaveLength( Agent.SLUG_MAX );
+	} );
+} );

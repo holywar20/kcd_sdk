@@ -949,8 +949,16 @@ export class SdkFileAccess {
 	 *  a retry is wasted. Kept beside `refusal` because it is the OTHER containment answer, and the two doors
 	 *  drift the moment either one writes its own. */
 	static blacklistLine(): string {
-		return 'It matches a protected pattern ( credentials, keys, and repository internals are off-limits by '
-			+ 'policy ). This is not something a retry or a different path will fix.'
+		// NAMES THE RULE AND POINTS SOMEWHERE. The list holds two kinds of thing and the second one is not
+		// guessable from a path — an agent refused on `commands.json` would otherwise read it as a mistake and
+		// go hunting. The reference is named because the refusal is the only place the agent will be told:
+		// once a file is on this list the agent cannot read it to find out what it was for.
+		return 'It matches a protected pattern ( credentials, keys and repository internals, plus the Command '
+			+ 'Deck command roster, which is executable instruction rather than data ) — the deny-list\'s '
+			+ 'defaults hold unconditionally and no configuration can switch one off. This is not something a '
+			+ 'retry, a different path or a granted file will fix. What each pattern protects, and the roster\'s '
+			+ 'shape if a user needs to edit it themselves, is in '
+			+ '_Claude/references/file/protected-paths-and-the-command-roster.html.'
 	}
 
 	/** Path containment — return the REAL path iff it sits inside one of `roots`, else null. Static, no

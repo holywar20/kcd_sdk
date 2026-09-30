@@ -150,6 +150,10 @@ export interface SerializedAgent {
 	folder?: string;
 	/** Human scratch-pad — per-agent sticky note. Null = empty. */
 	notes: string | null;
+	/** A one-line, third-party description of what this agent is FOR — a routing fact a manager reads when
+	 *  it has to choose between two lanes. Null = none, and none is legitimate; nothing synthesizes one,
+	 *  because a router cannot tell a guess apart from a statement. See `Agent.slug`. */
+	slug?: string | null;
 }
 
 /** A lens an agent's record names that could not be loaded. Kept on the agent so it can say which lens it
@@ -225,6 +229,7 @@ export interface AgentOptions {
 	system?: Record<string, unknown>;
 	folder?: string;
 	notes?: string | null;
+	slug?: string | null;
 }
 
 /** Pull the paths of every node of a given artifact type out of a flat node list. */
@@ -322,6 +327,20 @@ export type AgentEnvironment = {
 	modeLine?:       string;
 };
 
+/**
+ * A READER for the environment — the agent asks for its external layers instead of being told them.
+ *
+ * The twin of `LensObject`'s document reader, and the same argument: a receiver that pulls cannot be
+ * handed a stale layer, and nobody outside has to remember to push one. It answers the WHOLE environment
+ * rather than one key, so a layer added to `AgentEnvironment` reaches every reader in the same edit —
+ * which is the whole reason the renderer's binder was retired. A key it leaves `undefined` falls back to
+ * whatever a host bound, so a reader and a `bindEnv` can coexist without either shadowing the other by
+ * accident.
+ *
+ * Called on every read, so a reader owes its own memoization — the renderer's is a Vue computed.
+ */
+export type EnvReaderFn = () => AgentEnvironment;
+
 export class Agent {
 
 	readonly id: string;
@@ -354,6 +373,32 @@ export class Agent {
 	folder: string | undefined;
 	notes: string | null;
 
+	/**
+	 * A ONE-LINE DESCRIPTION OF THIS AGENT, WRITTEN BY SOMEBODY ELSE, FOR SOMEBODY ELSE. "fast, less capable
+	 * — documentation and book-keeping" is the whole shape of it: what a manager routing work to a lane needs
+	 * in order to choose between two of them, which a name never says.
+	 *
+	 * THE AGENT DOES NOT RECEIVE IT. It reaches neither `compiledContext()` nor `wireSystem()` by any path,
+	 * and the sentinel suite in `Agent.wireSystem.test.ts` fails the moment it does. Two reasons, and the second is the one
+	 * that matters: it costs context to no purpose, because the agent already holds a lens stack and a system
+	 * prompt saying what it is at length — and a self-description SHAPES BEHAVIOUR. An agent told in its own
+	 * context that it is "less capable" acts less capably. This is a routing fact for a third party, not a
+	 * self-image.
+	 *
+	 * It is the next step past what `hostPrompt` and `capability` already carry: those are fields an agent
+	 * HOLDS but does not AUTHOR. This one it does not hold either — it is persisted on the record, crosses
+	 * the wire for a roster read and for the person editing it, and stops there.
+	 *
+	 * NULL IS THE ABSENT CASE and it is legitimate. Nothing derives one from the model name or the lens
+	 * stack: a guessed description is worse than none, because a router cannot tell the two apart.
+	 *
+	 * Normalized on every write through the accessor below rather than at the callers — a cap enforced in
+	 * one of four places is a cap somebody pastes an essay past.
+	 */
+	get slug(): string | null { return this._slug; }
+	set slug( value: string | null | undefined ) { this._slug = Agent.normalizeSlug( value ); }
+	private _slug: string | null = null;
+
 	// ── composed{X}: MATERIALIZED by compose(); never persisted, never crosses the wire ──
 	composedHabits: string[] = [];
 	composedReferences: string[] = [];
@@ -361,7 +406,7 @@ export class Agent {
 	/** THE RUN'S deferred set, bound per turn by the host ( `AgentEnvironment.runDeferred` ) and never
 	 *  persisted. NULL — not empty — until a host binds one: empty means "this run defers nothing", and the
 	 *  manifest must be able to tell that apart from "there is no run to ask". */
-	runDeferred: readonly string[] | null = null;
+	get runDeferred(): readonly string[] | null { return this._layer( 'runDeferred' ) ?? null; }
 
 	/**
 	 * The agent's OWN base habits as LOADED objects ( the `agent` source layer at composition ). Disk is
@@ -391,7 +436,7 @@ export class Agent {
 	 *  never in the vault, never through a link, and never user-editable, because a user cannot be allowed
 	 *  to rewrite the app's own description of its own surfaces. '' when nothing binds it, which is every
 	 *  SDK-built agent outside a dispatch. */
-	hostPrompt: string = '';
+	get hostPrompt(): string { return this._layer( 'hostPrompt' ) ?? ''; }
 	/**
 	 * What the host says about the INSTALLATION this agent is running in — which copy of the app it is, and
 	 * whatever the person running it wrote about their environment.
@@ -402,25 +447,25 @@ export class Agent {
 	 * by a person, so it is bound separately, sits just beneath it on the wire, and carries a budget of its
 	 * own. '' when nothing binds it, which is every SDK-built agent outside a dispatch.
 	 */
-	hostEnvironment: string = '';
+	get hostEnvironment(): string { return this._layer( 'hostEnvironment' ) ?? ''; }
 	/** The live tool defs available to this agent — the flat set the manifest + preload surface read,
 	 *  each carrying its BAKED per-mode counts. Bound from the MCP store; `[]` until bound. */
-	toolDefs: ToolDef[] = [];
+	get toolDefs(): ToolDef[] { return this._layer( 'toolDefs' ) ?? []; }
 	/** THE NAME OF THE TOOL THAT FETCHES A DEFERRED SCHEMA, as the model calls it — bound by the host that
 	 *  serves the search, the way `hostPrompt` is, so this package never spells a name it does not own. The
 	 *  manifest's note on deferred tools names the mechanism only when this is set; '' ( every SDK-built
 	 *  agent outside a dispatch ) keeps the note mechanism-free. Added for bug-report-9: a local model told
 	 *  the mechanism only inside a tool result went on calling the one tool it had already fetched. */
-	searchTool: string = '';
+	get searchTool(): string { return this._layer( 'searchTool' ) ?? ''; }
 	/** What the installed CONTRIBUTORS returned for this run — each carrying the band it declared. `[]`
 	 *  until bound, when nothing is installed that contributes, and when every contributor came back dry;
 	 *  all three mean the same thing to the compile, which is that those bands emit nothing. */
-	contributions: Contribution[] = [];
+	get contributions(): Contribution[] { return this._layer( 'contributions' ) ?? []; }
 	/** The bound session's PREFILL attachments, already composed ( `Session.attachmentManifest()` ). A
 	 *  STRING like memory, not the entry array: the array lives on the session, which owns
 	 *  it and composes it, and an agent reaching into `session/` would invert the layering — a session is a
 	 *  run of an agent, not the reverse. '' when nothing is attached. */
-	attachments: string = '';
+	get attachments(): string { return this._layer( 'attachments' ) ?? ''; }
 	/** The bound session's CANONIZED grants ( `Session.grantRows()` ) — the what/where/why rows for
 	 *  everything the user handed this run whose turns have since been compacted.
 	 *
@@ -434,12 +479,12 @@ export class Agent {
 	 *  Only the HOISTED set arrives here. A grant whose turn still rides already carries its reference line
 	 *  in the transcript, and a manifest row beside it would state one fact twice; promotion waits for the
 	 *  compaction that removed the line. Empty until something has been canonized, which is most sessions. */
-	grantRows: SlotRow[] = [];
+	get grantRows(): SlotRow[] { return this._layer( 'grants' ) ?? []; }
 	/** THE COMMANDS THIS RUN MAY RUN — the objects, not a rendering of them. Bound with the denied ones
 	 *  ALREADY REMOVED: a command a person switched off is ABSENT here rather than present-and-refused, which
 	 *  is the only shape in which "the agent has not heard of it" can be true. `[]` until bound, and `[]` is a
 	 *  legitimate answer — holding no commands is not a failure to bind. */
-	commandRows: readonly Command[] = [];
+	get commandRows(): readonly Command[] { return this._layer( 'commands' ) ?? []; }
 	/**
 	 * THE MANIFEST BANDS this run's tools author for themselves — each a `##` section under `# Manifest`,
 	 * composed by the HOST and bound here already rendered.
@@ -458,7 +503,7 @@ export class Agent {
 	 *
 	 * `[]` is a legitimate answer — holding no bands is not a failure to bind.
 	 */
-	manifestGroups: readonly { heading: string; body: string }[] = [];
+	get manifestGroups(): readonly { heading: string; body: string }[] { return this._layer( 'manifestGroups' ) ?? []; }
 	/** WHAT THIS RUN HOLDS, said to the agent itself — composed by the HOST from the run's passport and bound
 	 *  here as opaque text.
 	 *
@@ -466,17 +511,38 @@ export class Agent {
 	 *  describing its own permissions would be a second author on a question the permission authority already
 	 *  answers, and the failure mode of two authors on that question is a description that is reassuring and
 	 *  wrong. This holds the sentence; it does not write it. '' when nothing governs the run. */
-	capability: string = '';
+	get capability(): string { return this._layer( 'capability' ) ?? ''; }
 	/** The CALLER's layer above the lens — a room frame, a Constellation step frame, whatever framed this
 	 *  particular turn. Bound per ROUND like the rest of the environment; '' when nothing framed it.
 	 *
 	 *  It trails the agent's own identity for the reason attachments do: general before specific. A standing
 	 *  identity is true of every turn this agent will ever take; a frame is true of exactly one. */
-	frame: string = '';
+	get frame(): string { return this._layer( 'frame' ) ?? ''; }
 	/** The turn's prompt-SHAPING line — today, the thinking-mode request to reason in the visible reply.
 	 *  Opaque bound TEXT, deliberately not something this object derives: deciding what shapes a turn is
 	 *  dispatch policy, and the agent's only job is knowing where it sits. '' when nothing shapes it. */
-	modeLine: string = '';
+	get modeLine(): string { return this._layer( 'modeLine' ) ?? ''; }
+
+	/** What a host BOUND ( `bindEnv` ) — the push half, kept for the dispatch tier, which assembles one
+	 *  environment per round and has nothing to read through. Replaced wholesale on each bind. */
+	private _bound: AgentEnvironment = {};
+
+	/** What the agent READS its environment through, when something injected one. `null` on every
+	 *  SDK-built agent and on main's, which are bound rather than read. */
+	private _env: EnvReaderFn | null = null;
+
+	/**
+	 * ONE layer of the environment — what the reader answers, else what a host bound, else `undefined` for
+	 * the accessor to fall to its own empty value.
+	 *
+	 * The reader wins where it answers, and a key it leaves `undefined` falls through, so injecting a reader
+	 * never silently blanks a layer only a host can supply — which is what lets the renderer read the four
+	 * layers it can fetch while the dispatch tier keeps binding the twelve it assembles.
+	 */
+	private _layer<K extends keyof AgentEnvironment>( key: K ): AgentEnvironment[ K ] | undefined {
+		const read = this._env ? this._env()[ key ] : undefined;
+		return read !== undefined ? read : this._bound[ key ];
+	}
 
 	private constructor(
 		id: string,
@@ -495,6 +561,7 @@ export class Agent {
 		createdAt: number,
 		folder: string | undefined,
 		notes: string | null,
+		slug: string | null,
 	) {
 		this.id             = id;
 		this.projectId      = projectId;
@@ -512,10 +579,27 @@ export class Agent {
 		this.createdAt      = createdAt;
 		this.folder         = folder;
 		this.notes          = notes;
+		this.slug           = slug;   // through the accessor — the cap is enforced in one place
 		this.compose();   // materialize composed{X} from the lenses on the way in
 	}
 
 	// ── Static entry points ──────────────────────────────────────────────────
+
+	/** THE SLUG'S CEILING, in characters. A slug is read off a roster by a router choosing a lane, so an
+	 *  unbounded one is a context leak waiting for somebody to paste an essay into a field nobody thought
+	 *  was load-bearing. 120 is a line. */
+	static readonly SLUG_MAX = 120;
+
+	/** The one normalizer every write goes through ( see the `slug` accessor ). One line, trimmed, clamped —
+	 *  CLAMPED rather than refused, because the field has no failure lane and a silently dropped edit is the
+	 *  worse answer. Empty, blank and undefined all land on null: absent is one state, not three. */
+	static normalizeSlug( value: string | null | undefined ): string | null {
+		if( value == null ) return null;
+		// A slug is ONE line by definition, so a newline is folded to a space rather than allowed to make
+		// the roster read multi-line — the cap would otherwise measure something a reader never sees.
+		const flat = value.replace( /\s+/g, ' ' ).trim();
+		return flat === '' ? null : flat.slice( 0, Agent.SLUG_MAX );
+	}
 
 	/** Compose an agent. A lensless draft is legal — running is what demands a lens. An agent with no name
 	 *  given takes its primary lens's, and a draft is just `'agent'`. */
@@ -542,6 +626,7 @@ export class Agent {
 			Date.now(),
 			opts.folder,
 			opts.notes ?? null,
+			opts.slug ?? null,
 		);
 	}
 
@@ -566,6 +651,7 @@ export class Agent {
 			json.createdAt,
 			json.folder,
 			json.notes ?? null,
+			json.slug ?? null,
 		);
 		// The materialized habits ride the wire ( the renderer can't dredge disk ). Main
 		// re-materializes from the paths on every load/save, so an absent field just means "not materialized
@@ -617,6 +703,7 @@ export class Agent {
 			createdAt:      this.createdAt,
 			folder:         this.folder,
 			notes:          this.notes,
+			slug:           this.slug,
 			baseHabitNodes: this.baseHabitNodes.map( ( n ) => n.serialize() ),
 			brokenLenses:   this.brokenLenses.map( ( b ) => ( { ...b } ) ),
 			brokenHabits:   this.brokenHabits.map( ( b ) => ( { ...b } ) ),
@@ -643,27 +730,37 @@ export class Agent {
 	}
 
 	/**
+	 * READ the environment instead — hand the agent a reader and it pulls its external layers on access,
+	 * the way a lens pulls its document. Idempotent; `null` takes it back to whatever a host bound.
+	 *
+	 * THIS IS THE HALF THE RENDERER USES, and it replaced a binder in its Agent store that pushed four
+	 * layers onto every agent on every source change. The objection to that binder was never that it was
+	 * wrong — it was that a layer had to be added in two places, the compile and the push, and nothing made
+	 * the second one happen. A reader answers the whole `AgentEnvironment`, so a new layer reaches the
+	 * preview the moment the compile reads it.
+	 */
+	setEnvReader( read: EnvReaderFn | null ): void {
+		this._env = read;
+	}
+
+	/**
 	 * Bind the wire's EXTERNAL layers onto the agent — the environment `compiledContext()` needs beyond the
 	 * agent's own object graph. Flush-and-fill, like `compose()`: pass the whole environment ( a partial
 	 * overwrites only the keys it names ), call it whenever a source changes, and trust the fresh rebuild.
-	 * Cheap; there is no delta path to keep in sync. The renderer's Agent store calls this when the MCP tool
-	 * defs / baseline memory change ( then `triggerRef` ); the orchestrator calls it per
-	 * round on the canonical agent. Never persisted — this is live environment, not agent identity.
+	 * Cheap; there is no delta path to keep in sync.
+	 *
+	 * THE PUSH HALF, and it belongs to the DISPATCH TIER — the orchestrator assembles one environment per
+	 * round from things no reader could ask for ( the run's passport, this turn's attachments, the caller's
+	 * frame ) and binds it on the canonical agent. A surface with sources it can read from instead injects a
+	 * reader; see `setEnvReader`. Where both exist the reader wins per key, and a key it does not answer
+	 * still falls through to what was bound here. Never persisted — this is live environment, not identity.
 	 */
 	bindEnv( env: AgentEnvironment ): void {
-		if ( env.hostPrompt  !== undefined ) this.hostPrompt  = env.hostPrompt;
-		if ( env.hostEnvironment !== undefined ) this.hostEnvironment = env.hostEnvironment;
-		if ( env.toolDefs    !== undefined ) this.toolDefs    = env.toolDefs;
-		if ( env.runDeferred !== undefined ) this.runDeferred = env.runDeferred;
-		if ( env.searchTool  !== undefined ) this.searchTool  = env.searchTool;
-		if ( env.contributions !== undefined ) this.contributions = env.contributions;
-		if ( env.attachments !== undefined ) this.attachments = env.attachments;
-		if ( env.grants      !== undefined ) this.grantRows   = env.grants;
-		if ( env.commands    !== undefined ) this.commandRows = env.commands;
-		if ( env.manifestGroups !== undefined ) this.manifestGroups = env.manifestGroups;
-		if ( env.capability  !== undefined ) this.capability  = env.capability;
-		if ( env.frame       !== undefined ) this.frame       = env.frame;
-		if ( env.modeLine    !== undefined ) this.modeLine    = env.modeLine;
+		const next: AgentEnvironment = { ...this._bound };
+		for ( const [ key, value ] of Object.entries( env ) ) {
+			if ( value !== undefined ) ( next as Record<string, unknown> )[ key ] = value;
+		}
+		this._bound = next;
 	}
 
 	/**
