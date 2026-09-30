@@ -89,6 +89,10 @@ export interface SerializedSession {
 	createdAt: number;
 	/** Epoch ms of the last turn (or last touch) — the recency sort for a session switcher. */
 	lastActive: number;
+	/** Epoch ms of when the person last SAW this session's newest output, or null for never seen — see
+	 *  `Session.readAt`. Absent on a wire or row written before the marker existed, which reads as the
+	 *  same never-seen null. */
+	readAt?: number | null;
 	status: SessionStatus;
 	/** This session's chat-surface text zoom. Null → the render side's default (1). Scoped to
 	 *  the chat panel itself, not the app window — set via the chat header's A-/A+ control. */
@@ -274,6 +278,28 @@ export class Session {
 	 *  See `SessionBrief`. */
 	brief: SessionBrief | null = null;
 
+	/**
+	 * WHEN THE PERSON LAST SAW THIS SESSION'S NEWEST OUTPUT — epoch ms, or NULL for never seen.
+	 *
+	 * The one fact an attention model needs. Whether a session is UNREAD is this marker against its newest
+	 * turn, computed by whatever surface is asking; nothing derived from it is stored, because a stored
+	 * derivation goes stale the moment the next turn lands.
+	 *
+	 * NULL IS A REAL STATE and never collapses into read-long-ago: a session nobody has ever looked at is
+	 * not a session read before its first turn. So it is nullable rather than 0, and a fresh session is born
+	 * on null — including a FORK, which is a new conversation nobody has read.
+	 *
+	 * WHEN A CALLER IS EXPECTED TO MARK IT. The ruling is that a session is read when its conversation is
+	 * ON SCREEN AND THE WINDOW HAS FOCUS — so a surface calls `markRead` when both become true, and again
+	 * whenever a turn lands while both are still true. An open BACKGROUND tab is not read, and neither is a
+	 * visible tab while the app itself is in the background. Marking on mount alone would make every session
+	 * the person has ever opened read as caught-up forever, which is worse than having no marker at all.
+	 *
+	 * Assigned rather than constructed, as `brief` above is: it is a fact about how the session has been
+	 * ATTENDED TO, not part of what the session is.
+	 */
+	readAt: number | null = null;
+
 	/** WHO THIS SESSION RUNS AS — bound, not held. A RESOLVER rather than an Agent, deliberately: one Agent
 	 *  serves many sessions and is rebuilt on reload or reassign, so a held instance goes stale while a
 	 *  resolver is answered fresh at every call. Bound at the seam that makes the session ( the store binds
@@ -364,6 +390,9 @@ export class Session {
 			Session.policiesFrom( json.policies ),
 		);
 		session.brief = json.brief ?? null;
+		// Absent on a row or payload written before the marker existed, which reads as never seen — exactly
+		// what it means, so there is nothing to default here.
+		session.readAt = json.readAt ?? null;
 		return session;
 	}
 
@@ -495,6 +524,10 @@ export class Session {
 			tags:       [ ...this.tags ],
 			createdAt:  this.createdAt,
 			lastActive: this.lastActive,
+			// ALWAYS written, null included. A marker main keeps and the renderer cannot see is the whole
+			// feature missing, and the surface that derives unread has to be able to tell never-seen from
+			// a field that simply did not ride.
+			readAt:     this.readAt,
 			status:     this.status,
 			zoom:          this.zoom,
 			fontFamily:    this.fontFamily,
@@ -542,6 +575,19 @@ export class Session {
 		this.zoom = zoom;
 		this.fontFamily = fontFamily;
 		this.showToolCalls = showToolCalls;
+	}
+
+	/**
+	 * SAY THE PERSON HAS SEEN THIS SESSION AS IT STANDS — see `readAt` for the full ruling and for when a
+	 * caller is expected to call this. In short: the conversation is on screen AND the window has focus.
+	 *
+	 * It only ever moves FORWARD. A stamp older than the one already held is dropped rather than written,
+	 * because two surfaces can both be entitled to mark the same session and the later sighting is the true
+	 * one; an out-of-order call must not un-read a conversation somebody is looking at.
+	 */
+	markRead( at: number ): void {
+		if ( this.readAt !== null && at <= this.readAt ) return;
+		this.readAt = at;
 	}
 
 	// ── Transcript ( the dynamic half of the wire ) ─────────────────────────────

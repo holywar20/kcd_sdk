@@ -86,7 +86,6 @@ describe( 'Vault.buildAgent — the dumb-agent factory', () => {
 
 		expect( built.toolDefs ).toHaveLength( 0 )
 		expect( built.contributions ).toHaveLength( 0 )
-		expect( built.rootContext ).toBe( '' )
 	} )
 
 	it( 'counts as deployed, not a draft — it wears an authored lens', () => {

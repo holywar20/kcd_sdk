@@ -7,8 +7,8 @@
  * content is lost.
  *
  * DELIBERATE PLACEHOLDER. The canonical dual-audience emitter ( the parser lens's Phase-3
- * AI-context head ) will supersede this — it is kept minimal and faithful for the one caller today:
- * a model's bound root context ( see the main-side ModelService.rootContextFor ). Prompt-level
+ * AI-context head ) will supersede this — it is kept minimal and faithful, and has NO caller today:
+ * its one caller was the model-bound root context, cut on 2026-09-29. Prompt-level
  * special tags have no settled canonical form yet, so nothing here strips angle-bracket content
  * beyond ordinary HTML structure — whatever an artifact holds, its text rides through whole.
  */

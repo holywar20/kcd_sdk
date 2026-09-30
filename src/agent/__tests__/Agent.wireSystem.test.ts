@@ -15,8 +15,8 @@ import type { ToolDef } from '../ToolDef';
  *
  * This is the INNER half of the gate. Its twin in starmind pins the outer join through a real dispatch;
  * this one pins block order, text and pricing, because here every layer binds directly rather than
- * arriving through a model descriptor and a routed database — so root context, memory and the tool
- * surface can all carry real content instead of collapsing to empty.
+ * arriving through a model descriptor and a routed database — so memory and the tool
+ * surface can both carry real content instead of collapsing to empty.
  */
 
 const LENS_HTML = `<!DOCTYPE html>
@@ -73,7 +73,6 @@ function fullAgent(): Agent {
 	} );
 	agent.bindEnv( {
 		hostPrompt:  'The host environment preamble.',
-		rootContext: 'The model standing root context.',
 		toolDefs:    TOOLS,
 		// THE SEARCH TOOL'S NAME, bound as the host binds it, so the manifest's note names the mechanism the
 		// wire carries rather than the mechanism-free form an unhosted agent falls back to ( bug-report-9 ).
@@ -109,10 +108,6 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 			---
 
 			The agent own authored instruction.
-
-			---
-
-			The model standing root context.
 
 			---
 
@@ -174,8 +169,6 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 			  null,
 			  "system-prompt",
 			  null,
-			  "root-context",
-			  null,
 			  "personality",
 			  "philosophy",
 			  "semantic_memory",
@@ -203,8 +196,8 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 	it( 'pins the budget split, so a block that changes BUCKET is caught as well as one that moves', () => {
 		expect( fullAgent().compiledBudget() ).toMatchInlineSnapshot(`
 			{
-			  "lenses": 129,
-			  "system": 36,
+			  "lenses": 128,
+			  "system": 28,
 			  "tools": 140,
 			}
 		`);
@@ -317,7 +310,6 @@ describe( 'Agent.contextSegments — the breakdown is the wire, decomposed', () 
 			  "system / host prompt",
 			  "system / name",
 			  "system / agent instruction",
-			  "system / root context",
 			  "lens / personality",
 			  "lens / philosophy",
 			  "injection / semantic_memory",

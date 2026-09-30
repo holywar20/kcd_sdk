@@ -300,7 +300,6 @@ export type AgentEnvironment = {
 	hostPrompt?:     string;
 	/** What the host says about the INSTALLATION this agent is running in — see `Agent.hostEnvironment`. */
 	hostEnvironment?: string;
-	rootContext?:    string;
 	toolDefs?:       ToolDef[];
 	/**
 	 * WHAT THIS RUN DEFERS — the ids it may call that its request does NOT carry, and so exactly the tools
@@ -404,9 +403,6 @@ export class Agent {
 	 * own. '' when nothing binds it, which is every SDK-built agent outside a dispatch.
 	 */
 	hostEnvironment: string = '';
-	/** The model-bound root-context text ( CLAUDE.md / Winston.html et al. ) — leads the compiled context.
-	 *  '' when the agent's model declares none. */
-	rootContext: string = '';
 	/** The live tool defs available to this agent — the flat set the manifest + preload surface read,
 	 *  each carrying its BAKED per-mode counts. Bound from the MCP store; `[]` until bound. */
 	toolDefs: ToolDef[] = [];
@@ -421,7 +417,7 @@ export class Agent {
 	 *  all three mean the same thing to the compile, which is that those bands emit nothing. */
 	contributions: Contribution[] = [];
 	/** The bound session's PREFILL attachments, already composed ( `Session.attachmentManifest()` ). A
-	 *  STRING like rootContext and memory, not the entry array: the array lives on the session, which owns
+	 *  STRING like memory, not the entry array: the array lives on the session, which owns
 	 *  it and composes it, and an agent reaching into `session/` would invert the layering — a session is a
 	 *  run of an agent, not the reverse. '' when nothing is attached. */
 	attachments: string = '';
@@ -651,13 +647,12 @@ export class Agent {
 	 * agent's own object graph. Flush-and-fill, like `compose()`: pass the whole environment ( a partial
 	 * overwrites only the keys it names ), call it whenever a source changes, and trust the fresh rebuild.
 	 * Cheap; there is no delta path to keep in sync. The renderer's Agent store calls this when the MCP tool
-	 * defs / model root context / baseline memory change ( then `triggerRef` ); the orchestrator calls it per
+	 * defs / baseline memory change ( then `triggerRef` ); the orchestrator calls it per
 	 * round on the canonical agent. Never persisted — this is live environment, not agent identity.
 	 */
 	bindEnv( env: AgentEnvironment ): void {
 		if ( env.hostPrompt  !== undefined ) this.hostPrompt  = env.hostPrompt;
 		if ( env.hostEnvironment !== undefined ) this.hostEnvironment = env.hostEnvironment;
-		if ( env.rootContext !== undefined ) this.rootContext = env.rootContext;
 		if ( env.toolDefs    !== undefined ) this.toolDefs    = env.toolDefs;
 		if ( env.runDeferred !== undefined ) this.runDeferred = env.runDeferred;
 		if ( env.searchTool  !== undefined ) this.searchTool  = env.searchTool;
@@ -1111,8 +1106,7 @@ export class Agent {
 				// old `assembleSystem([ systemPrompt, ... ])` put it first ). Folding it in HERE is what closes
 				// the preview ≠ wire gap on the system half: the preview showed the compile WITHOUT the system
 				// prompt while the wire always carried it, so every context gauge read low by its weight.
-				this.systemPrompt ? [ Agent.extraBlock( 'system-prompt', this.systemPrompt ) ] : [],
-				this.rootContext  ? [ Agent.extraBlock( 'root-context',  this.rootContext  ) ] : []
+				this.systemPrompt ? [ Agent.extraBlock( 'system-prompt', this.systemPrompt ) ] : []
 			] ),
 			contributed: contributed.map( ( c ) => Agent.contributionBlock( c ) ),
 			after: Agent.joinSegments( [
