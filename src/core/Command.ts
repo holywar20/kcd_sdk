@@ -1,7 +1,7 @@
-import { partType, type FillKind } from './CommandTypes';
+import { partType, isPathAccess, type FillKind, type PathAccess } from './CommandTypes';
 
-export type { FillKind, PartKind, PartType } from './CommandTypes';
-export { PART_TYPES, FILL_KINDS, partType } from './CommandTypes';
+export type { FillKind, PartKind, PartType, PathAccess, PathAccessInfo } from './CommandTypes';
+export { PART_TYPES, FILL_KINDS, PATH_ACCESS, PATH_ACCESS_LEVELS, partType, isPathAccess } from './CommandTypes';
 
 /**
  * ONE PART OF A COMMAND LINE — and the reason a command is an ARRAY rather than a string.
@@ -28,13 +28,19 @@ export { PART_TYPES, FILL_KINDS, partType } from './CommandTypes';
  *   retired   a part carried forward from a kind that no longer exists. Not authorable, never run; it
  *             blocks the command so a person re-authors it. See `fromSerialized`.
  *
+ * ── AND A HOLE ALSO DECLARES WHAT IS DONE WITH IT ── ( 2026-09-30 )
+ * `access` — `read`, `write` or `delete`, required, never defaulted. The TYPE says a value is shaped like a
+ * path; the ACCESS says what the program does with it, which is the operation the file door is asked at.
+ * Without it every path argument was judged at `read`, which silently admits an output file. See
+ * `PathAccess`, where the reasoning and the accepted limit live.
+ *
  * The structural half of the distinction is what the security property rests on and it has NOT moved: the
  * first part must be a literal, so an agent never chooses the program. A type only ever decides what may go
  * in a hole a person already decided to leave.
  */
 export type CommandPart =
 	| { kind: 'literal'; text: string }
-	| { kind: FillKind;  name: string; optional?: boolean }
+	| { kind: FillKind;  name: string; access: PathAccess; optional?: boolean }
 	| { kind: 'retired'; was: string };
 
 /** A part an agent fills — every kind that carries a `name`. Named so `fillable` can hand back something
@@ -102,7 +108,8 @@ export type CommandCode =
 	| 'no_command'
 	| 'no_fixed_part'
 	| 'duplicate_slot'
-	| 'retired_part';
+	| 'retired_part'
+	| 'no_access';
 
 /**
  * ONE ROW OF THE DIRECTORY. `field` is the load-bearing one: it is how a consumer maps a fault it did not
@@ -335,6 +342,7 @@ export class Command {
 	static readonly NO_FIXED_PART:  CommandCode = 'no_fixed_part';
 	static readonly DUPLICATE_SLOT: CommandCode = 'duplicate_slot';
 	static readonly RETIRED_PART:   CommandCode = 'retired_part';
+	static readonly NO_ACCESS:      CommandCode = 'no_access';
 
 	/** THE DIRECTORY. One row per code, and the only place any of this is worded. */
 	static readonly CODES: Readonly<Record<CommandCode, CommandCodeInfo>> = {
@@ -373,6 +381,23 @@ export class Command {
 		retired_part: {
 			code: 'retired_part', field: 'parts', blocking: true,
 			message: 'A part of this command was authored as a kind that no longer exists. It cannot run — replace it with fixed text or a typed hole.'
+		},
+		/*
+		 * THE SAME FAMILY AS `retired_part`, AND FOR THE SAME REASON ( 2026-09-30 ). A path hole that does not
+		 * say what is done with the path cannot be judged at the right rung, and the one thing that must not
+		 * happen is for it to be judged at the shallowest one by default — a forgotten annotation would become
+		 * a silent grant that looks harmless. So it blocks: nothing runs, nothing is offered to an agent, the
+		 * roster still loads, and the surface shows a person exactly which hole to finish.
+		 *
+		 * THE COMPILER IS THE FIRST LINE AND THIS IS THE SECOND. `access` is required on the part, so no
+		 * authored code can omit it; `fromSerialized` degrades a stored part that lacks one to `retired`, so
+		 * no roster written before this change can either. What is left is data that reached a `Command`
+		 * without passing either — and the honest answer to that is a blocking fault rather than a cast and a
+		 * shrug. A guard whose job is to never fire is still the guard that makes the claim checkable.
+		 */
+		no_access: {
+			code: 'no_access', field: 'parts', blocking: true,
+			message: 'A path hole does not say what the command DOES with the path. Pick read, write or remove — the reach check is made at that level, and there is deliberately no default.'
 		}
 	};
 
@@ -426,6 +451,9 @@ export class Command {
 		for( const p of this.fillable ) {
 			if( names.has( p.name ) && !found.includes( Command.DUPLICATE_SLOT ) ) found.push( Command.DUPLICATE_SLOT );
 			names.add( p.name );
+
+			// ONE OF EACH, as above — the surface drawing the holes is the one that knows which of them.
+			if( !isPathAccess( p.access ) && !found.includes( Command.NO_ACCESS ) ) found.push( Command.NO_ACCESS );
 		}
 		return found;
 	}
@@ -662,8 +690,12 @@ export class Command {
 			if( p.kind === 'literal' ) return { kind: 'literal', text: p.text };
 			if( p.kind === 'retired' ) return { kind: 'retired', was: p.was };
 			// `optional` only when it is actually set — a key carrying `undefined` is a key, and it would
-			// turn an equality check between a stored row and a round-tripped one into a puzzle.
-			return p.optional ? { kind: p.kind, name: p.name, optional: true } : { kind: p.kind, name: p.name };
+			// turn an equality check between a stored row and a round-tripped one into a puzzle. `access` is
+			// NOT conditional: it is required, so it is always written, and a stored part without one is the
+			// pre-2026-09-30 shape that `fromSerialized` refuses to guess at.
+			return p.optional
+				? { kind: p.kind, name: p.name, access: p.access, optional: true }
+				: { kind: p.kind, name: p.name, access: p.access };
 		} );
 		return { name: this.name, intent: this.intent, parts };
 	}
@@ -679,12 +711,24 @@ export class Command {
 	 *
 	 * So it becomes a `retired` part, which blocks the command. Nothing runs, nothing is offered to an agent,
 	 * the roster still loads, and the surface shows a person exactly which part to replace.
+	 *
+	 * A PATH HOLE WITH NO `access` IS THE SAME CASE, and lands in the same place ( 2026-09-30 ). Every path
+	 * part authored before that date carries no level, and the one thing that must not happen is for it to
+	 * come back defaulted to `read` — a roster would then keep running, judged at the shallowest rung,
+	 * against an annotation nobody ever made. Guessing here would be guessing at a SECURITY declaration,
+	 * which is strictly worse than guessing at a menu's first option. So it comes back visibly broken, with
+	 * the kind it was named in its place, and a person re-picks the level they always meant.
 	 */
 	static fromSerialized( json: SerializedCommand ): Command {
 		const parts = ( json.parts ?? [] ).map( ( p ): CommandPart => {
 			const kind = ( p as { kind?: string } ).kind ?? '';
-			if( KNOWN_KINDS.includes( kind ) ) return p;
-			return { kind: 'retired', was: kind || 'unnamed' };
+			if( !KNOWN_KINDS.includes( kind ) ) return { kind: 'retired', was: kind || 'unnamed' };
+
+			// A fillable kind is a path kind, and a path kind without a level is not a part this can rebuild.
+			if( kind !== 'literal' && kind !== 'retired' && !isPathAccess( ( p as { access?: unknown } ).access ) ) {
+				return { kind: 'retired', was: kind };
+			}
+			return p;
 		} );
 		return new Command( json.name, json.intent ?? '', parts );
 	}

@@ -44,6 +44,81 @@ export type FillKind = 'file_path' | 'folder_path';
 export type PartKind = 'literal' | FillKind | 'retired';
 
 /**
+ * WHAT THE PROGRAM DOES WITH THE PATH A HOLE HOLDS — declared by the author, beside the hole.
+ *
+ * ── WHY IT IS ON THE PART AND NOT AT THE CHECK ──
+ * The reach check needs an OPERATION — reading a file and writing over it are different questions with
+ * different answers, and the file door has had a separate entrance for each of them all along. The type
+ * cannot supply it: `file_path` says a value is shaped like a path and says nothing about what the binary
+ * on the other end does with it. So every path argument was judged at `read`, which is right for a
+ * typecheck and wrong the moment a command takes an output file.
+ *
+ * Inferring it from the command line was DECLINED ( Bryan, 2026-09-16 ): deciding that `>` means write and
+ * `rm` means delete is a parser whose edges are wrong, which is the same argument that made the parts array
+ * beat escaping. The author knows; the author says.
+ *
+ * ── REQUIRED, WITH NO DEFAULT, EVER ──
+ * A default of `read` would make a forgotten annotation a silent grant that looks harmless — the one
+ * failure mode a security annotation may not have. Required means a forgotten one fails to AUTHOR: the
+ * compiler refuses the part, the authoring surface will not produce a usable hole without it, and a stored
+ * part that lacks it comes back visibly broken. That is the difference between onus-on-the-author as a
+ * convention and as a construction, and it costs nothing.
+ *
+ * ── THE ACCEPTED LIMIT ──
+ * This is the author's INTENT, and nothing verifies the binary agrees. See `_pathsAllowed` in
+ * `CommandService`, where the limit is written down beside the check that rests on it.
+ */
+export type PathAccess = 'read' | 'write' | 'delete';
+
+/** ONE LEVEL, WHOLE — the same shape `PartType` has, for the same reason: the words an author picks it by
+ *  live beside the thing they name, so a surface offering the choice needs no vocabulary of its own.
+ *
+ *  `…Info` RATHER THAN `AccessLevel`, and the names below are prefixed for the same reason: the SDK already
+ *  exports an `AccessLevel` and an `ACCESS_LEVELS` from its session surface — the four-rung reach ladder,
+ *  `none` included — through this very barrel. A second pair under those names is an AMBIGUOUS star
+ *  re-export, which TypeScript resolves by dropping BOTH, so the reach ladder would have quietly vanished
+ *  from `@kcd/core` and taken every consumer of it with it. This is a different axis ( what a program does )
+ *  from that one ( what a principal may reach ), and it says so in the name. */
+export interface PathAccessInfo {
+	level: PathAccess;
+	/** What an author picks it by. */
+	label: string;
+	/** What the author is told this declaration means — and that it is believed. */
+	note: string;
+}
+
+export const PATH_ACCESS: Readonly<Record<PathAccess, PathAccessInfo>> = {
+
+	read: {
+		level: 'read',
+		label: 'reads it',
+		note:  'The program only READS this path. Judged at the read rung — the right level for a typecheck, a lint or a test run.'
+	},
+
+	write: {
+		level: 'write',
+		label: 'writes it',
+		note:  'The program WRITES to this path. Judged at the write rung, so the hole is unusable unless the agent can already write there.'
+	},
+
+	delete: {
+		level: 'delete',
+		label: 'removes it',
+		note:  'The program REMOVES this path. Judged at the delete rung, which no grant can ever reach — only configured access.'
+	}
+};
+
+/** The rows, in the order an author is offered them — shallowest first, so the commonest answer is the
+ *  first one read rather than the one a tired author scrolls past. */
+export const PATH_ACCESS_LEVELS: readonly PathAccess[] = [ 'read', 'write', 'delete' ];
+
+/** Is this an access level at all? The runtime half of the required field, for data that reached here
+ *  from storage or the wire without passing a compiler. */
+export function isPathAccess( value: unknown ): value is PathAccess {
+	return value === 'read' || value === 'write' || value === 'delete';
+}
+
+/**
  * ONE TYPE, WHOLE. The display half is for the person authoring; `describe` is the sentence an agent reads
  * in the manifest, which is why a hole needs no hand-written hint — the type already says what belongs
  * there, and a per-hole sentence was a second copy of it that nobody could author anyway.

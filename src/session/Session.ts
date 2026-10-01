@@ -99,11 +99,6 @@ export interface SerializedSession {
 	zoom: number | null;
 	/** This session's chat-surface font family. Null → the render side's default ('sans'). */
 	fontFamily: FontFamilyKey | null;
-	/** Whether this chat draws the tool-call chip on each turn that made one. Null → the render side's
-	 *  default ( off ). A READING preference like the two above, not a policy: it changes what the log
-	 *  shows a person and nothing about what rides the wire, which is why it sits here rather than in
-	 *  `policies`. Set from the composer's Tool Calls tab. */
-	showToolCalls: boolean | null;
 	/** Every POLICY acting on this session's context, by name — what rides the next request and whether
 	 *  the transcript compacts itself. PERSISTED ( unlike the transcript itself ): these are session
 	 *  CONFIGURATION the user sets deliberately, so reopening a session restores the policies it was left
@@ -156,7 +151,6 @@ export interface SessionOptions {
 	status?: SessionStatus;
 	zoom?: number | null;
 	fontFamily?: FontFamilyKey | null;
-	showToolCalls?: boolean | null;
 	/** PARTIAL, and the type says so because `policiesFrom` has always behaved that way: every absent entry
 	 *  is filled from the defaults. An opener that cares about one policy — a house seat setting `chat` or
 	 *  `tools` off — should not have to restate the other four to say it. */
@@ -205,11 +199,6 @@ export class Session {
 	status: SessionStatus;
 	zoom: number | null;
 	fontFamily: FontFamilyKey | null;
-	/** Whether this chat draws the tool-call chip on each turn that made one. Null → the render side's
-	 *  default ( off ). A READING preference like the two above, not a policy: it changes what the log
-	 *  shows a person and nothing about what rides the wire, which is why it sits here rather than in
-	 *  `policies`. Set from the composer's Tool Calls tab. */
-	showToolCalls: boolean | null;
 
 	/** Every POLICY acting on this session's context, by name. PERSISTED session configuration — the
 	 *  deliberate counterpart to the non-persisted `transcript` below: the transcript is the durable
@@ -320,7 +309,6 @@ export class Session {
 		status: SessionStatus,
 		zoom: number | null,
 		fontFamily: FontFamilyKey | null,
-		showToolCalls: boolean | null,
 		policies: SessionPolicies,
 	) {
 		this.id         = id;
@@ -335,7 +323,6 @@ export class Session {
 		this.status     = status;
 		this.zoom       = zoom;
 		this.fontFamily = fontFamily;
-		this.showToolCalls = showToolCalls;
 		this.policies   = policies;
 	}
 
@@ -362,7 +349,6 @@ export class Session {
 			opts.status ?? 'active',
 			opts.zoom ?? null,
 			opts.fontFamily ?? null,
-			opts.showToolCalls ?? null,
 			Session.policiesFrom( opts.policies ),
 		);
 		// Assigned rather than constructed, as `frame` is: both are layers a caller hangs on a session, not
@@ -386,7 +372,6 @@ export class Session {
 			json.status ?? 'active',
 			json.zoom ?? null,
 			json.fontFamily ?? null,
-			json.showToolCalls ?? null,
 			Session.policiesFrom( json.policies ),
 		);
 		session.brief = json.brief ?? null;
@@ -463,7 +448,6 @@ export class Session {
 			tags:       [ ...this.tags ],
 			zoom:          this.zoom,
 			fontFamily:    this.fontFamily,
-			showToolCalls: this.showToolCalls,
 			policies:      this.policies,
 		} );
 
@@ -531,7 +515,6 @@ export class Session {
 			status:     this.status,
 			zoom:          this.zoom,
 			fontFamily:    this.fontFamily,
-			showToolCalls: this.showToolCalls,
 			policies:      this.policies,
 			brief:         this.brief,
 			turnStatus: this.turnStatus,
@@ -568,13 +551,11 @@ export class Session {
 		this.tags = this.tags.filter( ( t ) => t !== tag );
 	}
 
-	/** Set how this session's chat is READ — text zoom, font family, and whether the log draws its
-	 *  tool-call chips. Any of the three may be null to fall back to the render side's default. The chat
-	 *  header's A-/A+ and font controls call this, and so does the composer's Tool Calls tab. */
-	setDisplay( zoom: number | null, fontFamily: FontFamilyKey | null, showToolCalls: boolean | null ): void {
+	/** Set how this session's chat is READ — text zoom and font family. Either may be null to fall back
+	 *  to the render side's default. The chat header's A-/A+ and font controls call this. */
+	setDisplay( zoom: number | null, fontFamily: FontFamilyKey | null ): void {
 		this.zoom = zoom;
 		this.fontFamily = fontFamily;
-		this.showToolCalls = showToolCalls;
 	}
 
 	/**

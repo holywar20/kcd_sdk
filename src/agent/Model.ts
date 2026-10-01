@@ -18,6 +18,37 @@ export type Tier = 'local' | 'remote' | 'frontier';
  */
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
+/** The five stops LEAST-first — the only statement anywhere that one effort is more than another. Needed
+ *  because `ReasoningEffort` is a union of names and a union carries no order, so anything that has to say
+ *  "the highest of these" has to read it off a list. */
+export const REASONING_EFFORTS: readonly ReasoningEffort[] = [ 'low', 'medium', 'high', 'xhigh', 'max' ];
+
+/**
+ * CLAMP A STATED EFFORT TO WHAT A MODEL ACTUALLY DECLARES — down, never up, and never to the middle.
+ *
+ * A stated effort can go stale without being edited: an agent set to `xhigh` whose model is then changed to
+ * one that stops at `high` is now asking for a stop that model never declared. The connector would DROP it
+ * ( `openai-compat.ts` forwards three names and discards anything else ), so forwarding it unchanged means
+ * the turn runs at the provider's own default with nothing saying so.
+ *
+ * So: the requested stop if the model declares it, otherwise the highest declared stop BELOW it, otherwise
+ * the lowest declared stop. The person gets the most of what they asked for that this model can give. Note
+ * what is deliberately NOT here — falling back to `medium`, which would hand somebody who asked for the
+ * maximum the middle and say nothing.
+ *
+ * A model declaring NOTHING ( absent or empty ) has no dial at all, so there is nothing to clamp against and
+ * the value passes through untouched — the connector sends no effort either way.
+ */
+export function clampReasoningEffort( want: ReasoningEffort, declared: readonly ReasoningEffort[] | undefined ): ReasoningEffort {
+	if( !declared?.length ) return want;
+	if( declared.includes( want ) ) return want;
+	const ranked = REASONING_EFFORTS.filter( ( e ) => declared.includes( e ) );
+	if( !ranked.length ) return want;   // declared holds nothing this build knows as a stop
+	const ceiling = REASONING_EFFORTS.indexOf( want );
+	const below   = ranked.filter( ( e ) => REASONING_EFFORTS.indexOf( e ) < ceiling );
+	return below.length ? below[ below.length - 1 ]! : ranked[ 0 ]!;
+}
+
 export interface ModelDescriptor {
 	/** Registry key — the value stored on a SerializedAgent. */
 	key: string;

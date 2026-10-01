@@ -42,7 +42,7 @@ describe( 'the program is the AUTHOR\'S, never the caller\'s', () => {
 		// The case the old predicate let through: a fixed part exists, so `some( literal )` was satisfied —
 		// and the thing it was fixing was the FLAG, not the program.
 		const c = new Command( 'probe', 'x', [
-			{ kind: 'file_path', name: 'tool' },
+			{ kind: 'file_path', name: 'tool', access: 'read' },
 			fixed( '--version' )
 		] );
 
@@ -59,8 +59,8 @@ describe( 'the program is the AUTHOR\'S, never the caller\'s', () => {
 		 * builds an argv whose first element came from the agent — the exact thing `no_fixed_part` exists to
 		 * prevent, reachable through a blank field.
 		 */
-		const empty = new Command( 'probe', 'x', [ fixed( '' ), { kind: 'file_path', name: 'tool' } ] );
-		const blank = new Command( 'probe', 'x', [ fixed( '   ' ), { kind: 'file_path', name: 'tool' } ] );
+		const empty = new Command( 'probe', 'x', [ fixed( '' ), { kind: 'file_path', name: 'tool', access: 'read' } ] );
+		const blank = new Command( 'probe', 'x', [ fixed( '   ' ), { kind: 'file_path', name: 'tool', access: 'read' } ] );
 
 		expect( empty.getErrors() ).toContain( Command.NO_FIXED_PART );
 		expect( blank.getErrors() ).toContain( Command.NO_FIXED_PART );
@@ -68,7 +68,7 @@ describe( 'the program is the AUTHOR\'S, never the caller\'s', () => {
 
 	it( 'still refuses a command with NO fixed part anywhere — the case the old rule did catch', () => {
 		// The correction is strictly stronger, so nothing it used to catch may have stopped being caught.
-		const c = new Command( 'probe', 'x', [ { kind: 'file_path', name: 'everything' } ] );
+		const c = new Command( 'probe', 'x', [ { kind: 'file_path', name: 'everything', access: 'read' } ] );
 
 		expect( c.getErrors() ).toContain( Command.NO_FIXED_PART );
 	} );
@@ -76,7 +76,7 @@ describe( 'the program is the AUTHOR\'S, never the caller\'s', () => {
 	it( 'ACCEPTS a fixed program followed by holes, which is the ordinary shape', () => {
 		const c = new Command( 'check', 'Run after an edit.', [
 			fixed( 'node --check' ),
-			{ kind: 'file_path', name: 'file' }
+			{ kind: 'file_path', name: 'file', access: 'read' }
 		] );
 
 		expect( c.getErrors() ).not.toContain( Command.NO_FIXED_PART );
@@ -104,7 +104,7 @@ describe( 'the program is the AUTHOR\'S, never the caller\'s', () => {
 		 *
 		 * The type is what a hint was for, and a type cannot be left blank.
 		 */
-		const c = new Command( 'open', 'Open a file.', [ fixed( 'code' ), { kind: 'file_path', name: 'file' } ] );
+		const c = new Command( 'open', 'Open a file.', [ fixed( 'code' ), { kind: 'file_path', name: 'file', access: 'read' } ] );
 
 		expect( c.ready ).toBe( true );
 		expect( c.manifest() ).toContain( 'file — a file path' );
@@ -154,7 +154,7 @@ describe( 'a literal splits, and an agent\'s value never does', () => {
 		 * authored to hold a filename would be a way to append arguments — `--config evil` through a path
 		 * slot. It stays ONE element whatever it contains, and `shell: false` is what makes that sufficient.
 		 */
-		const c = new Command( 'probe', 'x', [ fixed( 'node' ), { kind: 'file_path', name: 'file' } ] );
+		const c = new Command( 'probe', 'x', [ fixed( 'node' ), { kind: 'file_path', name: 'file', access: 'read' } ] );
 
 		expect( c.argv( [ String.raw`C:\My Docs\a b c.txt` ] ) )
 			.toEqual( [ 'node', String.raw`C:\My Docs\a b c.txt` ] );
@@ -163,7 +163,7 @@ describe( 'a literal splits, and an agent\'s value never does', () => {
 	it( 'does not let a quote in a filled value open a quoted run', () => {
 		// A value is never tokenized, so the tokenizer's rules cannot be reached from the agent's side at all.
 		// The quotes here are stripped by the path type's normalizer, which is a different mechanism.
-		const c = new Command( 'probe', 'x', [ fixed( 'node' ), { kind: 'file_path', name: 'file' } ] );
+		const c = new Command( 'probe', 'x', [ fixed( 'node' ), { kind: 'file_path', name: 'file', access: 'read' } ] );
 
 		expect( c.argv( [ String.raw`"C:\a b.txt"` ] ) ).toEqual( [ 'node', String.raw`C:\a b.txt` ] );
 	} );
@@ -208,7 +208,7 @@ describe( 'argvShape — what the author is shown', () => {
 	} );
 
 	it( 'marks a hole rather than inventing a value for it', () => {
-		const c = new Command( 'probe', 'x', [ fixed( 'node --check' ), { kind: 'file_path', name: 'file' } ] );
+		const c = new Command( 'probe', 'x', [ fixed( 'node --check' ), { kind: 'file_path', name: 'file', access: 'read' } ] );
 
 		expect( c.argvShape() ).toEqual( [
 			{ text: 'node',    hole: false },
@@ -231,7 +231,7 @@ describe( 'file_path — the type the blanket rule made impossible', () => {
 
 	const withPath = new Command( 'probe', 'x', [
 		fixed( 'node' ),
-		{ kind: 'file_path', name: 'file' }
+		{ kind: 'file_path', name: 'file', access: 'read' }
 	] );
 
 	it( 'ACCEPTS a real Windows path with brackets in it', () => {
@@ -312,8 +312,8 @@ describe( 'file_path — the type the blanket rule made impossible', () => {
 	it( 'reports EVERY fault at once rather than the first', () => {
 		const c = new Command( 'probe', 'x', [
 			fixed( 'node' ),
-			{ kind: 'file_path', name: 'a' },
-			{ kind: 'file_path', name: 'b' }
+			{ kind: 'file_path', name: 'a', access: 'read' },
+			{ kind: 'file_path', name: 'b', access: 'read' }
 		] );
 
 		// The gate emits a single verdict, so an agent told one fault per round trip flails once per fault.
@@ -321,8 +321,8 @@ describe( 'file_path — the type the blanket rule made impossible', () => {
 	} );
 
 	it( 'treats an OPTIONAL hole as satisfied by nothing, and a required one as not', () => {
-		const optional = new Command( 'probe', 'x', [ fixed( 'node' ), { kind: 'file_path', name: 'f', optional: true } ] );
-		const required = new Command( 'probe', 'x', [ fixed( 'node' ), { kind: 'file_path', name: 'f' } ] );
+		const optional = new Command( 'probe', 'x', [ fixed( 'node' ), { kind: 'file_path', name: 'f', access: 'read', optional: true } ] );
+		const required = new Command( 'probe', 'x', [ fixed( 'node' ), { kind: 'file_path', name: 'f', access: 'read' } ] );
 
 		expect( optional.inspect( [ '' ] ) ).toEqual( [] );
 		expect( required.inspect( [ '' ] ).map( ( f ) => f.code ) ).toEqual( [ 'missing_value' ] );
@@ -337,7 +337,7 @@ describe( 'argv', () => {
 		// exactly one hole.
 		const c = new Command( 'check_file', 'Syntax-check a JS file.', [
 			fixed( 'node --check' ),
-			{ kind: 'file_path', name: 'file' }
+			{ kind: 'file_path', name: 'file', access: 'read' }
 		] );
 
 		expect( c.ready ).toBe( true );
@@ -353,7 +353,7 @@ describe( 'argv', () => {
 		 * the string that runs, which is how a check gets passed by a value that never faced it. One door:
 		 * `Command.filled`.
 		 */
-		const c = new Command( 'probe', 'x', [ fixed( 'code' ), { kind: 'file_path', name: 'file' } ] );
+		const c = new Command( 'probe', 'x', [ fixed( 'code' ), { kind: 'file_path', name: 'file', access: 'read' } ] );
 
 		expect( c.argv( [ String.raw`"C:\My Docs\a.txt"` ] ) ).toEqual( [ 'code', String.raw`C:\My Docs\a.txt` ] );
 	} );
@@ -363,7 +363,7 @@ describe( 'argv', () => {
 		// from one that receives nothing.
 		const c = new Command( 'probe', 'x', [
 			fixed( 'node' ),
-			{ kind: 'file_path', name: 'f', optional: true },
+			{ kind: 'file_path', name: 'f', access: 'read', optional: true },
 			fixed( 'end' )
 		] );
 
@@ -373,7 +373,7 @@ describe( 'argv', () => {
 	it( 'THROWS when reached with an uninspected fault, rather than building a line nobody vetted', () => {
 		// An assertion, not a gate: getting here with a bad value means the checkpoint was bypassed, and the
 		// right behaviour is to fail loudly instead of assembling a command line.
-		const c = new Command( 'probe', 'x', [ fixed( 'node' ), { kind: 'file_path', name: 'f' } ] );
+		const c = new Command( 'probe', 'x', [ fixed( 'node' ), { kind: 'file_path', name: 'f', access: 'read' } ] );
 
 		expect( () => c.argv( [ 'a|b' ] ) ).toThrow( /uninspected/i );
 	} );
@@ -472,5 +472,104 @@ describe( 'a part authored as a kind that no longer exists', () => {
 
 		expect( Command.fromSerialized( json ).serialize() ).toEqual( json );
 		expect( Command.fromSerialized( json ).ready ).toBe( true );
+	} );
+} );
+
+/**
+ * A PATH HOLE DECLARES WHAT IS DONE WITH THE PATH ( 2026-09-30 ) — and the whole value of the declaration
+ * is that it CANNOT be forgotten.
+ *
+ * Every path argument used to be judged at `read`, which is right for a typecheck and wrong for a command
+ * whose argument is an output file. The level now rides on the part, where the author declares it, and the
+ * reach check is made at that rung. The cases below pin the two things that make that safe rather than
+ * decorative: nothing defaults, and a stored part that predates the field comes back visibly broken.
+ */
+describe( 'a path hole\'s access level', () => {
+
+	it( 'ROUND-TRIPS through storage, level intact, including on an optional hole', () => {
+		const json = {
+			name:   'emit',
+			intent: 'Write a report.',
+			parts:  [
+				{ kind: 'literal' as const, text: 'node tool.js' },
+				{ kind: 'file_path' as const, name: 'out', access: 'write' as const },
+				{ kind: 'folder_path' as const, name: 'scratch', access: 'delete' as const, optional: true as const }
+			]
+		};
+
+		expect( Command.fromSerialized( json ).serialize() ).toEqual( json );
+		expect( Command.fromSerialized( json ).ready ).toBe( true );
+	} );
+
+	it( 'RETIRES a stored path hole that carries no level, rather than reading it back as `read`', () => {
+		/*
+		 * THE DANGEROUS GUESS, refused. Defaulting here would let a roster authored before the field keep
+		 * running — judged at the shallowest rung, against an annotation nobody ever made. `retired` blocks
+		 * the command, the roster still loads, and a person re-picks the level they always meant.
+		 */
+		const c = Command.fromSerialized( {
+			name:   'legacy',
+			intent: 'Authored before the level existed.',
+			parts:  [
+				{ kind: 'literal', text: 'node --check' },
+				{ kind: 'file_path', name: 'file' } as unknown as CommandPart
+			]
+		} );
+
+		expect( c.getErrors() ).toContain( Command.RETIRED_PART );
+		expect( c.ready ).toBe( false );
+		// The kind it was named survives in the strip, so the fix is obvious at the keyboard.
+		expect( c.describe() ).toContain( 'file_path' );
+	} );
+
+	it( 'REFUSES a nonsense level the same way as a missing one', () => {
+		// A level that is not one of the three is not a narrower grant, it is no declaration at all.
+		const c = Command.fromSerialized( {
+			name:   'legacy',
+			intent: 'x',
+			parts:  [
+				{ kind: 'literal', text: 'node' },
+				{ kind: 'file_path', name: 'file', access: 'readwrite' } as unknown as CommandPart
+			]
+		} );
+
+		expect( c.getErrors() ).toContain( Command.RETIRED_PART );
+		expect( c.ready ).toBe( false );
+	} );
+
+	it( 'BLOCKS a command built in memory with a level missing — the backstop behind the compiler', () => {
+		/*
+		 * `access` is required on the part, so no authored code can omit it and `fromSerialized` degrades a
+		 * stored one that does. This is what is left: data that reached a `Command` without passing either.
+		 * A blocking fault rather than a cast and a shrug — a guard whose job is never to fire is still the
+		 * guard that makes the claim checkable.
+		 */
+		const c = new Command( 'probe', 'x', [
+			fixed( 'node' ),
+			{ kind: 'file_path', name: 'file' } as unknown as CommandPart
+		] );
+
+		expect( c.getErrors() ).toContain( Command.NO_ACCESS );
+		expect( c.fetchCode( Command.NO_ACCESS ).blocking ).toBe( true );
+		expect( c.fetchCode( Command.NO_ACCESS ).field ).toBe( 'parts' );
+		expect( c.ready ).toBe( false );
+	} );
+
+	it( 'raises `no_access` ONCE however many holes are unannotated', () => {
+		// A code names a CLASS of fault; the surface drawing the holes is the one that knows which of them.
+		const c = new Command( 'probe', 'x', [
+			fixed( 'node' ),
+			{ kind: 'file_path', name: 'a' } as unknown as CommandPart,
+			{ kind: 'file_path', name: 'b' } as unknown as CommandPart
+		] );
+
+		expect( c.getErrors().filter( ( code ) => code === Command.NO_ACCESS ) ).toHaveLength( 1 );
+	} );
+
+	it( 'says nothing about an annotated hole', () => {
+		const c = new Command( 'probe', 'x', [ fixed( 'node' ), { kind: 'file_path', name: 'f', access: 'write' } ] );
+
+		expect( c.getErrors() ).not.toContain( Command.NO_ACCESS );
+		expect( c.ready ).toBe( true );
 	} );
 } );

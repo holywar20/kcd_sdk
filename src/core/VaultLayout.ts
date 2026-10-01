@@ -183,6 +183,15 @@ const LAYOUT: readonly LayoutEntry[] = [
 	{
 		dir: 'dev-utilities', type: 'unknown', layer: 'data', indexed: false,
 		purpose: 'The dev command deck — JSON-declared scripts run against the project, not governed artifacts.'
+	},
+	{
+		// TASK-183. Plain HTML research reports, each with its own masthead, meta panel and
+		// research.css — never authored against the KCD Document Protocol and never meant to be:
+		// no carries no <article data-kcd> root, by design. Declared here, unindexed, on the same
+		// footing as work/ and scratch/, so a vault-wide sweep stops treating this corpus as
+		// candidate KCD content and reporting every file in it as a parse failure.
+		dir: 'research', type: 'unknown', layer: 'data', indexed: false,
+		purpose: 'Sourced research reports and their templates — plain HTML, styled by research.css, never KCD artifacts.'
 	}
 
 ]

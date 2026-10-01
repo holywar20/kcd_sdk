@@ -1046,6 +1046,56 @@ export function frameToolResultStub( logPath: string, line: number | undefined, 
 		+ ` Retrieve it with read_file( fromLine: ${ line }, toLine: ${ line } ) if you need it.]`;
 }
 
+/** How much of a FAILED result's reason survives compression — enough to say what broke and whether it is
+ *  the agent's fault, not enough to re-read a stack trace. A cap rather than the whole body because an
+ *  error body is sometimes the largest thing in a transcript ( a rejected request echoes what it rejected ),
+ *  and the pass is being asked what happened rather than to debug it. */
+export const TOOL_ERROR_CHARS = 300;
+
+/** A body as ONE capped line. Whitespace collapses first, so the cap counts content rather than indentation
+ *  and the shape stays one line per round whatever the tool returned. */
+function oneCappedLine( text: string, cap: number ): string {
+	const flat = text.replace( /\s+/g, ' ' ).trim();
+	return flat.length > cap ? `${ flat.slice( 0, cap ) }…` : flat;
+}
+
+/**
+ * ONE TOOL ROUND as a summarising pass sees it — THE standard shape, and the only renderer of a tool call
+ * on the compaction path ( `SessionService._turnText` ).
+ *
+ * Tool traffic is the most compressible mass in a transcript and the least worth reading whole: to a pass
+ * being asked what HAPPENED, a call's arguments and a result's body are an envelope. So a round collapses
+ * to one line naming the tool and its outcome — the same trade the tool ledger made when it was narrowed
+ * to one row per tool with a count, arguments and adjacency dropped deliberately ( Bryan ).
+ *
+ * WHAT CANNOT BE COMPRESSED IS A FAILURE. The natural way to shrink a result is to drop its body, and for
+ * an error the body IS the outcome. A compacted transcript in which a failure reads as a success teaches
+ * the next session a history that did not happen, and compaction is the one pass whose output nobody
+ * re-reads against the original — so an error keeps its reason, capped and flattened but never dropped.
+ *
+ * An UNPAIRED entry is rendered rather than skipped, both ways round: a call with no result is a turn that
+ * died mid-loop, and a result whose call is not in the turn is a row that hydrated `unreadable`. Both are
+ * facts about what happened, and silence about either reads as the round never having occurred.
+ *
+ * It emits no '#' at all, which is what keeps it clear of the house fence's '## START' / '## END' markers.
+ * Those can still arrive inside an error's own reason — that is the fence's own recorded limit, and this
+ * shape neither worsens it nor pretends to fix it.
+ */
+export function frameToolRound(
+	call:   Extract<TurnEntry, { kind: 'tool-call' }>   | null,
+	result: Extract<TurnEntry, { kind: 'tool-result' }> | null
+): string {
+	// Neither half is nothing to say, and `_turnText` already drops an empty body. Reachable only from a
+	// caller that asked about a round it does not hold; it returns absence rather than inventing a round.
+	if ( !call && !result ) return '';
+	const name = call?.name ?? '( unidentified )';
+	if ( !result ) return `[tool ${ name } — called, no result recorded]`;
+	if ( result.isError ) {
+		return `[tool ${ name } — FAILED: ${ oneCappedLine( result.content, TOOL_ERROR_CHARS ) || 'no reason given' }]`;
+	}
+	return `[tool ${ name } — ok, ${ result.content.length } chars returned]`;
+}
+
 /** Anthropic prices an image by pixel AREA — roughly ( width × height ) / 750 tokens — NOT by byte count
  *  or chars÷4, so a large screenshot and a small icon cost wildly different amounts. When dimensions are
  *  unknown ( not yet measured at attach time ) we fall back to a single conservative constant near the

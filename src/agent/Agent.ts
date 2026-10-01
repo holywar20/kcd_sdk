@@ -55,7 +55,11 @@ export interface HabitSlotView {
 	winner:     HabitSlotCandidate;
 	candidates: HabitSlotCandidate[];
 }
-import { DEFAULT_MODEL_KEY } from './Model';
+import { DEFAULT_MODEL_KEY, REASONING_EFFORTS, type ReasoningEffort } from './Model';
+// TYPE-ONLY, so there is no runtime edge back into the session module ( `Session.ts` already imports
+// `Agent` as a type for the same reason ). The policy SHAPE is the session's — an agent stating a default
+// must state it in exactly the currency a session stores, or the two drift into near-identical types.
+import type { ReasoningPolicy } from '../session/TurnEntry';
 import { carries, type ToolMode } from '../primitives/ToolAccess';
 import type { ToolDef } from './ToolDef';
 
@@ -154,6 +158,10 @@ export interface SerializedAgent {
 	 *  it has to choose between two lanes. Null = none, and none is legitimate; nothing synthesizes one,
 	 *  because a router cannot tell a guess apart from a statement. See `Agent.slug`. */
 	slug?: string | null;
+	/** THE REASONING DEFAULT a session spawned under this agent is born on — see `Agent.reasoning`. Null =
+	 *  no default was stated, which is NOT the same fact as "the default is medium" and must never collapse
+	 *  into it. Absent on a wire or row written before the field existed, which reads as the same null. */
+	reasoning?: ReasoningPolicy | null;
 }
 
 /** A lens an agent's record names that could not be loaded. Kept on the agent so it can say which lens it
@@ -230,6 +238,7 @@ export interface AgentOptions {
 	folder?: string;
 	notes?: string | null;
 	slug?: string | null;
+	reasoning?: ReasoningPolicy | null;
 }
 
 /** Pull the paths of every node of a given artifact type out of a flat node list. */
@@ -399,6 +408,37 @@ export class Agent {
 	set slug( value: string | null | undefined ) { this._slug = Agent.normalizeSlug( value ); }
 	private _slug: string | null = null;
 
+	/**
+	 * THE REASONING DEFAULT A SESSION UNDER THIS AGENT IS BORN ON — effort and mode, the same
+	 * `ReasoningPolicy` a session stores, so there is one currency rather than two near-identical ones.
+	 *
+	 * WHY IT EXISTS. The effort dial is per-SESSION and set from the composer, so every freshly spawned
+	 * session landed on the SDK's inert `medium` no matter which agent spawned it. A lane that opens a new
+	 * session per task could therefore never be benchmarked at an effort of its own — which is the whole
+	 * reason for the field ( Bryan, 2026-09-30: use known-good effort states per agent rather than
+	 * defaulting everything to medium ).
+	 *
+	 * IT IS A DEFAULT, NOT A GOVERNOR. It is read ONCE, at session creation, and stamped onto that
+	 * session's own `policies.reasoning`. Nothing re-reads it afterwards, so changing it moves no live
+	 * session, and the session's stored policy is true from birth — every reader downstream ( dispatch,
+	 * the harness, the transcript ) is already correct without knowing this field exists.
+	 *
+	 * NULL IS THE ABSENT CASE, exactly as it is for `slug`, and "no default was stated" is NOT the same
+	 * fact as "the default is medium". Nothing synthesizes one: an agent that states nothing gets whatever
+	 * a session is born on, decided by the session module, and this field says nothing about it.
+	 *
+	 * THE AGENT DOES NOT RECEIVE IT. Same rule as `slug` and for a milder version of the same reason: it is
+	 * a fact ABOUT the agent that the agent has no use for, and telling a model how hard it has been asked
+	 * to think is prompt content nobody authored.
+	 *
+	 * Normalized on every write through the accessor, so a malformed stop cannot land from one of four
+	 * callers. CLAMPING TO A MODEL is NOT done here — that needs a model descriptor, which the SDK record
+	 * has no business resolving; see `clampReasoningEffort` and the session-creation path that calls it.
+	 */
+	get reasoning(): ReasoningPolicy | null { return this._reasoning; }
+	set reasoning( value: ReasoningPolicy | null | undefined ) { this._reasoning = Agent.normalizeReasoning( value ); }
+	private _reasoning: ReasoningPolicy | null = null;
+
 	// ── composed{X}: MATERIALIZED by compose(); never persisted, never crosses the wire ──
 	composedHabits: string[] = [];
 	composedReferences: string[] = [];
@@ -562,6 +602,7 @@ export class Agent {
 		folder: string | undefined,
 		notes: string | null,
 		slug: string | null,
+		reasoning: ReasoningPolicy | null,
 	) {
 		this.id             = id;
 		this.projectId      = projectId;
@@ -580,6 +621,7 @@ export class Agent {
 		this.folder         = folder;
 		this.notes          = notes;
 		this.slug           = slug;   // through the accessor — the cap is enforced in one place
+		this.reasoning      = reasoning;   // through the accessor too — one validator, not one per caller
 		this.compose();   // materialize composed{X} from the lenses on the way in
 	}
 
@@ -599,6 +641,25 @@ export class Agent {
 		// the roster read multi-line — the cap would otherwise measure something a reader never sees.
 		const flat = value.replace( /\s+/g, ' ' ).trim();
 		return flat === '' ? null : flat.slice( 0, Agent.SLUG_MAX );
+	}
+
+	/**
+	 * The one normalizer every write of `reasoning` goes through ( see the accessor ). Absent, null and a
+	 * shape this build cannot read all land on NULL: absent is ONE state, not four, and a half-read policy
+	 * would be a default nobody stated.
+	 *
+	 * REFUSED RATHER THAN REPAIRED, which is the opposite of `normalizeSlug`'s clamp, because the two fail
+	 * differently. A slug is prose and a too-long one still says what it meant; an effort is a name off a
+	 * closed roster and a name not on it means nothing at all. Guessing which stop somebody meant would
+	 * invent a default — exactly the assertion-on-the-agent's-behalf this field exists to stop.
+	 */
+	static normalizeReasoning( value: ReasoningPolicy | null | undefined ): ReasoningPolicy | null {
+		if( value == null || typeof value !== 'object' ) return null;
+		const effort = value.effort;
+		const mode   = value.mode;
+		if( !REASONING_EFFORTS.includes( effort as ReasoningEffort ) ) return null;
+		if( mode !== 'chain' && mode !== 'show' ) return null;
+		return { effort, mode };
 	}
 
 	/** Compose an agent. A lensless draft is legal — running is what demands a lens. An agent with no name
@@ -627,6 +688,7 @@ export class Agent {
 			opts.folder,
 			opts.notes ?? null,
 			opts.slug ?? null,
+			opts.reasoning ?? null,
 		);
 	}
 
@@ -652,6 +714,7 @@ export class Agent {
 			json.folder,
 			json.notes ?? null,
 			json.slug ?? null,
+			json.reasoning ?? null,
 		);
 		// The materialized habits ride the wire ( the renderer can't dredge disk ). Main
 		// re-materializes from the paths on every load/save, so an absent field just means "not materialized
@@ -704,6 +767,7 @@ export class Agent {
 			folder:         this.folder,
 			notes:          this.notes,
 			slug:           this.slug,
+			reasoning:      this.reasoning,
 			baseHabitNodes: this.baseHabitNodes.map( ( n ) => n.serialize() ),
 			brokenLenses:   this.brokenLenses.map( ( b ) => ( { ...b } ) ),
 			brokenHabits:   this.brokenHabits.map( ( b ) => ( { ...b } ) ),

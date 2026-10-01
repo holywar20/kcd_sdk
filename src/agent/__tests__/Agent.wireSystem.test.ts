@@ -442,3 +442,90 @@ describe( 'Agent.slug — held by the record, never shown to the agent', () => {
 		expect( made.slug ).toHaveLength( Agent.SLUG_MAX );
 	} );
 } );
+
+/**
+ * The REASONING DEFAULT — the effort and mode a session spawned under this agent is born on.
+ *
+ * It sits beside the slug for the reason it follows the slug's discipline: persisted on the record, crossing
+ * the wire, null when unset, nothing synthesized, normalized once through the accessor — and NOT shown to the
+ * agent. The invisibility half matters slightly less here than it does for the slug ( nobody is told they are
+ * less capable ) and is pinned anyway, because the field is a fact ABOUT the agent that the agent has no use
+ * for, and an unasserted invariant is one the next context block quietly breaks.
+ *
+ * The TRAP this file's cases do NOT cover is the clamp against a model's declared stops. That needs a model
+ * descriptor, which the record has no business resolving — it lives in `clampReasoningEffort` and is driven
+ * from the session-creation path, where the suite can hand it a real descriptor.
+ */
+describe( 'Agent.reasoning — a default a session inherits, not a fact the agent reads', () => {
+
+	function dialled(): Agent {
+		const agent     = fullAgent();
+		agent.reasoning = { effort: 'xhigh', mode: 'show' };
+		return agent;
+	}
+
+	it( 'is absent by default, and NULL does not mean medium', () => {
+		const bare = Agent.create( { name: 'Lincoln', model: 'test.lorem' } );
+
+		// The whole reason the field exists: `medium` was being asserted on every agent's behalf by a
+		// fallback, and "no default was stated" is a different fact that only null can hold.
+		expect( bare.reasoning ).toBeNull();
+		expect( bare.serializeForWire().reasoning ).toBeNull();
+		expect( Agent.fromSerialized( bare.serializeForWire() ).reasoning ).toBeNull();
+	} );
+
+	it( 'round-trips through both wire forms', () => {
+		expect( Agent.fromSerialized( dialled().serializeForWire() ).reasoning ).toEqual( { effort: 'xhigh', mode: 'show' } );
+		// And the RECORD form — it is the one main persists.
+		expect( Agent.fromSerialized( dialled().serializeRecord() ).reasoning ).toEqual( { effort: 'xhigh', mode: 'show' } );
+	} );
+
+	it( 'reads absent from a wire form that predates the field', () => {
+		const wire = dialled().serializeForWire();
+		delete wire.reasoning;
+
+		expect( Agent.fromSerialized( wire ).reasoning ).toBeNull();
+	} );
+
+	it( 'REFUSES a stop that is not on the roster, rather than guessing which one was meant', () => {
+		const agent = fullAgent();
+
+		// Refused rather than repaired — the opposite of the slug's clamp, because a slug that is too long
+		// still says what it meant and an effort off-roster means nothing at all. Guessing would invent a
+		// default, which is exactly the assertion this field exists to stop.
+		agent.reasoning = { effort: 'turbo', mode: 'chain' } as never;
+		expect( agent.reasoning ).toBeNull();
+
+		agent.reasoning = { effort: 'high', mode: 'loud' } as never;
+		expect( agent.reasoning ).toBeNull();
+
+		agent.reasoning = {} as never;
+		expect( agent.reasoning ).toBeNull();
+	} );
+
+	it( 'accepts every declared stop, and both modes', () => {
+		const agent = fullAgent();
+
+		for( const effort of [ 'low', 'medium', 'high', 'xhigh', 'max' ] as const ) {
+			agent.reasoning = { effort, mode: 'chain' };
+			expect( agent.reasoning ).toEqual( { effort, mode: 'chain' } );
+		}
+		agent.reasoning = { effort: 'low', mode: 'show' };
+		expect( agent.reasoning?.mode ).toBe( 'show' );
+	} );
+
+	it( 'is normalized through Agent.create as well, not only through the accessor', () => {
+		expect( Agent.create( { reasoning: { effort: 'nope', mode: 'chain' } as never } ).reasoning ).toBeNull();
+		expect( Agent.create( { reasoning: { effort: 'max', mode: 'chain' } } ).reasoning ).toEqual( { effort: 'max', mode: 'chain' } );
+	} );
+
+	it( 'reaches NEITHER door of the agent\'s own context, and costs it nothing', () => {
+		const agent = dialled();
+
+		// No sentinel string is available for a closed union, so the invariant is pinned the two other ways
+		// the slug's is: the stop name appears in no block, and the budget does not move.
+		expect( agent.compiledContext().some( b => b.text.includes( 'xhigh' ) ) ).toBe( false );
+		expect( agent.wireSystem() ).not.toContain( 'xhigh' );
+		expect( agent.compiledBudget() ).toEqual( fullAgent().compiledBudget() );
+	} );
+} );

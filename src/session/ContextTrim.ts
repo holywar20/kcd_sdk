@@ -232,3 +232,27 @@ export interface SentContext {
 	/** How many tool results ride as a pointer. */
 	pointed:   number;
 }
+
+/**
+ * THE MEASUREMENT ALONE, with none of the text — what an always-on gauge needs and the whole of it.
+ *
+ * `SentContext` above is the same answer plus every row's body, which is right for a view somebody
+ * OPENS and wrong for a figure drawn on every roster card: a card wants four numbers and would have
+ * paid for the entire projection's text to get them. So this is the narrow read, deliberately a
+ * SUBSET of `SentContext`'s own fields rather than a new vocabulary — same names, same meanings, and
+ * both come off one fit, so the gauge and the view cannot report two different numbers.
+ *
+ * It is NOT a second rule, and that is the point of declaring it here. The one thing that could make
+ * this wrong is the fit being wrong.
+ */
+export interface ContextPrice {
+	/** The whole-context estimate the fit judged — conversation plus system layer, by the house formula.
+	 *  UNTRIMMED, exactly as `Fitted.estimated` is and for the reason given at the top of this file: a
+	 *  price measured on the narrowed request would alternate lap by lap. */
+	estimated: number;
+	/** Where narrowing starts. Zero for a model that declares no window. */
+	line:      number;
+	window:    number;
+	/** How many tool results ride as a pointer. */
+	pointed:   number;
+}
