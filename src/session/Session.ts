@@ -268,6 +268,26 @@ export class Session {
 	brief: SessionBrief | null = null;
 
 	/**
+	 * WHAT THIS SESSION WAS LAST TOLD ITS PROJECT'S CONFIGURATION WAS — a short digest, or NULL for a session
+	 * that has never compiled.
+	 *
+	 * The marker half of the configuration announcement. A project-configuration change is never pushed at a
+	 * running session: `Environment.compile` digests what it has just resolved and compares that stamp against
+	 * this field, so a session DISCOVERS the change at its own next turn boundary. Nothing is in flight, so
+	 * nothing can be missed by a session that happened to be mid-turn.
+	 *
+	 * RUNTIME ONLY, exactly as `frame` is: never serialized, never a row column. A restart recompiles every
+	 * layer from disk anyway, and persisting it would buy a migration for a one-sentence courtesy.
+	 *
+	 * NULL IS A REAL STATE and it announces NOTHING, which is the same ruling `readAt` makes for its own null
+	 * in the other direction. A session that has never compiled is about to be told the current configuration
+	 * in full, so nothing has moved relative to what it was told — establishing the baseline silently and
+	 * announcing nothing are the same act. The failure direction is a notice that does not appear, never one
+	 * that appears wrongly.
+	 */
+	lastConfigStamp: string | null = null;
+
+	/**
 	 * WHEN THE PERSON LAST SAW THIS SESSION'S NEWEST OUTPUT — epoch ms, or NULL for never seen.
 	 *
 	 * The one fact an attention model needs. Whether a session is UNREAD is this marker against its newest

@@ -51,6 +51,13 @@ const BROKEN  = 'references/patterns/broken.html';
 const REPORT  = 'research/academic/some-report.html';
 const ORPHAN  = 'unregistered-folder/orphan.html';
 
+/** The constants above are forward-slash by convention — they double as the fixture WRITER via
+ *  `.split( '/' )`. A value read back out of a sweep is whatever its producer spells it as, so it is
+ *  normalized HERE, at the assertion, the way `Vault.documentPaths.test.ts` beside this file does.
+ *  The fact under test is always WHICH document, never the separator; comparing a forward-slash literal
+ *  to a native-separator value is a Windows-only failure that says nothing about grading. */
+const fwd = ( p: string ) => p.replace( /\\/g, '/' );
+
 beforeAll( () => {
 	root = mkdtempSync( join( tmpdir(), 'kcd-query-advisory-' ) );
 	for ( const dir of [ [ 'references', 'patterns' ], [ 'research', 'academic' ], [ 'unregistered-folder' ] ] )
@@ -125,11 +132,11 @@ describe( 'what a whole-vault sweep grades — unchanged by the advisory rule', 
 
 	it( 'reports the broken library document as a real defect', () => {
 		const { issues } = VaultUtilities.health( vaultOf() );
-		expect( issues.some( i => i.path === BROKEN ) ).toBe( true );
+		expect( issues.some( i => fwd( i.path ) === BROKEN ) ).toBe( true );
 	} );
 
 	it( 'never walks the research corpus or an unregistered folder — neither is indexed', () => {
-		const graded = vaultOf().documentPaths();
+		const graded = vaultOf().documentPaths().map( fwd );
 		expect( graded ).toContain( BROKEN );
 		expect( graded.filter( p => p.startsWith( 'research/' ) ) ).toEqual( [] );
 		expect( graded ).not.toContain( ORPHAN );

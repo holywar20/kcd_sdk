@@ -148,9 +148,15 @@ export class Vault {
 		return fwd.startsWith( lead ) ? fwd.slice( lead.length ) : fwd;
 	}
 
-	/** Absolute ( or vault-relative ) path → vault-relative path, for return payloads. */
+	/**
+	 * Absolute ( or vault-relative ) path → vault-relative path, for return payloads.
+	 *
+	 * Forward slashes on EVERY platform. A vault-relative path is a wire format — it travels in return
+	 * payloads, crosses the bridge, reaches agents and lands in stored rows — so it gets one spelling.
+	 * `path.relative` answers native separators, which gave the same document two spellings on Windows.
+	 */
 	toVaultRel( anyPath: string ): string {
-		return path.relative( this.root, this.toAbs( anyPath ) );
+		return path.relative( this.root, this.toAbs( anyPath ) ).replace( /\\/g, '/' );
 	}
 
 	/** True when the path resolves inside the vault root — the path-jail predicate. */
@@ -609,7 +615,7 @@ export class Vault {
 				const full = path.join( dir, entry.name );
 				if ( entry.isDirectory() ) { walk( full ); continue; }
 				if ( !/\.(html?|md|js)$/i.test( entry.name ) ) continue;
-				out.push( this.toVaultRel( full ).replace( /\\/g, '/' ) );
+				out.push( this.toVaultRel( full ) );
 			}
 		};
 
@@ -618,7 +624,7 @@ export class Vault {
 
 		for ( const name of Vault.HOST_ENTRY_FILES ) {
 			const abs = path.join( this.projectRoot, name );
-			if ( fs.existsSync( abs ) ) out.push( this.toVaultRel( abs ).replace( /\\/g, '/' ) );
+			if ( fs.existsSync( abs ) ) out.push( this.toVaultRel( abs ) );
 		}
 		return out;
 	}

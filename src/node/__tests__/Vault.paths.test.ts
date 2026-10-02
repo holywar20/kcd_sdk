@@ -83,8 +83,11 @@ describe( 'Vault.toVaultRel', () => {
 		const v = vault()
 
 		// The return currency is vault-relative, so a caller handing in a doc-root-prefixed path gets back
-		// the canonical form rather than its own spelling echoed.
+		// the canonical form rather than its own spelling echoed. That currency is FORWARD-SLASH on every
+		// platform — decided 2026-10-01, deliberately, because a vault-relative path is a wire format and
+		// a native separator gave the same document two spellings on Windows. Asserted as a literal here
+		// rather than through `path.join` so the contract is visible, not platform-dependent.
 		expect( v.toVaultRel( '_Claude/plans/x.html' ) ).toBe( v.toVaultRel( 'plans/x.html' ) )
-		expect( v.toVaultRel( 'plans/x.html' ) ).toBe( path.join( 'plans', 'x.html' ) )
+		expect( v.toVaultRel( 'plans/x.html' ) ).toBe( 'plans/x.html' )
 	} )
 } )

@@ -332,6 +332,10 @@ export type AgentEnvironment = {
 	commands?:       readonly Command[];
 	manifestGroups?: readonly { heading: string; body: string }[];
 	capability?:     string;
+	/** ONE SENTENCE saying this project's configuration moved since this session's last turn, or '' — the
+	 *  announcement half of project-configuration delivery. DERIVED at `Environment.compile` by comparing a
+	 *  stamp against `Session.lastConfigStamp`; never pushed, so nothing can be in flight to miss. */
+	configNotice?:   string;
 	frame?:          string;
 	modeLine?:       string;
 };
@@ -552,6 +556,10 @@ export class Agent {
 	 *  answers, and the failure mode of two authors on that question is a description that is reassuring and
 	 *  wrong. This holds the sentence; it does not write it. '' when nothing governs the run. */
 	get capability(): string { return this._layer( 'capability' ) ?? ''; }
+	/** THE ONE SENTENCE that says this project's configuration moved since this session's last turn — '' on
+	 *  every other turn, which is nearly all of them. Opaque bound TEXT like `modeLine`: whether anything
+	 *  changed is dispatch's question, and this object's job is knowing where the answer sits. */
+	get configNotice(): string { return this._layer( 'configNotice' ) ?? ''; }
 	/** The CALLER's layer above the lens — a room frame, a Constellation step frame, whatever framed this
 	 *  particular turn. Bound per ROUND like the rest of the environment; '' when nothing framed it.
 	 *
@@ -1289,6 +1297,13 @@ export class Agent {
 				// layer below the settled ones — and when it does churn, invalidating from here is correct
 				// rather than unfortunate: the agent's capability actually changed.
 				this.capability ? [ Agent.extraBlock( 'capability', this.capability ) ] : [],
+				// THE CONFIGURATION NOTICE sits beside capability and for the same reason: it is about this run's
+				// environment rather than about what the agent is, and it is the most volatile block of the three.
+				// It appears on one turn and vanishes on the next, and a prefix cache invalidates from the earliest
+				// edit forward — so it belongs as LOW as its meaning allows. Below capability rather than above it
+				// because capability rides every turn and this rides almost none, and the churning layer goes last.
+				// Empty is the normal case and drops the block entirely.
+				this.configNotice ? [ Agent.extraBlock( 'config-notice', this.configNotice ) ] : [],
 				// Attachments TRAIL the whole system half, deliberately. They are its most volatile part — a
 				// user attaches and detaches mid-conversation while root context and lens identity sit still —
 				// and prefix caching invalidates from the earliest edit forward, so the churning thing belongs

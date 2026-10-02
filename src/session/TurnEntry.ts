@@ -183,6 +183,25 @@ interface EntryBase {
 	 */
 	contents?: string;
 	/**
+	 * TRANSIENT, AND THE SAME BARGAIN `contents` MAKES — the BYTES of the images a tool returned, parallel to
+	 * the `images` array on a `tool-result` arm, and NEVER persisted. `entryPayload` strips it beside
+	 * `contents` and `rowId`.
+	 *
+	 * WHY A SECOND TRANSIENT RATHER THAN A FIELD INSIDE `images`. The paths in `images` are the PERSISTED
+	 * record and the bytes must not be; a `contents` nested inside that array would ride into the row through
+	 * the one door the base-level strip cannot see, which is the whole thing the attachment model exists to
+	 * prevent. Two fields with one rule between them beats one field with an exception.
+	 *
+	 * PARALLEL BY INDEX: `imageData[ i ]` is the bytes of `images[ i ]`. An index with no bytes is an image
+	 * that is not riding this turn — the projection skips it rather than sending an empty block, so a failed
+	 * spill degrades to the pointer line in the result's own text.
+	 *
+	 * Main fills this at the moment it records the result, because that is the one moment it HOLDS the bytes:
+	 * `_hydrateGrant` runs once when a turn opens, and a tool result is appended long after. It only ever
+	 * needs to be here for the live turn, which is the only turn an image rides on.
+	 */
+	imageData?: string[];
+	/**
 	 * This entry's STORAGE identity — the `turn_entries.id` of the row holding it, when it has one.
 	 *
 	 * The one thing that makes an entry writable after the fact. Storage is otherwise insert-only, so an
@@ -237,11 +256,27 @@ interface EntryBase {
  *  nothing. Hydration LOADS; projection DECIDES what rides. A skip at load time made hydration a second
  *  decider, which is how a branch that adds a kind quietly shortens every conversation in the database
  *  the moment you switch away from it. */
+/**
+ * ONE IMAGE A TOOL RETURNED — a path, never the bytes.
+ *
+ * The same shape the `image` grant kind holds and for the same reason: a tool handing back a 2 MB render
+ * must cost a few hundred bytes of transcript. Main spills the bytes beside the session's result log and
+ * records this; `EntryBase.imageData` carries the payload for the one projection that sends it.
+ *
+ * `name` is what the pointer line calls it once the image stops riding, so it is written for a person and an
+ * agent to read rather than derived from the path.
+ */
+export interface ToolResultImage {
+	path:      string;
+	name:      string;
+	mediaType: string;
+}
+
 export type TurnEntry = EntryBase & (
 	| { kind: 'user';          text: string }
 	| { kind: 'assistant';     text: string }
 	| { kind: 'tool-call';     id: string; name: string; input: unknown }
-	| { kind: 'tool-result';   toolUseId: string; content: string; isError?: boolean }
+	| { kind: 'tool-result';   toolUseId: string; content: string; isError?: boolean; images?: ToolResultImage[] }
 	| { kind: 'injected-file'; path: string; name: string; mediaType: string; bytes: number; removed?: boolean; level?: AccessLevel }
 	| { kind: 'image';         path: string; name: string; mediaType: string; width?: number; height?: number; removed?: boolean; level?: AccessLevel }
 	| { kind: 'injected-folder'; path: string; name: string; removed?: boolean; level?: AccessLevel }
@@ -565,7 +600,10 @@ export type WireBlock =
 	| { type: 'text';        text: string }
 	| { type: 'thinking';    thinking: string; signature: string }
 	| { type: 'tool_use';    id: string; name: string; input: unknown }
-	| { type: 'tool_result'; tool_use_id: string; content: string; is_error?: boolean }
+	/** `content` is a STRING in the ordinary case and a block list when a tool returned something a string
+	 *  cannot hold — an image. The provider's own `tool_result` admits both, so the widening is the provider's
+	 *  shape rather than an invention, and the string stays the degenerate case every existing caller writes. */
+	| { type: 'tool_result'; tool_use_id: string; content: string | WireBlock[]; is_error?: boolean }
 	| { type: 'image';       mediaType: string; data: string };
 
 /**
@@ -815,6 +853,61 @@ export function projectSig( text: string ): SigProjection {
 	}
 
 	return { ok: true, nodes: nodes.length, edges: edges.length, body: lines.join( '\n' ) };
+}
+
+/**
+ * What came back from trying to pull text out of a PDF — the currency `framePdf` speaks, and the second
+ * member of the projected-document family `SigProjection` opened.
+ *
+ * THE THREE OUTCOMES ARE THREE, NOT TWO, and that is the whole shape. A PDF that extracted, a PDF that
+ * extracted NOTHING ( a scan with no text layer — the common real case ), and a PDF that could not be
+ * opened at all ( encrypted, truncated, not a PDF ) want three different sentences, because a model told
+ * only "here is the document" about an empty string will confidently report an empty document. `ok: true`
+ * with an empty `text` is deliberately NOT a representable state: the no-text-layer case has its own
+ * variant so no caller can accidentally frame it as a success.
+ *
+ * `pages` rides on the empty case too, because the page count is what proves the file was READ — "0 pages"
+ * and "12 pages, none of them text" are different diagnoses, and only one of them suggests OCR.
+ *
+ * THE FAILURE IS `unopenable` AND NOT `unreadable` for one local reason: `unreadable` is already a TurnEntry
+ * KIND in this same file, meaning a transcript row this build could not interpret. Two unrelated senses of
+ * one word a few hundred lines apart is a cost paid by every future reader, and the word was cheaper to
+ * change than the kind.
+ */
+export type PdfExtract =
+	| { ok: true;  pages: number; text: string }
+	| { ok: false; why: 'no-text-layer'; pages: number }
+	| { ok: false; why: 'unopenable';    reason: string };
+
+/**
+ * A PDF, FRAMED for the wire as EXTRACTED TEXT — the PDF-shaped declaration ( Bryan, 2026-10-01: "extract
+ * text, pass text as if it was a prompt but with a pdf shaped declaration so the agent knows it's a pdf" ).
+ *
+ * WHY A FRAME AND NOT JUST THE TEXT. Extraction returns something that is not the file: no figures, no
+ * tables as tables, no layout, no page breaks a reader could cite. A model handed that bare assumes it
+ * holds the document, and will answer "there is no diagram" about a document that is mostly diagrams. So
+ * the frame states four things it cannot work out for itself — that this is a PDF, that the text is
+ * extracted rather than the document, how many pages it came from, and where the file is. The path is there
+ * for `framePointer`'s reason: a reader that wants the real thing has somewhere to go.
+ *
+ * FAILURE IS LOUD AND NEVER EMPTY. Both failure arms return a frame SAYING SO, and neither ever falls back
+ * to the raw bytes — a PDF's bytes through a UTF-8 decode are mojibake, which is worse than nothing because
+ * it looks like content. The no-text-layer arm names the cause in words a model can act on ( it is a scan;
+ * ask the person ) rather than leaving it to infer one from silence.
+ */
+export function framePdf( name: string, seen: PdfExtract ): string {
+	if( !seen.ok ) {
+		if( seen.why === 'unopenable' ) {
+			return `[PDF — ${ name } — COULD NOT BE READ: ${ seen.reason }. No text was extracted; nothing of this `
+				+ 'document is in context. Tell the person it could not be opened.]';
+		}
+		return `[PDF — ${ name } — ${ seen.pages } page( s ) and NO TEXT LAYER: this is almost certainly a scan or `
+			+ 'images, so there is no text to extract and nothing of its contents is in context. Do not treat it as an '
+			+ 'empty document. Ask the person what it says, or for a text version.]';
+	}
+	return `[PDF — ${ name } — ${ seen.pages } page( s ), EXTRACTED TEXT: this is text pulled out of a PDF, not the `
+		+ 'document itself. Figures, tables and layout are not here and their absence says nothing about the file.]\n'
+		+ seen.text;
 }
 
 /**
@@ -1464,10 +1557,35 @@ export class Transcript {
 						// inspector, and whole in the session's result LOG for the agent. The block KIND never
 						// changes — a stub is still a `tool_result` answering its `tool_use`, which is what keeps a
 						// reduced transcript valid by construction rather than by a rule someone has to remember.
-						const content = reduction && stubbed.has( entry.toolUseId )
-							? frameToolResultStub( reduction.logPath, reduction.lines?.get( entry.toolUseId ), entry.toolUseId )
+						const isStub  = !!reduction && stubbed.has( entry.toolUseId );
+						const content = isStub
+							? frameToolResultStub( reduction!.logPath, reduction!.lines?.get( entry.toolUseId ), entry.toolUseId )
 							: entry.content;
-						this._appendBlock( messages, 'user', { type: 'tool_result', tool_use_id: entry.toolUseId, content, ...( entry.isError ? { is_error: true } : {} ) } );
+						// AN IMAGE A TOOL RETURNED rides INSIDE its own tool_result, and only on the live turn — the
+						// same bargain the `image` grant kind makes one case up, for the same reason: the bytes ARE
+						// the payload, so there is no cheap form of them and carrying one forever would displace the
+						// context it was fetched to add. Off the live turn the result's own text carries the pointer
+						// line main wrote into it, which is a handle the agent can act on.
+						//
+						// THE BLOCK KIND NEVER CHANGES: this is still one `tool_result` answering its `tool_use`,
+						// which is what keeps the transcript valid by construction whether or not an image rides.
+						//
+						// A STUBBED RESULT CARRIES NO IMAGE. The stub exists because the result was too big to keep
+						// re-sending; attaching the picture to it would spend exactly what the stub just saved.
+						const shots = isLiveTurn && !isStub && !opts?.imagesAsText
+							? ( entry.images ?? [] ).flatMap( ( img, i ): WireBlock[] => {
+								const data = entry.imageData?.[ i ];
+								// No bytes for this index means the spill failed or this is not the live projection.
+								// Skipped rather than sent empty — the pointer in the text above is the honest form.
+								return data ? [ { type: 'image', mediaType: img.mediaType, data } ] : [];
+							} )
+							: [];
+						this._appendBlock( messages, 'user', {
+							type:        'tool_result',
+							tool_use_id: entry.toolUseId,
+							content:     shots.length ? [ { type: 'text', text: content }, ...shots ] : content,
+							...( entry.isError ? { is_error: true } : {} )
+						} );
 						break;
 					}
 					case 'unreadable':
@@ -1666,7 +1784,7 @@ export class Transcript {
 	 * strip that lives next to the fields it strips cannot fall out of step with an arm someone adds.
 	 */
 	static entryPayload( entry: TurnEntry ): string {
-		const { rowId: _rowId, contents: _contents, ...rest } = entry;
+		const { rowId: _rowId, contents: _contents, imageData: _imageData, ...rest } = entry;
 		return JSON.stringify( rest );
 	}
 
