@@ -3,13 +3,17 @@ import {
 	parseAccessEntry,
 	parseAccessList,
 	serializeAccessEntry,
+	originOf,
 	higherLevel,
 	levelMeets,
 	operationsFor,
 	verbFor,
-	AUTHORED_DEFAULT_LEVEL
+	ACCESS_ORIGINS,
+	AUTHORED_DEFAULT_LEVEL,
+	DEFAULT_ORIGIN
 } from '../AccessPolicy'
 import { ACCESS_LEVELS, type AccessLevel } from '../../session/InjectedItem'
+import type { AccessEntry } from '../AccessPolicy'
 
 /**
  * AccessPolicy — the one fold, and THE MIGRATION TABLE.
@@ -71,12 +75,99 @@ describe( 'the new shape', () => {
 
 	it( 'round-trips through the serializer', () => {
 		for( const level of ACCESS_LEVELS ) {
-			expect( parseAccessEntry( serializeAccessEntry( { path: 'p', level } ) ) ).toEqual( { path: 'p', level } )
+			expect( parseAccessEntry( serializeAccessEntry( { path: 'p', level } ) ) ).toEqual( { path: 'p', level, origin: 'authored' } )
 		}
 	} )
 
 	it( 'writes only the new shape, so an edited slice converges', () => {
-		expect( serializeAccessEntry( { path: 'p', level: 'read' } ) ).toEqual( { path: 'p', level: 'read' } )
+		expect( serializeAccessEntry( { path: 'p', level: 'read' } ) ).toEqual( { path: 'p', level: 'read', origin: 'authored' } )
+	} )
+} )
+
+/**
+ * THE ORIGIN MARKER — a label, and provably only a label.
+ *
+ * A reach row Starmind SHIPS is a different kind of thing from one a person authored, and a surface that
+ * cannot tell them apart cannot explain to anybody what dropping one costs. That is the whole job. The
+ * dangerous version of this field is the clever one: anything that let origin decide which entry WINS
+ * would reintroduce most-specific resolution into a model whose entire value is highest-wins.
+ */
+describe( 'the origin marker', () => {
+
+	it( 'carries a stated marker through, on either state', () => {
+		for( const origin of ACCESS_ORIGINS ) {
+			expect( parseAccessEntry( { path: 'p', level: 'read', origin } ) ).toEqual( { path: 'p', level: 'read', origin } )
+		}
+	} )
+
+	it( 'reads an entry with NO marker as AUTHORED — the back-compatible direction', () => {
+		// Every row stored before this field existed was in fact authored by a person. Reading those as shipped
+		// would relabel someone's own configuration as something the product put there.
+		expect( DEFAULT_ORIGIN ).toBe( 'authored' )
+		expect( originOf( parseAccessEntry( { path: 'p', level: 'read' } )! ) ).toBe( 'authored' )
+		expect( originOf( parseAccessEntry( { path: 'p' } )! ) ).toBe( 'authored' )
+		expect( originOf( parseAccessEntry( { path: 'p', enabled: true, write: true } )! ) ).toBe( 'authored' )
+		const handBuilt: AccessEntry = { path: 'p', level: 'read' }
+		expect( originOf( handBuilt ) ).toBe( 'authored' )
+	} )
+
+	it( 'leaves an absent marker absent rather than inventing a stored fact', () => {
+		// `originOf` owns the default, in ONE place. The parse does not stamp one, so nothing can later mistake
+		// a silence for a person's explicit answer.
+		expect( parseAccessEntry( { path: 'p', level: 'read' } ) ).toEqual( { path: 'p', level: 'read' } )
+	} )
+
+	it( 'drops the WHOLE entry on a malformed marker, rather than defaulting it', () => {
+		// Same ruling as an unrecognised level: a policy we cannot read is not one we may assume. Here the stake
+		// is a surface confidently mislabelling who configured something, which is worse than one row short.
+		for( const origin of [ 'vendor', 'SHIPPED', '', 3, true, null, {} ] ) {
+			expect( parseAccessEntry( { path: 'p', level: 'read', origin } ) ).toBeNull()
+		}
+	} )
+
+	it( 'condemns the entry on the LEGACY route too, not only the new shape', () => {
+		expect( parseAccessEntry( { path: 'p', write: true, origin: 'vendor' } ) ).toBeNull()
+		expect( parseAccessEntry( { path: 'p', enabled: false, origin: 'vendor' } ) ).toBeNull()
+	} )
+
+	it( 'drops only the bad row out of a list', () => {
+		expect( parseAccessList( [ { path: 'a', level: 'read', origin: 'shipped' }, { path: 'b', level: 'read', origin: 'nope' }, { path: 'c', level: 'read' } ] ) ).toEqual( [
+			{ path: 'a', level: 'read', origin: 'shipped' },
+			{ path: 'c', level: 'read' }
+		] )
+	} )
+
+	it( 'round-trips both states through the serializer', () => {
+		for( const origin of ACCESS_ORIGINS ) {
+			expect( parseAccessEntry( serializeAccessEntry( { path: 'p', level: 'write', origin } ) ) ).toEqual( { path: 'p', level: 'write', origin } )
+		}
+	} )
+
+	it( 'is WRITTEN even when it is the default — a writer states its answer', () => {
+		// A reader tolerates silence; a writer does not keep one. A stored row saying `authored` is one a person
+		// reading the slice can tell from a row written before the field existed.
+		expect( serializeAccessEntry( { path: 'p', level: 'read' } )[ 'origin' ] ).toBe( 'authored' )
+	} )
+
+	it( 'NEVER ENTERS RESOLUTION — two entries differing only in origin resolve identically', () => {
+		// The constraint this field is most likely to be broken by a later clever reader. `SdkFileAccess`
+		// carries the same assertion over the path resolver, which is the other half of this.
+		for( const a of ACCESS_LEVELS ) {
+			for( const b of ACCESS_LEVELS ) {
+				const shipped:  AccessEntry = { path: 'p', level: a, origin: 'shipped' }
+				const authored: AccessEntry = { path: 'p', level: a, origin: 'authored' }
+				const bare:     AccessEntry = { path: 'p', level: a }
+				for( const entry of [ shipped, authored, bare ] ) {
+					expect( higherLevel( entry.level, b ) ).toBe( higherLevel( a, b ) )
+					expect( higherLevel( b, entry.level ) ).toBe( higherLevel( b, a ) )
+					expect( levelMeets( entry.level, b ) ).toBe( levelMeets( a, b ) )
+				}
+			}
+		}
+	} )
+
+	it( 'has exactly two states — a third would be a resolution rule wearing a label\'s clothes', () => {
+		expect( [ ...ACCESS_ORIGINS ] ).toEqual( [ 'shipped', 'authored' ] )
 	} )
 } )
 

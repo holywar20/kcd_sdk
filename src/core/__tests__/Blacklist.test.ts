@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
 
-import { Blacklist, DEFAULT_BLACKLIST } from '../Blacklist';
+import { Blacklist, DEFAULT_BLACKLIST, foldsCase } from '../Blacklist';
 
 /**
  * The deny-list's matching rule and its defaults.
@@ -56,6 +56,74 @@ describe( 'Blacklist.excludes — subtree semantics', () => {
 
 	it( 'answers false for an empty pattern set rather than denying by default', () => {
 		expect( Blacklist.excludes( 'C:/proj/.env', [] ) ).toBe( false );
+	} );
+} );
+
+describe( 'case folding — the filesystem decides, not the pattern', () => {
+
+	const deny = Blacklist.patterns();
+
+	/** The hole as it was found: a secret whose real name on disk carries capitals. Every one of these
+	 *  was listed by glob, found by search and readable by a lane agent on Windows while this list
+	 *  said otherwise. `fold` is passed explicitly so the test pins a PLATFORM, not the host it runs
+	 *  on — a suite that only ever ran on Windows would otherwise prove nothing about either branch. */
+	const capitalised = [
+		'C:/proj/.ENV',
+		'C:/proj/.Env.local',
+		'C:/proj/secrets/ID_RSA',
+		'C:/proj/cert.PFX',
+		'C:/proj/Server.KEY',
+		'C:/proj/.Git/config',
+		'C:/proj/.SSH/config',
+		'C:/proj/certs/Server.PEM',
+	];
+
+	it( 'denies a pattern\'s upper-case twin when the host folds ( win32, darwin )', () => {
+		for( const path of capitalised ) {
+			expect( Blacklist.excludes( path, deny, true ), path ).toBe( true );
+		}
+	} );
+
+	it( 'leaves two case-distinct paths distinct when the host does NOT fold ( linux )', () => {
+		// NOT a weaker rule — a correct one. On linux `.ENV` and `.env` really are two files, and
+		// denying the first because the second is a secret refuses a file nobody protected.
+		for( const path of capitalised ) {
+			expect( Blacklist.excludes( path, deny, false ), path ).toBe( false );
+		}
+	} );
+
+	it( 'still denies the real lower-case name under either rule', () => {
+		// FENCE: folding may only ever ADD coverage. If one of these ever goes false, the fold broke
+		// the eight patterns it was added to strengthen.
+		for( const path of [ 'C:/proj/.env', 'C:/proj/cert.pfx', '/home/b/.ssh/id_rsa' ] ) {
+			expect( Blacklist.excludes( path, deny, true ), path ).toBe( true );
+			expect( Blacklist.excludes( path, deny, false ), path ).toBe( true );
+		}
+	} );
+
+	it( 'folds the PATTERN as well as the path, so a config row\'s casing cannot weaken it', () => {
+		// A user's extra pattern is the one row in here nobody authored in lower case. Folding only the
+		// subject would make the rule depend on how the row happened to be typed.
+		const config = Blacklist.patterns( [ '**/Secrets/**' ] );
+
+		expect( Blacklist.excludes( 'C:/proj/secrets/token.txt', config, true ) ).toBe( true );
+		expect( Blacklist.excludes( 'C:/proj/SECRETS/token.txt', config, true ) ).toBe( true );
+		expect( Blacklist.excludes( 'C:/proj/secrets/token.txt', config, false ) ).toBe( false );
+	} );
+
+	it( 'folds on win32 and darwin, and on nothing else', () => {
+		// The platform check IS the correctness. Taken as a string rather than read off `process` so
+		// both branches are reachable from any host the suite happens to run on.
+		expect( foldsCase( 'win32' ) ).toBe( true );
+		expect( foldsCase( 'darwin' ) ).toBe( true );
+		expect( foldsCase( 'linux' ) ).toBe( false );
+		expect( foldsCase( 'freebsd' ) ).toBe( false );
+	} );
+
+	it( 'defaults to the host\'s own rule when no caller says otherwise', () => {
+		// The five call sites pass nothing, deliberately: a forgotten argument must not be able to
+		// hand back the weaker rule. So the default has to agree with the host, and this is that.
+		expect( Blacklist.excludes( 'C:/proj/.ENV', deny ) ).toBe( foldsCase( process.platform ) );
 	} );
 } );
 

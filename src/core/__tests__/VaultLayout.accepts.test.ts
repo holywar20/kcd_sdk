@@ -30,7 +30,6 @@ const HOMES: Record<string, string> = {
 	contract:    '_Claude/contracts/some-contract.html',
 	generator:   '_Claude/generators/some-gen/some-gen.html',
 	analyzer:    '_Claude/analyzers/some-an/some-an.html',
-	audit:       '_Claude/audits/some-audit.html',
 	'bug-report': '_Claude/bug-reports/bug-report-1.html',
 	'prompt-partial': '_Claude/prompts/some-prompt.html',
 }
@@ -58,6 +57,11 @@ describe( 'VaultLayout.accepts — the declarable/acceptable seam', () => {
 	it( 'the retired types are gone from the vocabulary, not merely unused', () => {
 		expect( KcdAddress.TYPES ).not.toContain( 'how-to' )
 		expect( KcdAddress.TYPES ).not.toContain( 'note' )
+		// `audit` joined them 2026-10-03 ( Bryan ): an audit produces a searchable note, not a document.
+		// Churchill proposed leaving the type standing and unused; this assertion is the overrule, and it is
+		// the reason the pair above exists — a type nothing declares still reads as authoritative to the next
+		// agent who finds it in the vocabulary.
+		expect( KcdAddress.TYPES ).not.toContain( 'audit' )
 	} )
 
 	/** `utilities/` is the one row that still needs `accepts`: it implies `utility`, which is not a

@@ -91,15 +91,14 @@ export type ArtifactType =
 	| 'reference'
 	| 'generator'
 	| 'analyzer'
-	// What a generator or an analyzer EMITS, as opposed to the procedure that emits it. Flush-and-fill
-	// by nature — a run destroys and recreates its own output — so this type carries no required
-	// sections on purpose: the shape of a report is the reporting contract's business, not the
-	// substrate's. It was already in KcdAddress.TYPES and already had a KcdShapes entry; only this
-	// union lacked it, so a report validated as `unknown` and went ungoverned.
-	| 'audit'
-	// A filed defect and the proof of its repair ( the `bug-report` contract ). Ephemeral like `audit`,
-	// but shaped: its status words and its annotated body fields are the task board's own, so a report
-	// maps onto a `bugfix` Task field for field — see BugReportObject.
+	// `audit` sat here and was RETIRED 2026-10-03 ( Bryan ): an audit produces a searchable note, not a
+	// document, so the type governed nothing the moment the last twelve audit artifacts were deleted
+	// ( task 385 ). The `reports/` directory it governed now carries `unknown`, beside `logs`, `audits`
+	// and `scratch`. The retirement was the whole type, not merely a disused entry — see KcdAddress.TYPES.
+	// A filed defect and the proof of its repair ( the `bug-report` contract ). EPHEMERAL — a verified
+	// report is deleted at the monthly sweep — but shaped, where a report's own shape was its reporting
+	// contract's business: its status words and its annotated body fields are the task board's own, so a
+	// report maps onto a `bugfix` Task field for field — see BugReportObject.
 	| 'bug-report'
 	| 'utility'
 	| 'habit'

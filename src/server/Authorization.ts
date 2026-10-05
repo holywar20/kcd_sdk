@@ -138,27 +138,45 @@ export const Authorization = {
 	 *
 	 * `steps` rides here for the reason grants do: `_meta` is client-written, so a model cannot hand its own
 	 * batch a verdict. Absent on every call that is not a composite.
+	 *
+	 * `browseAll` IS THE HOLDER'S WEB RELEASE VALVE, and it rides here for the reason the floor does: the
+	 * callee gates a URL and cannot resolve a passport, so what crosses is the ANSWER rather than a key.
+	 * EMITTED ONLY WHEN TRUE, because absent and false are the same statement for this field and a call
+	 * that carries nothing stays byte-identical to one sent before the field existed — the same asymmetry
+	 * `access` deliberately does NOT have, since there an empty floor and no floor are opposite
+	 * instructions. It is a SINGLE BIT about the asking holder, strictly less than the `access` list this
+	 * envelope already carries to the same servers.
 	 */
 	assertOnCall(
 		grants:     readonly GrantRef[],
 		projectId?: string,
 		access?:    readonly AccessEntry[],
 		asker?:     AskerRef,
-		steps?:     readonly StepVerdict[]
+		steps?:     readonly StepVerdict[],
+		browseAll?: boolean
 	): Record<string, unknown> | null {
 		// IDENTITY is what makes an asker, not the trace. A block whose every identity field is null names
 		// nobody, and would be a second spelling of the absence the missing key already says. An asker
 		// counts as something to say, so an ungranted call still carries who is behind it — which is what
 		// lets a callee stop and ask a NAMED person rather than refusing flat.
 		const named = !!( asker && ( asker.agentId || asker.agentName ) );
-		if ( grants.length === 0 && !projectId && !access && !named && !steps ) return null;
+		if ( grants.length === 0 && !projectId && !access && !named && !steps && !browseAll ) return null;
 		const own: Record<string, unknown> = {};
 		if ( grants.length ) own[ 'grants' ] = grants;
 		if ( projectId )     own[ 'projectId' ] = projectId;
 		if ( access )        own[ 'access' ] = access;
 		if ( named )         own[ 'asker' ] = asker;
 		if ( steps )         own[ 'steps' ] = steps;
+		if ( browseAll )     own[ 'browseAll' ] = true;
 		return { starmind: own };
+	},
+
+	/** The receiving end of the holder's web release valve — TRUE only for a literal `true`. Absent, false,
+	 *  and anything that is not a boolean all read as off, because the secure answer and the absent answer
+	 *  are the same one. See `assertOnCall` for why nothing is emitted on the false branch. */
+	browseAllOnCall( meta?: Record<string, unknown> ): boolean {
+		const own = ( meta?.[ 'starmind' ] ?? {} ) as { browseAll?: unknown };
+		return own.browseAll === true;
 	},
 
 	/** The receiving end of a composite call's verdicts — NULL when the envelope carries none, which the

@@ -215,7 +215,9 @@ export const SHAPES: Record<string, TypeShape> = {
 
 	framework:         { purpose: 'Orientation for the substrate itself.',            open: true, sections: [] },
 	'prompt-partial':  { purpose: 'A reusable fragment composed into a prompt.',      open: true, sections: [] },
-	audit:             { purpose: 'What a generator or analyzer emitted on its last run — flush-and-fill under a fixed name, dated in frontmatter, never a history.', open: true, sections: [] },
+	// `audit` had a shape entry here until 2026-10-03, when the type was retired whole ( Bryan ). An
+	// absent entry is the correct state and not a gap: `audit` below reports `known: false` for a type
+	// it does not hold and finds nothing, so nothing throws on the way past.
 
 	// The task board's vocabulary, not a new one. `queued | working | rejected | verified` is the
 	// task board's `AgentState` verbatim; `needs-human` is the one addition — the escape path, which the

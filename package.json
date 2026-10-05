@@ -8,6 +8,7 @@
   "scripts": {
     "build": "tsc",
     "build:watch": "tsc --watch",
+    "typecheck": "tsc --noEmit -p tsconfig.json --composite false",
     "test": "vitest run",
     "test:coverage": "vitest run --coverage",
     "test:watch": "vitest",

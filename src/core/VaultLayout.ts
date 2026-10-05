@@ -165,8 +165,11 @@ const LAYOUT: readonly LayoutEntry[] = [
 		purpose: 'Per-lens todo/ and agent-status/, plus raw chat capture. What happened is the action log, a table, not a file here.'
 	},
 	{
-		dir: 'reports', type: 'audit', layer: 'data', indexed: false,
-		purpose: 'Analyzer output — one report per analyzer under a fixed, undated name, flush-and-fill each run.'
+		// `type: 'audit'` until 2026-10-03, when that type was retired ( Bryan ): an audit produces a
+		// searchable note, not a document. `unknown` puts this row beside `logs`, `audits` and `scratch` —
+		// a real directory holding no governed artifact — rather than inventing anything for it.
+		dir: 'reports', type: 'unknown', layer: 'data', indexed: false,
+		purpose: 'Being emptied. Held analyzer output under fixed, undated names until audits became searchable notes rather than documents; nothing governed lands here now.'
 	},
 	{
 		dir: 'bug-reports', type: 'bug-report', layer: 'data', indexed: false,

@@ -23,8 +23,17 @@ export const KcdAddress = new class KcdAddress {
 
 	// ── The closed sets ( protocol §2, §4 ) ──────────────────────────────────────
 	/** `note` and `how-to` were retired 2026-07-30 — they duplicated what the folder already says
-	 *  ( see ArtifactType ). Twelve documents declared one; all became `reference`. */
-	TYPES        = [ 'lens', 'plan', 'reference', 'framework', 'template', 'prompt-partial', 'nav-index', 'habit', 'contract', 'generator', 'analyzer', 'audit', 'bug-report' ];
+	 *  ( see ArtifactType ). Twelve documents declared one; all became `reference`.
+	 *
+	 *  `audit` was retired 2026-10-03 ( Bryan ): an audit produces a searchable note, not a document.
+	 *  REMOVAL FROM THIS LIST IS THE SHARP EDGE of that retirement, and it is sharper than the type
+	 *  comment implied — `KcdValidate` raises `unknown-type` for a root type absent here, and an error
+	 *  means `KcdParse.parse` THROWS while `tryParse` answers null. A document still declaring `audit`
+	 *  would therefore fail to parse rather than degrade to `unknown`, which is why the twelve audit
+	 *  artifacts were deleted FIRST ( task 385 ) and `query_docs { type: 'audit' }` was confirmed empty
+	 *  before this line changed. The wire is the half that does degrade: an unregistered type hydrates
+	 *  as a bare `KCDPrimitive` ( `KCDPrimitive.hydrateBase` ) and throws nothing. */
+	TYPES        = [ 'lens', 'plan', 'reference', 'framework', 'template', 'prompt-partial', 'nav-index', 'habit', 'contract', 'generator', 'analyzer', 'bug-report' ];
 	STATUSES     = [ 'draft', 'active', 'observation', 'composed', 'disabled', 'deployed', 'complete', 'retired', 'paused' ];
 	AUDIENCES    = [ 'human', 'agent', 'both' ];
 	MERGES       = [ 'additive', 'declarative', 'union' ];

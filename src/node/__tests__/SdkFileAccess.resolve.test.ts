@@ -95,6 +95,53 @@ describe( 'FLOOR PLUS — overlapping entries take the highest, never the neares
 	} )
 } )
 
+/**
+ * THE ORIGIN MARKER IS INVISIBLE HERE, and that is the assertion.
+ *
+ * An entry says who put it there — Starmind shipped it, or a person authored it — so a surface can explain
+ * what dropping a row costs. It is a LABEL with two READING consumers and no say in any verdict. A marker
+ * that tipped a resolution would be most-specific-wins smuggled back into the one model whose whole value is
+ * that highest-wins is predictable, and it would arrive looking like a formatting field.
+ */
+describe( 'origin never enters resolution', () => {
+
+	const marked = ( path: string, level: AccessEntry[ 'level' ], origin: 'shipped' | 'authored' ): AccessEntry =>
+		( { path, level, origin } )
+
+	it( 'resolves a single entry identically whatever its origin, or none at all', () => {
+		for( const level of [ 'none', 'read', 'write', 'delete' ] as const ) {
+			const bare = SdkFileAccess.resolveLevel( INSIDE, [ at( ROOT, level ) ] )
+			expect( SdkFileAccess.resolveLevel( INSIDE, [ marked( ROOT, level, 'shipped' ) ] ) ).toEqual( bare )
+			expect( SdkFileAccess.resolveLevel( INSIDE, [ marked( ROOT, level, 'authored' ) ] ) ).toEqual( bare )
+		}
+	} )
+
+	it( 'gives two OVERLAPPING entries the same verdict whichever one is shipped', () => {
+		// The case a clever reader would reach for: "surely a person's row should beat one we shipped". It
+		// does not. The deeper level wins, from either side, exactly as it does with no markers present.
+		const deep = join( ROOT, 'src' )
+		expect( SdkFileAccess.resolveLevel( INSIDE, [ marked( ROOT, 'delete', 'shipped' ), marked( deep, 'read', 'authored' ) ] ).level ).toBe( 'delete' )
+		expect( SdkFileAccess.resolveLevel( INSIDE, [ marked( ROOT, 'delete', 'authored' ), marked( deep, 'read', 'shipped' ) ] ).level ).toBe( 'delete' )
+		expect( SdkFileAccess.resolveLevel( INSIDE, [ marked( ROOT, 'read', 'shipped' ), marked( deep, 'delete', 'authored' ) ] ).level ).toBe( 'delete' )
+		expect( SdkFileAccess.resolveLevel( INSIDE, [ marked( ROOT, 'read', 'authored' ), marked( deep, 'delete', 'shipped' ) ] ).level ).toBe( 'delete' )
+	} )
+
+	it( 'cannot close a tree with a shipped entry at none, any more than an unmarked one can', () => {
+		const entries = [ marked( ROOT, 'write', 'authored' ), marked( join( ROOT, 'src' ), 'none', 'shipped' ) ]
+		expect( SdkFileAccess.resolveLevel( INSIDE, entries ).level ).toBe( 'write' )
+	} )
+
+	it( 'does not change how a grant lifts a configured entry', () => {
+		const grants = [ fileGrant( INSIDE, 'write' ) ]
+		const bare   = SdkFileAccess.resolveLevel( INSIDE, [ at( ROOT, 'read' ) ], grants )
+		expect( SdkFileAccess.resolveLevel( INSIDE, [ marked( ROOT, 'read', 'shipped' ) ], grants ) ).toEqual( bare )
+	} )
+
+	it( 'is absent from the WITNESS, which merges rows and so has no one answer for it', () => {
+		expect( SdkFileAccess.scopeEntries( [ marked( ROOT, 'write', 'shipped' ) ] ) ).toEqual( [ { path: ROOT, level: 'write' } ] )
+	} )
+} )
+
 describe( 'grants', () => {
 
 	it( 'reach the depth they were authored at', () => {

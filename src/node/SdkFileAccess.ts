@@ -871,6 +871,10 @@ export class SdkFileAccess {
 	 * FLOOR PLUS applies here too: a path named by both a configured entry and a grant reports the HIGHER of
 	 * the two, exactly as `resolveLevel` would answer for it. Reporting either one alone would make this
 	 * witness disagree with the boundary it describes, which is the one thing it may never do.
+	 *
+	 * IT CARRIES NO ORIGIN MARKER, and must not grow one: a row here can be the merge of a configured entry
+	 * and a grant, so there is often no single answer to who authored it. This is a witness of DEPTH, and
+	 * the marker's consumers read the stored list instead.
 	 */
 	static scopeEntries( entries: readonly AccessEntry[], grants: readonly GrantRef[] = [], required: AccessLevel = 'read' ): AccessEntry[] {
 		const best = new Map<string, AccessLevel>()

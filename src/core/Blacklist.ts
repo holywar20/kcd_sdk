@@ -17,6 +17,14 @@ import { Glob } from './Glob';
  * a reader report policy without disclosing whether the file exists. Enforcement is bifurcated by
  * the CALLER, not here: discovery tools drop denied entries silently, a direct read says
  * `out_of_scope`.
+ *
+ * CASE IS THE FILESYSTEM'S PROPERTY, NOT THE PATTERN'S. `.ENV` and `.env` are the same file on
+ * win32 and darwin and two different files on linux, so the matching rule has to know which host it
+ * is answering for. Until 2026-10-04 it did not, and every pattern here is written in lower case —
+ * so `Server.KEY`, `cert.PFX`, `secrets/ID_RSA` and `.Git/config` were listed by glob, found by
+ * search and read by an agent on Windows while this list said they could not be. The platform check
+ * IS the correctness and not a convenience: folding unconditionally would make two genuinely
+ * distinct linux files one, and folding never is the hole above. See `foldsCase`.
  */
 
 /** The default deny-list — always merged in, so protection holds with ZERO config.
@@ -80,6 +88,28 @@ export const DEFAULT_BLACKLIST: string[] = [
 	'**/dev-utilities/**/commands.json',
 ];
 
+/** Does a filesystem of this platform treat two paths differing only in case as the SAME file?
+ *  Pure, and takes the platform as a string so both branches are testable without a stub. */
+export function foldsCase( platform: string ): boolean {
+	return platform === 'win32' || platform === 'darwin';
+}
+
+/** `foldsCase` for the host this code is running on — the default `excludes` uses.
+ *
+ *  WHY IT IS A DEFAULT AND NOT A CALLER'S ARGUMENT. There are five call sites across two processes,
+ *  and a caller that forgot the argument would silently get the WEAKER rule — which is this defect
+ *  reinstalled as an ordinary omission. The safe value has to be the one you get for free.
+ *
+ *  AND WHY IT FOLDS WHEN IT CANNOT TELL. `@kcd/core` is Node-free, so `process` may genuinely not
+ *  exist here. Reading a global behind a `typeof` guard is not a Node import, but the guard needs an
+ *  answer: folding over-denies a case-variant path, and not folding discloses a secret. Only one of
+ *  those two is a mistake you can afford. */
+function hostFoldsCase(): boolean {
+	return typeof process === 'undefined' || typeof process.platform !== 'string'
+		? true
+		: foldsCase( process.platform );
+}
+
 export const Blacklist = {
 
 	/** The effective pattern set: the defaults, then the user's. DEFAULTS FIRST and unconditionally,
@@ -90,14 +120,24 @@ export const Blacklist = {
 
 	/** True when `path` is denied by `patterns` — the path or any ancestor directory matches. Pure:
 	 *  no disk, no config, no state. Separators are normalized so a Windows path matches the same
-	 *  '/'-shaped globs the vault and the glob tool use. */
-	excludes( path: string, patterns: readonly string[] ): boolean {
+	 *  '/'-shaped globs the vault and the glob tool use.
+	 *
+	 *  `fold` folds case on BOTH sides, and defaults to what this host's filesystem actually does.
+	 *  Pass it only to pin a platform in a test — a caller choosing it per call would be a caller
+	 *  deciding a property of the disk it is reading. */
+	excludes( path: string, patterns: readonly string[], fold: boolean = hostFoldsCase() ): boolean {
 		if ( patterns.length === 0 ) return false;
 
-		const segments = path.replace( /\\/g, '/' ).split( '/' );
+		// Both sides, or neither: the patterns are authored in lower case today but a config may add
+		// any case at all, and folding one side would be a rule that depends on how a row was typed.
+		const normalized = path.replace( /\\/g, '/' );
+		const subject    = fold ? normalized.toLowerCase() : normalized;
+		const globs      = fold ? patterns.map( ( p ) => p.toLowerCase() ) : patterns;
+
+		const segments = subject.split( '/' );
 		for ( let depth = segments.length; depth > 0; depth -= 1 ) {
 			const prefix = segments.slice( 0, depth ).join( '/' );
-			for ( const pattern of patterns ) {
+			for ( const pattern of globs ) {
 				if ( Glob.matches( prefix, pattern ) ) return true;
 			}
 		}

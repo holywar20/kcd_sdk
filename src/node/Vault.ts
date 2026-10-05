@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { LensObject, Glob, KcdExcise, VaultLayout, Agent, KcdEmit } from '../core';
+import { LensObject, Glob, KcdExcise, VaultLayout, Agent, KcdEmit, KcdValidate } from '../core';
 import type { ArtifactRef, ArtifactType } from '../core';
 import { scan, scanReport } from '../scanner';
 import type { ScannedFile, ScanReport } from '../scanner';
@@ -92,6 +92,28 @@ export class Vault {
 
 	/** Absolute vault root — projectRoot/docRoot, resolved once. */
 	readonly root: string;
+
+	/**
+	 * Frontmatter fields that name ANOTHER artifact by slug — derived from the schema's own
+	 * slug-typed fields ( `KcdValidate.FRONTMATTER` ), not hand-listed. Two of that schema's slug
+	 * fields are excluded by what they actually ARE rather than by convenience: `name` is a document's
+	 * OWN identity, never a reference to another one, and `habit-class` names a shared mutual-
+	 * exclusion GROUP rather than a specific document. `scope` ( contracts ) embeds a lens name inside
+	 * a compound enum value ( `universal | lens:{name}` ) rather than carrying it as a bare slug or a
+	 * slug-typed list, so a substring rewrite inside an enum pattern is a different repair shape than
+	 * the ones below — named here as a known gap rather than silently matched.
+	 *
+	 * That leaves `base`, `lens` and `origin`: the two `identityDependents` / `referenceIssues` already
+	 * treat as live cross-document references, plus `origin`'s crystallization-lineage slug, which
+	 * neither of those two checks for dangling-ness today but which names a foreign document by the
+	 * same convention. `renameIdentity`'s reach is therefore slightly WIDER than the two existing
+	 * reads — a deliberate widening stated here rather than left for a reader to notice as a
+	 * discrepancy between three places that all claim to enumerate "the identity fields".
+	 */
+	static readonly IDENTITY_FIELDS: readonly string[] = Object.entries( KcdValidate.FRONTMATTER )
+		.filter( ( [ key, spec ] ) => key !== 'name' && key !== 'habit-class'
+			&& ( spec.type === 'slug' || ( spec.type === 'list' && spec.itemType === 'slug' ) ) )
+		.map( ( [ key ] ) => key );
 
 	/**
 	 * WHICH FOLDER THIS VAULT IS, readable. `_Claude` is a DEFAULT — the value when nobody declared
@@ -462,10 +484,19 @@ export class Vault {
 
 		if ( opts?.dryRun ) return plan;
 
+		// IDENTITY, captured before anything on disk changes. `toName` is the slug the one-per-type
+		// anatomy implies for the destination ( `lenses/{name}/{name}.html` and its siblings ) — when it
+		// differs from the moved document's CURRENT `name`, this move IS a rename of identity and not
+		// merely of location, by the same convention every typed artifact in this corpus already follows.
+		const fromName = this._frontmatterNameAt( fromAbs );
+		const toName    = path.basename( to ).replace( /\.html?$/i, '' );
+
 		for ( const edit of plan.edits ) this.rewriteHref( edit );
 		fs.mkdirSync( path.dirname( destAbs ), { recursive: true } );
 		fs.renameSync( fromAbs, destAbs );
 		this.restampStylesheet( to );
+
+		if ( fromName && fromName !== toName ) this._renameIdentity( fromName, toName, destAbs );
 
 		const after = this.healOccurrences( fromAbs );
 		this.assertNoResidual( fromAbs, 'move', [ ...after.graph, ...after.text ] );
@@ -858,6 +889,79 @@ export class Vault {
 			if ( identities.includes( name ) ) out.push( f.relativePath );
 		}
 		return out;
+	}
+
+	/** This document's current `name`, read off a fresh scan — or `''` if it does not parse or carries
+	 *  none. A fresh scan rather than a cached one: this is read at the START of `move`, before the
+	 *  rename touches anything, and has to see the file exactly as it stands on disk right now. */
+	private _frontmatterNameAt( abs: string ): string {
+		const f = this.scan().find( s => s.path === abs );
+		return f && typeof f.frontmatter[ 'name' ] === 'string' ? f.frontmatter[ 'name' ] as string : '';
+	}
+
+	/**
+	 * A move whose destination implies a different slug IS a rename of identity — repair the moved
+	 * document's own `name` to match, then rewrite every OTHER document's identity-reference field
+	 * ( `Vault.IDENTITY_FIELDS` ) naming the OLD slug to the NEW one. Scalar and list shapes alike,
+	 * EXACT-VALUE match only — `_rewriteIdentityField` matches a whole field value or a whole chip,
+	 * never a substring, so a slug that merely RESEMBLES the old one ( `render-old` beside `render` )
+	 * is left untouched by construction.
+	 *
+	 * Best-effort per field, the same posture `restampStylesheet` takes for the same reason: identity
+	 * repair is this operation's ADDED value, layered onto a move whose href heal already carries its
+	 * own residual guard. A field this cannot locate in one odd hand-authored file is skipped rather
+	 * than failing the whole move.
+	 */
+	private _renameIdentity( oldName: string, newName: string, movedAbs: string ): void {
+		try {
+			const self = fs.readFileSync( movedAbs, 'utf-8' );
+			const next = this._rewriteIdentityField( self, 'name', oldName, newName );
+			if ( next !== null ) fs.writeFileSync( movedAbs, next, 'utf-8' );
+		} catch {
+			// best-effort — see docblock
+		}
+
+		for ( const f of this.scan() ) {
+			if ( f.path === movedAbs ) continue;
+			let body: string;
+			try {
+				body = fs.readFileSync( f.path, 'utf-8' );
+			} catch {
+				continue;
+			}
+			let touched = false;
+			for ( const field of Vault.IDENTITY_FIELDS ) {
+				const next = this._rewriteIdentityField( body, field, oldName, newName );
+				if ( next !== null ) { body = next; touched = true; }
+			}
+			if ( touched ) fs.writeFileSync( f.path, body, 'utf-8' );
+		}
+	}
+
+	/**
+	 * Rewrite ONE frontmatter field's value from `oldName` to `newName` inside raw HTML — or `null`
+	 * when that field is absent, or present but not naming `oldName`. Handles both serialized shapes:
+	 * a scalar ( `<dd data-kcd-field="base" data-kcd-type="slug">oldName</dd>` ) and a chip inside a
+	 * list ( `<li data-kcd-tag>oldName</li>` within the matching `<dd>` ). EXACT match only in both
+	 * shapes — a scalar must equal `oldName` whole, and a chip match is bounded by `>…<` on both
+	 * sides — so a slug that merely resembles `oldName` is never touched.
+	 */
+	private _rewriteIdentityField( html: string, field: string, oldName: string, newName: string ): string | null {
+		const re = new RegExp( `(<dd[^>]*data-kcd-field="${ field }"[^>]*>)([\\s\\S]*?)(</dd>)` );
+		const m  = re.exec( html );
+		if ( !m ) return null;
+		const [ whole, open, inner, close ] = m;
+
+		let nextInner: string;
+		if ( inner === oldName ) {
+			nextInner = newName;
+		} else {
+			const chip = `>${ oldName }<`;
+			if ( !inner.includes( chip ) ) return null;
+			nextInner = inner.split( chip ).join( `>${ newName }<` );
+		}
+		if ( nextInner === inner ) return null;
+		return html.split( whole ).join( open + nextInner + close );
 	}
 
 	/** Excise every deleted-target reference from its referrers — one parse+splice per file ( a file may

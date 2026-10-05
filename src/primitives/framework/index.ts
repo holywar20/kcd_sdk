@@ -10,8 +10,6 @@ export { FrameworkObject } from './FrameworkObject';
 export { PlanObject } from './PlanObject';
 export { IndexObject } from './IndexObject';
 export { ReferenceObject } from './ReferenceObject';
-export { AuditObject } from './AuditObject';
-export type { AuditEntry } from './AuditObject';
 export { BugReportObject, BUG_REPORT_BODY_FIELDS } from './BugReportObject';
 export type { BugReportTaskFields } from './BugReportObject';
 export { TemplateObject } from './TemplateObject';

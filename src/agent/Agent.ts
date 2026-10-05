@@ -55,7 +55,7 @@ export interface HabitSlotView {
 	winner:     HabitSlotCandidate;
 	candidates: HabitSlotCandidate[];
 }
-import { DEFAULT_MODEL_KEY, REASONING_EFFORTS, type ReasoningEffort } from './Model';
+import { ACCOUNTLESS_ACCOUNT_ID, DEFAULT_MODEL_KEY, REASONING_EFFORTS, type ReasoningEffort } from './Model';
 // TYPE-ONLY, so there is no runtime edge back into the session module ( `Session.ts` already imports
 // `Agent` as a type for the same reason ). The policy SHAPE is the session's — an agent stating a default
 // must state it in exactly the currency a session stores, or the two drift into near-identical types.
@@ -99,6 +99,31 @@ export interface SerializedAgent {
 	 *  CLI text or a tool result, so there is no model to name — and defaulting one would be a lie a later
 	 *  reader acts on. An authored agent is always concrete; the default still applies when none is given. */
 	model: string | null;
+	/**
+	 * WHICH ACCOUNT PAYS for this agent's turns — an account id, NEVER NULL, and the other half of the
+	 * binding `model` begins. `model` says which vendor and which connector; this says whose subscription
+	 * answers, which `provider` used to mean as a third job it was no good at.
+	 *
+	 * NON-NULL BY CONSTRUCTION. Absence is `ACCOUNTLESS_ACCOUNT_ID`, a reserved member that is honestly
+	 * empty, so no reader downstream needs a null branch — and the reader that would have forgotten one
+	 * cannot send on nobody's subscription. Three different facts land on the reserved id and all three are
+	 * legitimate: a connector that needs no account, an agent that never dispatches ( `model: null`, the
+	 * vault case — an account there would be a claim about billing that is simply untrue ), and an agent
+	 * that states no preference of its own and defers to its project.
+	 *
+	 * IT IS AN OVERRIDE, NOT THE ANSWER. Resolution cascades agent → project → house default, and the
+	 * reserved id at this rung means "nothing stated here" rather than "charge nobody" — so a stale id, a
+	 * record written before this field existed, and a deliberate deferral all fall through the same way. The
+	 * host owns that cascade, because the roster of accounts is main-side and this record resolves nothing.
+	 *
+	 * SEEDED AT BIRTH, NEVER RE-STAMPED. A new agent is stamped with its project's default for its
+	 * connector; an existing one is left exactly as it is, because re-seeding would silently move somebody's
+	 * work onto a different subscription.
+	 *
+	 * Optional ON THE WIRE and on a row written before the field existed, which reads as the reserved id —
+	 * the same tolerance `slug` and `reasoning` carry. The OBJECT's field is never optional.
+	 */
+	account?: string;
 	/** The visible top-of-context lever. Null = none; '' is a deliberately empty one. */
 	systemPrompt: string | null;
 	/** The composed lenses, serialized whole. `[]` = a draft (cannot run yet). `[0]` is primary. */
@@ -213,6 +238,10 @@ export interface AgentSummary {
 	projectId: string;
 	name: string;
 	model: string | null;
+	/** The binding's other half — which account pays, never null ( see `SerializedAgent.account` ). It rides
+	 *  the roster form because a roster that can say which model a lane runs on and not which subscription
+	 *  it bills to is half an answer, and this is the read every picker and lane list already makes. */
+	account: string;
 	/** The lens stack as paths, primary first. Nothing is appended under it — the base lens that used to
 	 *  sit beneath every stack was retired with the flat agent model. */
 	lensPaths: string[];
@@ -228,6 +257,9 @@ export interface AgentOptions {
 	color?: string | null;
 	/** Omit for the default; pass null explicitly for an agent that never dispatches ( see the field ). */
 	model?: string | null;
+	/** Omit for the reserved accountless member — "nothing stated", which the host's cascade falls through.
+	 *  A birth path that knows the project's default supplies it here; nothing else should. */
+	account?: string;
 	systemPrompt?: string | null;
 	lenses?: LensObject[];
 	baseHabits?: string[];
@@ -364,6 +396,12 @@ export class Agent {
 	icon: string | null;
 	color: string | null;
 	model: string | null;
+	/** WHICH ACCOUNT PAYS — never null, and the reserved member when nothing is stated ( see
+	 *  `SerializedAgent.account` ). Written through the accessor, so the never-dispatching rule is enforced
+	 *  in ONE place rather than at four callers. */
+	get account(): string { return this._account; }
+	set account( value: string | null | undefined ) { this._account = Agent.normalizeAccount( value, this.model ); }
+	private _account: string = ACCOUNTLESS_ACCOUNT_ID;
 	systemPrompt: string | null;
 
 	/** The composed lenses (materialized graphs). `[]` = draft; `[0]` = primary. */
@@ -599,6 +637,7 @@ export class Agent {
 		icon: string | null,
 		color: string | null,
 		model: string | null,
+		account: string | null | undefined,
 		systemPrompt: string | null,
 		lenses: LensObject[],
 		baseHabits: string[],
@@ -618,6 +657,9 @@ export class Agent {
 		this.icon           = icon;
 		this.color          = color;
 		this.model          = model;
+		// AFTER `model`, and that order is load-bearing: the accessor reads it to force the reserved member
+		// onto an agent that never dispatches, so assigning the account first would normalize against null.
+		this.account        = account;
 		this.systemPrompt   = systemPrompt;
 		this.lenses         = lenses;
 		this.baseHabits     = baseHabits;
@@ -670,6 +712,30 @@ export class Agent {
 		return { effort, mode };
 	}
 
+	/**
+	 * The one normalizer every write of `account` goes through ( see the accessor ) — and the whole of what
+	 * makes a non-null field actually non-null.
+	 *
+	 * ABSENT, NULL, BLANK AND THE RESERVED ID ALL LAND ON THE RESERVED ID. Four spellings of "nothing was
+	 * stated" become one, which is the point: the host's cascade has a single thing to fall through on, and
+	 * no reader has to know which of the four it is looking at.
+	 *
+	 * AN AGENT THAT NEVER DISPATCHES CANNOT HOLD AN ACCOUNT, and that is why this takes the model. A
+	 * `Vault.buildAgent` agent exists only to compile context for delivery as CLI text or a tool result
+	 * ( `model: null` ), so an account on it would be a claim about billing with nothing behind it. The
+	 * non-null rule is satisfied by the reserved member rather than by a real id — honestly empty, which is
+	 * the difference between expressing absence and manufacturing a stub that looks valid and fails at send.
+	 *
+	 * NOTHING IS VALIDATED AGAINST THE ROSTER here, deliberately. Whether an id names a live account is a
+	 * main-side fact, and the record resolves nothing — an id whose account has since been deleted falls
+	 * through the host's cascade exactly as a re-keyed model does. This is the SDK's floor, not a gate.
+	 */
+	static normalizeAccount( account: string | null | undefined, model: string | null ): string {
+		if( model === null ) return ACCOUNTLESS_ACCOUNT_ID;
+		const flat = typeof account === 'string' ? account.trim() : '';
+		return flat === '' ? ACCOUNTLESS_ACCOUNT_ID : flat;
+	}
+
 	/** Compose an agent. A lensless draft is legal — running is what demands a lens. An agent with no name
 	 *  given takes its primary lens's, and a draft is just `'agent'`. */
 	static create( opts: AgentOptions = {} ): Agent {
@@ -685,6 +751,7 @@ export class Agent {
 			// dispatches" ( the vault case ). `??` collapses both to the default, which would hand a vault
 			// agent the Test Brain and quietly reintroduce the dishonest field this widening removed.
 			opts.model === undefined ? DEFAULT_MODEL_KEY : opts.model,
+			opts.account,
 			opts.systemPrompt ?? null,
 			lenses,
 			opts.baseHabits ?? [],
@@ -711,6 +778,7 @@ export class Agent {
 			json.icon,
 			json.color,
 			json.model === undefined ? DEFAULT_MODEL_KEY : json.model,   // absent → default; null → stays null ( see create )
+			json.account,   // absent → the reserved member, which the host's cascade reads as "nothing stated"
 			json.systemPrompt ?? null,
 			lenses,
 			json.baseHabits ?? [],
@@ -741,7 +809,7 @@ export class Agent {
 			const path = lens.getPath();
 			if ( path ) lensPaths.push( path );
 		}
-		return { id: this.id, projectId: this.projectId, name: this.name, model: this.model, lensPaths };
+		return { id: this.id, projectId: this.projectId, name: this.name, model: this.model, account: this.account, lensPaths };
 	}
 
 	/** One function, many purposes: the bridge wire form, the save form, the reconstruction source.
@@ -765,6 +833,7 @@ export class Agent {
 			icon:           this.icon,
 			color:          this.color,
 			model:          this.model,
+			account:        this.account,
 			systemPrompt:   this.systemPrompt,
 			baseHabits:     [ ...this.baseHabits ],
 			loadedHabits:   [ ...this.loadedHabits ],

@@ -40,7 +40,7 @@ export const BUG_REPORT_BODY_FIELDS = [
 ] as const;
 
 /**
- * A filed defect and the proof of its repair. A record, read not executed — role `know`, like an audit.
+ * A filed defect and the proof of its repair. A record, read not executed — role `know`, the default.
  *
  * Its own class so the mapping onto the task board lives on the object: `taskFields()` is a read by
  * field name, never an interpretation of prose, which is what keeps a board import mechanical.

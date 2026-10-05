@@ -71,13 +71,35 @@ function resultRow( session: Session, n: number ): TranscriptRow {
 }
 
 /** Every `tool_result` block the wire actually emits, in order — the ground truth every assertion here is
- *  measured against. */
+ *  measured against.
+ *
+ *  `content` NARROWS TO TEXT HERE, DELIBERATELY, and the throw is the whole point. A `tool_result`'s content
+ *  is `string | WireBlock[]` on the wire, and the union is real: a tool that returned an IMAGE rides its
+ *  bytes as blocks inside its own result, on the live turn only ( see `TurnEntry.wireMessages`, the
+ *  `shots.length ? [ text, ...shots ] : content` fork ). Every fixture below appends a plain string result
+ *  and none appends an image, so the block case cannot arise in THIS file — but "cannot arise" is a claim
+ *  about the fixtures, not about the type, and it stops being true the moment somebody adds an image case.
+ *
+ *  So it is asserted rather than assumed. Casting past it with `as string` would make this helper lie about
+ *  being ground truth, and widening the return to the union would push the lie downstream instead: every
+ *  assertion here is a claim about TEXT — `includes( 'not in context' )`, `startsWith( 'RESULT' )`, and a
+ *  character-for-character `toBe` against the itinerary's own string — and a union-typed `content` would
+ *  make each of them narrow locally, which is three places to get it wrong instead of one place to get it
+ *  right. Stringifying a block list would be the quiet failure: `[object Object]` compares unequal and the
+ *  test reports a stubbing bug that is really a fixture nobody updated here. */
 function wireResults( session: Session ): { id: string; content: string }[] {
 	const out: { id: string; content: string }[] = [];
 	for ( const message of session.wireMessages() ) {
 		if ( typeof message.content === 'string' ) continue;
 		for ( const block of message.content ) {
-			if ( block.type === 'tool_result' ) out.push( { id: block.tool_use_id, content: block.content } );
+			if ( block.type !== 'tool_result' ) continue;
+			if ( typeof block.content !== 'string' ) {
+				throw new Error(
+					`wireResults: ${ block.tool_use_id } carries ${ block.content.length } content block( s ), not text. `
+					+ 'A fixture here now returns an image; assert on its blocks explicitly rather than through this helper.'
+				);
+			}
+			out.push( { id: block.tool_use_id, content: block.content } );
 		}
 	}
 	return out;

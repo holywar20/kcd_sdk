@@ -41,8 +41,9 @@ import { ACCESS_LEVELS, accessRank, type AccessLevel } from '../session/Injected
  *
  * What the ruling costs, stated rather than discovered: an edit above does not flow down, which is the same
  * cost `PassportSeeds` was built to work around on the tools axis. And a copied entry has forgotten which
- * tier authored it, so nothing here can label a row with its origin without a provenance field this shape
- * deliberately does not carry.
+ * tier authored it — which is why `origin` exists ( below ) and why it records only the one distinction a
+ * surface can honestly explain: Starmind put this row here, or a person did. Not WHICH tier; that is gone
+ * by the time anything reads the row, and a field that claimed to know it would be lying.
  *
  * ── CONTAINMENT IS NOT HERE ──
  * This module answers what an ENTRY says, never what a PATH resolves to. Deciding whether a path sits
@@ -52,11 +53,39 @@ import { ACCESS_LEVELS, accessRank, type AccessLevel } from '../session/Injected
  * never need the second, which is exactly why the two are split.
  */
 
+/** Who put a row here. Two states and no more — see `AccessEntry.origin`. */
+export const ACCESS_ORIGINS = [ 'shipped', 'authored' ] as const;
+export type AccessOrigin = typeof ACCESS_ORIGINS[ number ];
+
+/** The origin an entry carrying no marker reads as. Load-bearing, and the back-compatible direction: every
+ *  row stored before this field existed was in fact authored by a person, and reading those as shipped would
+ *  relabel someone's own configuration as something the product put there. */
+export const DEFAULT_ORIGIN: AccessOrigin = 'authored';
+
 /** One configured root and how deeply it may be reached. The stored shape from this arc forward. */
 export interface AccessEntry {
 	/** Absolute, or a `{ProjectRoot}`-tokenized form that the reader expands before use. */
 	path:  string;
 	level: AccessLevel;
+
+	/**
+	 * Whether Starmind SHIPPED this row or a person AUTHORED it. A LABEL, and nothing else.
+	 *
+	 * ── IT NEVER ENTERS RESOLUTION ──
+	 * Not in `higherLevel`, not in `levelMeets`, not in `SdkFileAccess.resolveLevel`, and not in any guard.
+	 * Two entries differing only in origin resolve identically, and there is a test that says so. Floor-plus
+	 * highest-wins is the rule this file spends two paragraphs defending; a marker that changed which entry
+	 * won would reintroduce most-specific resolution through the back door while looking like a label, and
+	 * it would do it in the one model whose whole value is that a person can predict the answer.
+	 *
+	 * ITS TWO INTENDED CONSUMERS, both READS: the reach ladder surface, which draws the distinction and
+	 * explains what dropping a row costs; and the seed arm on `PassportSeeds`, which needs to tell a row it
+	 * placed from a row a person wrote. If you are reaching for it inside a guard, you want a level.
+	 *
+	 * OPTIONAL ON THE WIRE AND IN MEMORY. Absent means `DEFAULT_ORIGIN`, and `originOf` is the one reader
+	 * that says so — do not read this property raw, because `undefined` is not a third state.
+	 */
+	origin?: AccessOrigin;
 }
 
 /**
@@ -95,6 +124,13 @@ export const AUTHORED_DEFAULT_LEVEL: AccessLevel = 'delete';
  * An explicit `level` wins outright: once written in the new shape an entry says what it means, and there
  * is no reason to consult flags a newer writer did not author. An unrecognised level is treated as
  * malformed rather than clamped — a policy we cannot read is not a policy we may assume is permissive.
+ *
+ * ── THE ORIGIN MARKER ──
+ * Absent is the common case and is LEFT absent, which `originOf` reads as authored. A STATED marker must be
+ * one of `ACCESS_ORIGINS`; anything else drops the WHOLE entry, exactly as an unrecognised level does and
+ * for the same reason stated one paragraph up. Dropping rather than defaulting is the only honest answer
+ * here too: a row whose provenance we cannot read would be drawn to a person as a fact, and a surface that
+ * confidently mislabels who configured something is worse than one row short.
  */
 export function parseAccessEntry( raw: unknown ): AccessEntry | null {
 	if( typeof raw !== 'object' || raw === null ) return null;
@@ -102,13 +138,19 @@ export function parseAccessEntry( raw: unknown ): AccessEntry | null {
 	if( typeof e[ 'path' ] !== 'string' || !e[ 'path' ] ) return null;
 	const path = e[ 'path' ] as string;
 
+	// Read BEFORE the level/legacy branch, because a malformed marker condemns the entry on every route
+	// through this function — new shape and legacy pair alike.
+	const origin = e[ 'origin' ];
+	if( origin !== undefined && !ACCESS_ORIGINS.includes( origin as AccessOrigin ) ) return null;
+	const mark = origin === undefined ? {} : { origin: origin as AccessOrigin };
+
 	const stated = e[ 'level' ];
 	if( stated !== undefined ) {
-		return ACCESS_LEVELS.includes( stated as AccessLevel ) ? { path, level: stated as AccessLevel } : null;
+		return ACCESS_LEVELS.includes( stated as AccessLevel ) ? { path, level: stated as AccessLevel, ...mark } : null;
 	}
 
-	if( e[ 'enabled' ] === false ) return { path, level: 'none' };
-	return { path, level: e[ 'write' ] === true ? 'delete' : 'read' };
+	if( e[ 'enabled' ] === false ) return { path, level: 'none', ...mark };
+	return { path, level: e[ 'write' ] === true ? 'delete' : 'read', ...mark };
 }
 
 /** Parse a whole stored list, dropping what cannot be read. A non-array is an unreadable policy, which is
@@ -124,9 +166,21 @@ export function parseAccessList( raw: unknown ): AccessEntry[] {
 }
 
 /** Serialize an entry for storage — the new shape only. Writers do not emit the legacy pair, so a slice
- *  converges on one form as it is edited while old entries keep being readable until they are. */
+ *  converges on one form as it is edited while old entries keep being readable until they are.
+ *
+ *  THE ORIGIN IS WRITTEN ALWAYS, including when it is the default. A READER tolerates silence and a WRITER
+ *  states its answer: a stored row saying `authored` is one a person reading the slice can tell apart from
+ *  one written before the field existed, where an omitted default leaves the two indistinguishable forever.
+ *  Same precedent as `browseAll` on the passport document. */
 export function serializeAccessEntry( entry: AccessEntry ): Record<string, unknown> {
-	return { path: entry.path, level: entry.level };
+	return { path: entry.path, level: entry.level, origin: originOf( entry ) };
+}
+
+/** The ONE reader of the marker, and the one place its default lives. Absent is not a third state — it is
+ *  an entry written before this field existed, and those were authored by a person. Every consumer asks
+ *  here rather than touching `entry.origin`, so the back-compatible direction is decided once. */
+export function originOf( entry: Pick<AccessEntry, 'origin'> ): AccessOrigin {
+	return entry.origin ?? DEFAULT_ORIGIN;
 }
 
 /** The deeper of two levels. The floor-plus primitive — every combination rule in this model is this. */

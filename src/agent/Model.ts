@@ -275,3 +275,28 @@ export type ModelRosterEntry = ModelDescriptor & { status: ModelStatus; doc: str
  * and that roster keys its Test Brain entry off this constant so the two cannot disagree.
  */
 export const DEFAULT_MODEL_KEY = 'test.lorem';
+
+/**
+ * THE RESERVED ACCOUNTLESS ACCOUNT ID — the other half of a model binding, and the `DEFAULT_MODEL_KEY` of
+ * the account axis: the ONE account id every resolution path terminates on.
+ *
+ * `provider` on a descriptor means which vendor and which connector implementation; WHICH ACCOUNT PAYS is
+ * a third thing, and it rides the binding beside the model key ( see `SerializedAgent.account` ). A
+ * binding ALWAYS names an account, so a connector that needs none — Local, Laguna, the test brain — and
+ * an agent that never dispatches at all both name THIS, which holds no credential and no profile.
+ *
+ * "NO ACCOUNT BY CATEGORY" IS NOT "ACCOUNT MISSING", and neither is a null. That is the whole reason this
+ * constant exists rather than a nullable field: a null binding forces a branch in every reader, and the
+ * reader that forgets it sends on nobody's subscription.
+ *
+ * Short, fixed, and not a uuid, because it is a CATEGORY rather than an instance — there is exactly one of
+ * it, forever, and a generated id would suggest otherwise. It is reserved in the strong sense: no stored
+ * account may claim it, so an id read off a binding resolves unambiguously to either the category or one
+ * real sign-in.
+ *
+ * A bare id STRING, not an account record. The account ROSTER is main-side ( the `model_accounts` table and
+ * `@shared/ModelAccount`, which re-exports this constant rather than restating the literal — a default
+ * spelled in two places is two defaults that can disagree ). This only names the floor to resolve against
+ * it, which is `DEFAULT_MODEL_KEY`'s arrangement exactly.
+ */
+export const ACCOUNTLESS_ACCOUNT_ID = 'accountless';

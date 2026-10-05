@@ -288,6 +288,30 @@ export class Session {
 	lastConfigStamp: string | null = null;
 
 	/**
+	 * THE PROJECT'S NOTICE AS THIS SESSION WAS TOLD IT — captured once, at this session's first compile, and
+	 * held unchanged for its life. NULL means nothing has been captured yet; `''` means the project had no
+	 * notice when this session started, which is a captured answer and not an absent one.
+	 *
+	 * ── CAPTURED RATHER THAN READ, AND THAT IS THE FEATURE ──
+	 * TASK-466; Bryan, 2026-10-04: *"an agent that isn't spawned doesn't need to see it."* A session picks up
+	 * whatever the notice said at the moment it started and is never updated afterwards — a person editing
+	 * the notice changes what the NEXT session is told and nothing about the ones already running. Reading it
+	 * live on every compile would be the opposite behaviour, and it would do it silently.
+	 *
+	 * It also keeps the system prefix STABLE. The block rides the cached prefix, so a value re-read each turn
+	 * would move that prefix under the model whenever somebody typed in the field — the cost `TaskBrief`
+	 * names for re-stating anything per turn. One capture answers both requirements at once.
+	 *
+	 * RUNTIME ONLY, exactly as `lastConfigStamp` above is: never serialized, never a row column. A restart
+	 * ends the session's run, and the next one captures afresh from the record, which is correct by
+	 * definition — persisting it would buy a migration for a value whose whole meaning is "at spawn".
+	 *
+	 * WRITTEN BY `Environment._projectNotice` AND NOWHERE ELSE, and never by an agent: there is no tool that
+	 * reaches the notice at all, in either direction.
+	 */
+	projectNotice: string | null = null;
+
+	/**
 	 * WHEN THE PERSON LAST SAW THIS SESSION'S NEWEST OUTPUT — epoch ms, or NULL for never seen.
 	 *
 	 * The one fact an attention model needs. Whether a session is UNREAD is this marker against its newest

@@ -25,16 +25,26 @@ const mcp    = (): LensObject => lens( 'mcp', '/vault/_Claude/lenses/mcp/mcp.htm
 
 describe( 'Agent.summarize — the roster form', () => {
 
-	it( 'names the identity, the project, the model and the authored stack in order', () => {
-		const agent = Agent.create( { id: 'a1', projectId: 'p1', name: 'Render', model: 'test.lorem', lenses: [ render(), mcp() ] } )
+	it( 'names the identity, the project, the BINDING and the authored stack in order', () => {
+		const agent = Agent.create( { id: 'a1', projectId: 'p1', name: 'Render', model: 'test.lorem', account: 'idt', lenses: [ render(), mcp() ] } )
 
 		expect( agent.summarize() ).toEqual( {
 			id:        'a1',
 			projectId: 'p1',
 			name:      'Render',
 			model:     'test.lorem',
+			// BOTH HALVES of the binding, never just the model: a roster that can say which brain answers
+			// and not which subscription pays is half an answer, and the half it drops is the one that
+			// costs money. Non-null always — the reserved member when nothing is stated.
+			account:   'idt',
 			lensPaths: [ '/vault/_Claude/lenses/render/render.html', '/vault/_Claude/lenses/mcp/mcp.html' ],
 		} )
+	} )
+
+	it( 'names the reserved accountless member when the agent states no account', () => {
+		const agent = Agent.create( { id: 'a1', model: 'test.lorem', lenses: [ mcp() ] } )
+
+		expect( agent.summarize().account ).toBe( 'accountless' )
 	} )
 
 	it( 'carries no lens content, however much the stack loaded', () => {
