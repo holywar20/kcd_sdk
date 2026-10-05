@@ -28,7 +28,9 @@ import type { TaggedBlock } from '../primitives/types';
  * knows they exist and where to find them. The tools are described, never granted here: what an agent may call
  * is its passport's business, or Claude Code's. The contracts are the project's rather than the agent's —
  * every agent holds all of them, derived from `contracts/` so the roster has one home and nothing to
- * synchronise.
+ * synchronise. SKILLS are a third, narrower tier ( plan 22, TASK-318 ): each attached one contributes its
+ * name and description alone — the spine label the Agent Skills standard trusts to make discovery work — and
+ * an agent holding none emits no section at all, so this compiler never regressed the un-skilled majority.
  *
  * IT NEVER WALKS LENS INHERITANCE. No base lens is appended and nothing a lens points at is followed except the
  * references it loads. What the agent is, is what its record names.
@@ -65,6 +67,20 @@ export interface CompileContract {
 	when: string;
 }
 
+/**
+ * ONE ATTACHED SKILL — the spine label the standard intends, and nothing else ( plan 22, TASK-318 ).
+ *
+ * `name` and `description` are the whole of it. No body, no frontmatter, no bundle manifest, no folder
+ * path — reaching for the rest is `read_skill`'s job, paid only when something calls it. The description is
+ * NEVER truncated here or anywhere upstream of this type: it is the one field a model matches a task
+ * against, and resolving WHICH skill a slug names is `SkillLibraryService`'s job, not this compiler's —
+ * this is handed the two strings already resolved, because this package holds no library and no disk.
+ */
+export interface CompileSkill {
+	name:        string;
+	description: string;
+}
+
 export interface AgentCompileInput {
 	name:    string;
 	/** The agent's PERSONALITY — its own words, and they lead, above every lens. Still spelled
@@ -75,6 +91,10 @@ export interface AgentCompileInput {
 	habits:  CompileHabit[];
 	tools:   CompileTool[];
 	contracts?: CompileContract[];
+	/** Skills ATTACHED to this agent, already resolved to their name and description — an unresolvable
+	 *  slug is dropped before it reaches here, so every entry compiles. Absent or empty emits nothing: an
+	 *  agent holding no skills must compile byte-identical to an agent compiled before this field existed. */
+	skills?: CompileSkill[];
 	host?:   CompileHost;
 }
 
@@ -85,6 +105,7 @@ export interface AgentCompiled {
 	habits:  { loaded: string[]; listed: string[] };
 	tools:   string[];
 	contracts: string[];
+	skills:  string[];        // names of the skills that compiled, in attachment order
 }
 
 /** THE ONE Care section a lens contributes — what it defends, what it refuses, how it decides. Every other
@@ -149,6 +170,12 @@ function _contractLine( c: CompileContract ): string {
 	return c.when ? `- ${ c.name } — when ${ c.when }` : `- ${ c.name }`;
 }
 
+/** One attached skill, drawn exactly as a habit's unloaded row is — a name and why it might matter, never
+ *  the body. `description` rides WHOLE; see `CompileSkill`. */
+function _skillLine( s: CompileSkill ): string {
+	return `- ${ s.name } — ${ s.description }`;
+}
+
 /** How to invoke one, said once here rather than in every contract document. The fetch-whole rule is the
  *  load-bearing half: a contract summarised on the way in has lost the steps that are the whole point of it. */
 const CONTRACT_NOTE =
@@ -208,6 +235,13 @@ export const AgentCompiler = {
 			parts.push( habit.join( '\n\n' ) );
 		}
 
+		// ATTACHED SKILLS — the spine label the standard intends. Each entry here already resolved against
+		// the library before it arrived ( an unresolvable slug never reaches this function ), so nothing here
+		// decides absence — it only decides whether there is a section to print at all.
+		const skillRows = input.skills ?? [];
+		if ( skillRows.length )
+			parts.push( [ '# Skills', skillRows.map( _skillLine ).join( '\n' ) ].join( '\n\n' ) );
+
 		// EVERY agent gets the project's contracts, whatever lenses it wears — that is what makes `#close`
 		// dependable: a session wraps up the same way regardless of which agent was driving it.
 		const contractRows = input.contracts ?? [];
@@ -224,6 +258,6 @@ export const AgentCompiler = {
 		}
 
 		const text = parts.join( '\n\n---\n\n' );
-		return { text, tokens: KCDPrimitive._estimateTokens( text ), lenses, habits: { loaded, listed }, tools, contracts };
+		return { text, tokens: KCDPrimitive._estimateTokens( text ), lenses, habits: { loaded, listed }, tools, contracts, skills: skillRows.map( s => s.name ) };
 	}
 };

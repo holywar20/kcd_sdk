@@ -153,6 +153,23 @@ export interface SerializedAgent {
 	/** Habits the record names that did not load — see `BrokenHabit`. */
 	brokenHabits?: BrokenHabit[];
 	/**
+	 * THE SKILLS THIS AGENT HOLDS, as SLUGS — its own, never inherited. A lens supplies no skills to an
+	 * agent, the same rule `baseHabits` states and for the same reason.
+	 *
+	 * SLUGS AND NOTHING ELSE. No name, no description, no path, no copy of anything the library holds — the
+	 * library is the authority on what a skill IS; this says only which ones the agent holds.
+	 *
+	 * A SLUG THAT NO LONGER RESOLVES IS AN ABSENCE, not a fault. The attachment row survives on the record
+	 * and contributes nothing to a compile; nothing here drops it, repairs it, or throws over it — there is
+	 * no `BrokenSkill` twin of `BrokenHabit`, because there is nothing broken to report. That is this step's
+	 * boundary: compiling an attachment into context is the next card's job, not this one's.
+	 *
+	 * A RECORD WRITTEN BEFORE THIS FIELD EXISTED HAS NO `skills` KEY AT ALL, and reads that absence as an
+	 * empty list — the same tolerance `baseHabits` itself would need were it not required on the wire. See
+	 * `Agent.fromSerialized`, where the `?? []` lives.
+	 */
+	skills?: string[];
+	/**
 	 * WHAT THIS AGENT CARRIES, and how much of each one is put in front of it — keyed by tool IDENTITY
 	 * ( `group.tool` ).
 	 *
@@ -264,6 +281,8 @@ export interface AgentOptions {
 	lenses?: LensObject[];
 	baseHabits?: string[];
 	loadedHabits?: string[];
+	/** Slugs only — see `SerializedAgent.skills`. Omit for none. */
+	skills?: string[];
 	toolModes?: Record<string, ToolMode>;
 	fields?: Record<string, unknown>[];
 	system?: Record<string, unknown>;
@@ -411,6 +430,10 @@ export class Agent {
 	baseHabits: string[];
 	/** The held habits that load in full (see SerializedAgent.loadedHabits). */
 	loadedHabits: string[];
+	/** The skills this agent holds, as slugs (see SerializedAgent.skills). Its own, never inherited; a
+	 *  slug naming no skill in the library is an absence, not a fault, and compiling it is the next card's
+	 *  job. */
+	skills: string[];
 
 	/** What this agent carries, and how much of each rides — presence IS the answer (see
 	 *  SerializedAgent.toolModes). */
@@ -642,6 +665,7 @@ export class Agent {
 		lenses: LensObject[],
 		baseHabits: string[],
 		loadedHabits: string[],
+		skills: string[],
 		toolModes: Record<string, ToolMode>,
 		fields: Record<string, unknown>[],
 		system: Record<string, unknown>,
@@ -664,6 +688,7 @@ export class Agent {
 		this.lenses         = lenses;
 		this.baseHabits     = baseHabits;
 		this.loadedHabits   = loadedHabits;
+		this.skills         = skills;
 		this.toolModes      = toolModes;
 		this.fields         = fields;
 		this.system         = system;
@@ -756,6 +781,7 @@ export class Agent {
 			lenses,
 			opts.baseHabits ?? [],
 			opts.loadedHabits ?? [],
+			opts.skills ?? [],
 			opts.toolModes ?? {},
 			opts.fields ?? [],
 			opts.system ?? {},
@@ -783,6 +809,7 @@ export class Agent {
 			lenses,
 			json.baseHabits ?? [],
 			json.loadedHabits ?? [],
+			json.skills ?? [],
 			json.toolModes ?? {},
 			json.fields ?? [],
 			json.system ?? {},
@@ -837,6 +864,7 @@ export class Agent {
 			systemPrompt:   this.systemPrompt,
 			baseHabits:     [ ...this.baseHabits ],
 			loadedHabits:   [ ...this.loadedHabits ],
+			skills:         [ ...this.skills ],
 			toolModes:      { ...this.toolModes },
 			fields:         this.fields.map( ( f ) => ( { ...f } ) ),
 			system:         { ...this.system },

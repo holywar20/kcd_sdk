@@ -228,4 +228,47 @@ describe( 'AgentCompiler', () => {
 		expect( habits ).toEqual( { loaded: [], listed: [ 'gone' ] } );
 		expect( text ).toContain( '- gone — when it existed (habits/gone/gone.html)' );
 	} );
+
+	/**
+	 * THE SPINE LABEL ( plan 22, TASK-318 ) — an attached skill's name and WHOLE description, and nothing
+	 * else: no body, no frontmatter, no path. This compiler never resolves a slug — it is handed the two
+	 * strings already resolved, which is why these cases pass `skills` directly rather than a slug.
+	 */
+	it( 'compiles an attached skill\'s name and whole description, and nothing else', () => {
+		const { text, skills } = AgentCompiler.compile( { name: 'T', lenses: [], habits: [], tools: [],
+			skills: [ { name: 'pdf-processing', description: 'Extract text, fill forms, merge, or otherwise manipulate PDF files.' } ] } );
+
+		expect( skills ).toEqual( [ 'pdf-processing' ] );
+		expect( text ).toContain( '# Skills' );
+		expect( text ).toContain( '- pdf-processing — Extract text, fill forms, merge, or otherwise manipulate PDF files.' );
+	} );
+
+	it( 'emits no skills section, and the field reads empty, when none are attached', () => {
+		const omitted = AgentCompiler.compile( { name: 'T', lenses: [], habits: [], tools: [] } );
+		const empty   = AgentCompiler.compile( { name: 'T', lenses: [], habits: [], tools: [], skills: [] } );
+
+		expect( omitted.skills ).toEqual( [] );
+		expect( omitted.text ).not.toContain( '# Skills' );
+		// OMITTING THE FIELD AND PASSING AN EMPTY ARRAY MUST COMPILE IDENTICALLY — an agent holding no
+		// skills must read exactly as an agent compiled before this field existed.
+		expect( empty.text ).toBe( omitted.text );
+	} );
+
+	it( 'carries a description at the 1024-character bound whole, with no truncation', () => {
+		const description = 'x'.repeat( 1024 );
+		const { text } = AgentCompiler.compile( { name: 'T', lenses: [], habits: [], tools: [],
+			skills: [ { name: 'long', description } ] } );
+
+		expect( text ).toContain( `- long — ${ description }` );
+	} );
+
+	it( 'compiles several attached skills in attachment order', () => {
+		const { text, skills } = AgentCompiler.compile( { name: 'T', lenses: [], habits: [], tools: [], skills: [
+			{ name: 'beta',  description: 'Beta does a thing.' },
+			{ name: 'alpha', description: 'Alpha does another thing.' }
+		] } );
+
+		expect( skills ).toEqual( [ 'beta', 'alpha' ] );
+		expect( text.indexOf( '- beta —' ) ).toBeLessThan( text.indexOf( '- alpha —' ) );
+	} );
 } );
