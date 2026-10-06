@@ -139,6 +139,42 @@ describe( 'AgentCompiler', () => {
 		expect( text ).toContain( 'that tension is' );
 	} );
 
+	/**
+	 * NO NAME IS A REAL INPUT, NOT A MISSING FIELD ( TASK-440 ). A bare lens stack has no agent behind it
+	 * since the substrate was removed, so "You are …" has no subject: the clause is DROPPED rather than
+	 * filled with an empty string, which is what `You are , wearing alpha.` would have been. Everything the
+	 * lenses themselves bring is unaffected — what a lens says does not depend on who is wearing it.
+	 */
+	it( 'names nobody when there is no agent, and still carries the lenses', () => {
+		const one = AgentCompiler.compile( { habits: [], tools: [], lenses: [ lens( '_Claude/lenses/alpha/alpha.html' ) ] } ).text;
+		expect( one ).toContain( 'This context wears alpha.' );
+		expect( one ).not.toContain( 'You are' );
+		expect( one ).toContain( '## alpha' );
+		expect( one ).toContain( 'alpha believes in its own way.' );
+
+		const two = AgentCompiler.compile( {
+			name: '  ', habits: [], tools: [],
+			lenses: [ lens( '_Claude/lenses/alpha/alpha.html' ), lens( '_Claude/lenses/beta/beta.html' ) ]
+		} ).text;
+		// An all-whitespace name is absence too, and the rest of the multi-lens sentence stands.
+		expect( two ).toContain( 'This context wears 2 lenses at once: alpha, beta' );
+		expect( two ).not.toContain( 'You are' );
+		expect( two ).toContain( 'that tension is' );
+	} );
+
+	/** AND AN EMPTY EVERYTHING COMPILES TO NOTHING, which is the result the no-substrate ruling rests on
+	 *  ( Bryan, 2026-10-06 ): "A blank lens is valid - it compiles to nothing." Not an error, not a
+	 *  placeholder, and not a sentence announcing the absence. */
+	it( 'compiles an empty input to empty text', () => {
+		const c = AgentCompiler.compile( { lenses: [], habits: [], tools: [] } );
+		expect( c.text ).toBe( '' );
+		expect( c.lenses ).toEqual( [] );
+		expect( c.habits ).toEqual( { loaded: [], listed: [] } );
+		expect( c.tools ).toEqual( [] );
+		expect( c.contracts ).toEqual( [] );
+		expect( c.skills ).toEqual( [] );
+	} );
+
 	it( 'rides a reference two lenses share once, as the first lens has it', () => {
 		put( '_Claude/references/shared.html', REFERENCE( 'shared', 'Shared reference body.' ) );
 		put( '_Claude/lenses/gamma/gamma.html', LENS( 'gamma', 'Gamma first.', REF_ROW( 'shared', 'load' ) ) );

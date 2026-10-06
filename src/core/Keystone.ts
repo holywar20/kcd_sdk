@@ -53,6 +53,21 @@
  */
 export type KeystoneGates = Record<string, string | null>;
 
+/**
+ * Gate ids whose presence in a declaration MEANS the tool changes something. Read by `summarize` and by
+ * nothing else.
+ *
+ * RE-SPELLED, like `KeystoneGates` above and for the same reason — this package cannot see the app's
+ * `PERMISSIONS` table. The drift it can suffer is one-directional and that is why re-spelling is safe here:
+ * a mutating gate added to that table and not added to this set makes `summarize` say NOTHING about posture,
+ * never that the tool is read-only.
+ *
+ * `browse` and `command` are deliberately absent rather than forgotten. Neither id settles the question —
+ * navigating changes remote state, and the command row is one policy per command where `typecheck` reads and
+ * a lint fix writes. An id that cannot answer honestly stays off the list.
+ */
+const MUTATING_GATES = new Set( [ 'write', 'delete', 'starmind_self' ] );
+
 export interface SerializedKeystone {
 	name:         string;
 	blurb:        string;
@@ -103,6 +118,49 @@ export class Keystone {
 		 */
 		readonly doc: string = ''
 	) {}
+
+	/**
+	 * A SHORT HUMAN SUMMARY of this tool, DERIVED — every part of it is already here, and that is the whole
+	 * design. A third authored prose field would be 87 files to fill in, and the ones left unfilled would be
+	 * worse than no field at all.
+	 *
+	 * Three lines, shaped for a tooltip: `name · group`, the blurb unchanged, then the facts a person scanning
+	 * a toolset actually wants — what it takes, what governs it, whether it writes.
+	 *
+	 * THE GROUP IS SHOWN, NEVER JOINED. `group__tool` is spelled at the app's one serve seam; composing it
+	 * here would make this the second speller of a format two readers have already got wrong.
+	 *
+	 * THE POSTURE CLAIM IS ONE-WAY. `WRITES` is said when the declaration names a mutating gate. Read-only is
+	 * never said, because an absent write declaration is not an assertion of one — a mis-declared tool badged
+	 * read-only is a security surface lying, and silence costs a person one glance at the gate list instead.
+	 */
+	summarize(): string {
+		const title = this.group ? `${ this.name } · ${ this.group }` : this.name;
+		return [ title, this.blurb, `${ this._takes() } ${ this._governs() }` ]
+			.filter( ( line ) => line.trim() )
+			.join( '\n' );
+	}
+
+	/** What it is ABOUT — the arguments with no default. Nothing names the optional ones: the required set is
+	 *  what says what the tool does, and the whole schema is what `inputSchema` is for. */
+	private _takes(): string {
+		const properties = ( this.inputSchema[ 'properties' ] ?? {} ) as Record<string, unknown>;
+		const required   = ( this.inputSchema[ 'required' ]   ?? [] ) as unknown[];
+		const named      = required.filter( ( r ): r is string => typeof r === 'string' );
+		if( named.length ) return `Takes ${ named.join( ', ' ) }.`;
+		// TWO DIFFERENT FACTS, and a person choosing a tool reads them differently: one takes nothing at all,
+		// the other takes several things and insists on none of them.
+		return Object.keys( properties ).length ? 'Every argument optional.' : 'Takes no arguments.';
+	}
+
+	/** What governs it, off the declaration. `{}` reads as UNGOVERNED out loud — the class header's own
+	 *  ruling, and the one fact a person choosing a toolset cannot see anywhere else. */
+	private _governs(): string {
+		const ids = Object.keys( this.gates );
+		if( !ids.length ) return 'Ungoverned — no action gate applies.';
+		const writes = ids.some( ( id ) => MUTATING_GATES.has( id ) );
+		return `Governed by ${ ids.join( ', ' ) }${ writes ? ' — WRITES.' : '.' }`;
+	}
 
 	serialize(): SerializedKeystone {
 		return {

@@ -148,6 +148,69 @@ describe( 'Agent — the one tool axis', () => {
 		expect( lines.find( l => l.startsWith( '- probe' ) ) ).not.toContain( '[schema on request]' );
 	} );
 
+	/**
+	 * A MANAGED LANE — the host owns the callable set ( DEFECT-435 ).
+	 *
+	 * Our deferral and the host's are two mechanisms and only one can be true at a time. On the lane where
+	 * the host hands the child its own tool list, we neither cut the request nor serve the door, so a marked
+	 * row describes a cut nobody applied and a named search tool cannot be reached. What the agent needs
+	 * instead is the one thing a refusal cannot tell it: that absence from this list is the only denial there
+	 * is, and the host's "no such tool" on a row that IS listed is a loading state.
+	 */
+	it( 'marks NOTHING and names no door when the host manages loading', () => {
+		const agent = agentWith( { 'srv.probe': 'on', 'srv.commit': 'on' } );
+		agent.bindEnv( { hostManagedTools: true } );
+		const manifest = agent.toolManifest();
+
+		// Both rows are present and NEITHER is marked — we do not know what the host loaded, and saying so
+		// would be inventing the fact this flag exists to admit we lack.
+		expect( manifest ).toContain( '- probe' );
+		expect( manifest ).toContain( '- commit' );
+		expect( manifest ).not.toContain( '[schema on request]' );
+		// And no door of ours is named, because on this lane there is none to name.
+		expect( manifest ).not.toContain( 'tool_search' );
+	} );
+
+	it( 'tells a managed lane that an unavailable LISTED tool is a loading state, not a denial', () => {
+		// The sentence the defect cost. An agent read the host's refusal as a withheld capability, reported a
+		// gap that did not exist, and took a worse repair confidently — so the note has to say all three
+		// states and forbid both wrong moves by name.
+		const agent = agentWith( { 'srv.probe': 'on' } );
+		agent.bindEnv( { hostManagedTools: true } );
+		const note = agent.toolManifest().split( '\n' ).find( l => l.startsWith( 'Everything you hold' ) );
+
+		expect( note ).toBeDefined();
+		expect( note ).toContain( 'LOADING STATE, NOT A DENIAL' );
+		expect( note ).toContain( 'absent from this list entirely' );
+		expect( note ).toContain( 'Do not conclude you lack it' );
+		expect( note ).toContain( 'do not reach the same end another way' );
+	} );
+
+	it( 'keeps the managed note even when the host has bound a search tool and a deferred set', () => {
+		// UNCONDITIONAL on its lane, and the condition is what makes it so. The host may load everything this
+		// turn and defer something next, so a note that waited for evidence would be the same defect with a
+		// delay on it — and a stale `searchTool` must not win back a door this lane does not have.
+		const agent = agentWith( { 'srv.probe': 'on', 'srv.commit': 'on' } );
+		agent.bindEnv( { hostManagedTools: true, searchTool: 'tool_search', runDeferred: [ 'srv.commit' ] } );
+		const manifest = agent.toolManifest();
+
+		expect( manifest ).toContain( 'LOADING STATE, NOT A DENIAL' );
+		expect( manifest ).not.toContain( '[schema on request]' );
+		expect( manifest ).not.toContain( 'tool_search' );
+	} );
+
+	it( 'leaves the WIRE lane exactly as it was — the flag is absent, not false-by-accident', () => {
+		// The regression guard. Everything above is additive and the ordinary lane must not have moved: a
+		// deferred row is still marked and the door is still named.
+		const agent = agentWith( { 'srv.probe': 'on', 'srv.commit': 'preload' } );
+		agent.bindEnv( { searchTool: 'tool_search', runDeferred: [ 'srv.probe' ] } );
+		const lines = agent.toolManifest().split( '\n' );
+
+		expect( lines.find( l => l.startsWith( '- probe' ) ) ).toContain( '[schema on request]' );
+		expect( agent.toolManifest() ).toContain( 'call tool_search with its exact name' );
+		expect( agent.hostManagedTools ).toBe( false );
+	} );
+
 	it( 'falls back to the mode where there is no run to ask', () => {
 		// A composition surface — an agent card, a preview — has no request to subtract from. The agent's own
 		// mode is the best answer there, and it is what every case above this one already reads.

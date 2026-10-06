@@ -82,7 +82,10 @@ export interface CompileSkill {
 }
 
 export interface AgentCompileInput {
-	name:    string;
+	/** The agent being compiled. ABSENT OR EMPTY IS A REAL INPUT, not a missing field: a bare lens stack has
+	 *  no agent behind it since the substrate was removed ( TASK-440 ), and the lens header drops its
+	 *  "You are …" clause rather than naming nobody. */
+	name?:   string;
 	/** The agent's PERSONALITY — its own words, and they lead, above every lens. Still spelled
 	 *  `systemPrompt` because that is the field on the record; what a person writes into it is who the
 	 *  agent is, which is why the editor calls it Personality. */
@@ -156,10 +159,24 @@ function _habitLine( h: CompileHabit ): string {
 	return `- ${ h.name } — ${ h.why || 'no why recorded' } (${ h.path })`;
 }
 
+/**
+ * ONE ARTIFACT'S LOADED BODY — its context blocks, trimmed and joined, which is the whole of what a
+ * compiled context carries for an artifact that rides in full.
+ *
+ * EXTRACTED FROM `_habitBody` RATHER THAN WRITTEN BESIDE IT ( TASK-451 ). The measurement surface at the
+ * bottom of this file needs the loaded form of an artifact nobody has a `CompileHabit` for, and the one
+ * thing it must not do is approximate this join: a second renderer would drift from the compile and the
+ * drift would be invisible, which defeats the only purpose a size report has. So this is the renderer and
+ * `_habitBody` is now this plus the habit's own null check.
+ */
+function _artifactBody( artifact: KCDPrimitive ): string | null {
+	const text = artifact.getContextBlocks().map( b => b.text.trim() ).filter( Boolean ).join( '\n\n' );
+	return text || null;
+}
+
 function _habitBody( h: CompileHabit ): string | null {
 	if ( !h.habit ) return null;
-	const text = h.habit.getContextBlocks().map( b => b.text.trim() ).filter( Boolean ).join( '\n\n' );
-	return text || null;
+	return _artifactBody( h.habit );
 }
 
 function _toolLine( t: CompileTool ): string {
@@ -184,6 +201,39 @@ const CONTRACT_NOTE =
 	+ 'fetch it whole with `sm_documentation__get_doc { path: "contracts/{name}.html" }` and read it before '
 	+ 'starting: a contract is fetched, not compiled, and one summarised on the way in has lost its steps.';
 
+/**
+ * THE COMPILE'S OWN PROJECTIONS, exposed so one artifact's loaded size can be measured without compiling
+ * a whole agent to read a delta off the total ( TASK-451 ).
+ *
+ * IT IS NOT A SECOND RENDERER AND MUST NEVER BECOME ONE. Every member here is a function `compile` above
+ * already calls, or a one-line binding of one — so a measurement and the context an agent actually
+ * receives cannot disagree. The reason that matters is narrow and worth stating: a size report's ONLY
+ * value is being trusted about a number, and an approximation of this join would drift from the compile
+ * silently. If a projection changes, both readings change together, because there is one of each.
+ *
+ * WHAT IS DELIBERATELY ABSENT. There is no projection for a plan, a nav-index, a template, a bug report or
+ * anything else the compile has no opinion about — a caller measuring one of those is told there is none,
+ * rather than handed a plausible figure for text no agent ever receives. An artifact type's absence from
+ * this object IS the answer for it.
+ */
+export const AgentProjection = {
+	/** An artifact's LOADED form — what an agent that carries it in full pays every turn. */
+	body:         _artifactBody,
+	/** A habit's LISTED form — the one line every agent that merely NAMES it pays every turn. */
+	habitLine:    _habitLine,
+	/** A contract's line. A contract has no loaded form here on purpose: the compile carries the line and
+	 *  the agent fetches the document whole when it applies. */
+	contractLine: _contractLine,
+	/**
+	 * One lens's section, measured ALONE — nothing claimed ahead of it.
+	 *
+	 * That is the honest reading for a lens on its own and it is an UPPER BOUND inside a stack: `compile`
+	 * passes a growing `claimed` set, so a reference an earlier lens already names stands as that lens has
+	 * it and contributes nothing here. A caller reporting this figure has to say so.
+	 */
+	lensSection:  ( lens: LensObject ): string => _lensSection( lens, new Set<string>() )
+};
+
 export const AgentCompiler = {
 
 	compile( input: AgentCompileInput ): AgentCompiled {
@@ -205,11 +255,18 @@ export const AgentCompiler = {
 			// casting vote; both halves were wrong once personality moved to the agent. What it says instead
 			// is what a stack actually is — several sets of prerogatives, held at once, to be weighed rather
 			// than ranked. The weighing is the agent's, which is why it is asked for here in the open.
+			//
+			// AND IT NAMES NOBODY WHEN THERE IS NOBODY ( TASK-440 ). A bare lens stack compiles with no agent
+			// behind it, so "You are …" has no subject and the clause is dropped rather than filled with an
+			// empty string. The rest of the sentence is unchanged — what the lenses bring does not depend on
+			// who is wearing them.
+			const who   = input.name?.trim();
 			const order = input.lenses.length > 1
-				? `You are ${ input.name }, wearing ${ input.lenses.length } lenses at once: ${ lenses.join( ', ' ) }. `
+				? ( who ? `You are ${ who }, wearing ${ input.lenses.length } lenses at once: ${ lenses.join( ', ' ) }. `
+					: `This context wears ${ input.lenses.length } lenses at once: ${ lenses.join( ', ' ) }. ` )
 					+ 'Each brings what it defends. Where two of them pull against each other, that tension is '
 					+ 'deliberate — weigh them and say which you are trading away, rather than pretending they agree.'
-				: `You are ${ input.name }, wearing ${ lenses[ 0 ] }.`;
+				: who ? `You are ${ who }, wearing ${ lenses[ 0 ] }.` : `This context wears ${ lenses[ 0 ] }.`;
 			const claimed  = new Set<string>();
 			const sections: string[] = [];
 			input.lenses.forEach( ( l ) => {

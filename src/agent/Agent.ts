@@ -377,6 +377,23 @@ export type AgentEnvironment = {
 	 */
 	runDeferred?:    readonly string[];
 	searchTool?:     string;
+	/**
+	 * WHETHER SOMEBODY ELSE DECIDES WHICH OF THESE TOOLS IS LOADED — true on a host that owns the model
+	 * conversation and therefore owns the tool namespace ( the Claude Code harness lane ).
+	 *
+	 * It exists because our deferral and the host's are two mechanisms and only one of them can be true at a
+	 * time. On the wire lane WE cut the request, so `runDeferred` names exactly what is missing and
+	 * `searchTool` is the door that fetches it. On a managed lane neither is ours: the host hands the child
+	 * its own tool list, defers whatever it likes, and does not tell us which. A manifest that marked rows
+	 * there would be describing a cut nothing applied, and it would send the model to a search tool that
+	 * cannot exist on that lane — which is DEFECT-435, where a deferred tool reported as an absent one and an
+	 * agent rewrote a task's brief rather than posting to its thread.
+	 *
+	 * THE HOST STATES THE FACT; THIS PACKAGE OWNS THE WORDS. The inverse of `searchTool`, deliberately: there
+	 * the host knows a NAME we must not invent, here the host knows a SITUATION whose wording belongs beside
+	 * the mark it replaces.
+	 */
+	hostManagedTools?: boolean;
 	contributions?:  Contribution[];
 	attachments?:    string;
 	grants?:         SlotRow[];
@@ -562,6 +579,9 @@ export class Agent {
 	 *  agent outside a dispatch ) keeps the note mechanism-free. Added for bug-report-9: a local model told
 	 *  the mechanism only inside a tool result went on calling the one tool it had already fetched. */
 	get searchTool(): string { return this._layer( 'searchTool' ) ?? ''; }
+	/** WHETHER THE HOST, NOT US, DECIDES WHICH TOOLS ARE LOADED — see `AgentEnvironment.hostManagedTools`.
+	 *  False until bound, which is the ordinary wire lane: we cut the request, so we can say what is deferred. */
+	get hostManagedTools(): boolean { return this._layer( 'hostManagedTools' ) ?? false; }
 	/** What the installed CONTRIBUTORS returned for this run — each carrying the band it declared. `[]`
 	 *  until bound, when nothing is installed that contributes, and when every contributor came back dry;
 	 *  all three mean the same thing to the compile, which is that those bands emit nothing. */
@@ -1596,10 +1616,30 @@ export class Agent {
 		// surface told the model that tool was not callable yet, and to fetch it through a search tool the
 		// request was not even carrying. The host binds what the request actually defers; only a composition
 		// surface, with no request to ask, falls back to the surface.
+		// WHAT A MANAGED LANE SAYS INSTEAD, and it is a different sentence rather than a softer one. The host
+		// owns the callable set and will not tell us what it loaded, so there is nothing true to mark and no
+		// door of ours to name. What the agent needs is the one thing it cannot work out from a refusal: that
+		// this list is what it HOLDS, that absence from it is the only denial there is, and that the host's
+		// own "no such tool" on a listed row is a loading state. DEFECT-435 is what it costs to leave unsaid —
+		// an agent read that refusal as a withheld capability, reported a gap that did not exist, and took a
+		// worse repair it was confident in.
+		const HOST_NOTE = 'Everything you hold is listed here, and every row is yours to call. Your HOST loads '
+			+ 'these into the conversation and does not tell us which it has loaded yet, so a tool on this list '
+			+ 'can refuse the first time with "no such tool" or "not available". THAT IS A LOADING STATE, NOT A '
+			+ 'DENIAL — a tool you do not hold is absent from this list entirely, and absence is the only denial '
+			+ 'there is. So if a row refuses that way: name the tool you are calling in your reply and call it '
+			+ 'again. Do not conclude you lack it, do not report it as a missing capability, and do not reach the '
+			+ 'same end another way. If it still refuses after you have named it, THEN say so and name the tool.';
+
 		const runDeferred = this.runDeferred;
-		const deferred = ( t: ToolDef ): boolean => runDeferred
-			? runDeferred.includes( t.id! )
-			: this.toolModeFor( t.id! ) !== 'preload';
+		// NOTHING IS MARKED ON A MANAGED LANE. Not even the fallback: a composition surface binds no
+		// `runDeferred`, so without this a harness agent's preview would mark every non-preload row and point
+		// at a search tool that lane cannot carry — which is the artifact the defect was diagnosed from.
+		const deferred = ( t: ToolDef ): boolean => this.hostManagedTools
+			? false
+			: runDeferred
+				? runDeferred.includes( t.id! )
+				: this.toolModeFor( t.id! ) !== 'preload';
 		const sections = Agent.groupByServer( held ).map( g => {
 			const head = g.doc ? `### ${ g.name }\n${ g.doc }` : `### ${ g.name }`;
 			// Each row names the tool the way the model must CALL it — its wire name, which carries the server.
@@ -1616,7 +1656,11 @@ export class Agent {
 		// EMPTY IS ABSENT, on the note as much as on the section: an agent whose tools are all loaded is told
 		// nothing about fetching schemas, because for that run there is nothing to fetch.
 		const parts = [ '## Available tools', RULE ];
-		if ( held.some( deferred ) ) parts.push( NOTE );
+		// ONE NOTE OR THE OTHER, never both and never neither-when-one-is-needed. The managed note is
+		// UNCONDITIONAL on its lane: the host may have loaded everything this turn and defer something on the
+		// next, and a note that appeared only once the damage was done would be the defect with a delay on it.
+		if ( this.hostManagedTools ) parts.push( HOST_NOTE );
+		else if ( held.some( deferred ) ) parts.push( NOTE );
 		parts.push( sections.join( '\n\n' ) );
 		return parts.join( '\n\n' );
 	}
