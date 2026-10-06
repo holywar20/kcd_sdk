@@ -194,7 +194,11 @@ describe( 'KcdEmit.cssTargetFrom — the inverse, so a MOVE can re-express a lin
 	/**
 	 * A protocol URL is the RETIRED absolute form ( protocol §8.1 amended it away on 2026-08-17 ) and a
 	 * root-absolute path is a hand edit. Both are a different repair with a ruling behind them, so a mover
-	 * declines rather than deciding on its own authority. `fixStylesheetLinks` is the verb that owns them.
+	 * declines rather than deciding on its own authority.
+	 *
+	 * NO VERB OWNS THAT REPAIR ANY MORE. `fixStylesheetLinks` did, and it was deleted on 2026-10-05
+	 * ( TASK-730 ) as callerless. The decline below is unchanged and still correct — a mover was never
+	 * the right place for it — but the href now stays as it is until a person or a re-emit changes it.
 	 */
 	it( 'declines anything that is not a plain relative reference', () => {
 		expect( KcdEmit.cssTargetFrom( 'file:///C:/vault/kcd.css' ) ).toBeNull();

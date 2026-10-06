@@ -138,7 +138,9 @@ const MAX_LANGUAGES    = 10;
 const MAX_ENTRY_POINTS = 8;
 const MAX_TEST_DIRS    = 8;
 
-/** Reserved because the written tree uses it for the roster. */
+/** Reserved so a component can never mint this id. Nothing writes a roster file any more — `Survey.write`
+ *  was deleted on 2026-10-05 ( TASK-730 ) — but the name stays reserved against the day something does,
+ *  and `_mintIds` still excludes it. */
 const INDEX_FILE = 'index.json';
 
 interface RawFile { rel: string; size: number; inTestDir: boolean; base: string }
@@ -245,46 +247,16 @@ export class Survey {
 	}
 
 	/**
-	 * Flush and fill `outDir` with the survey tree: a roster at `index.json` plus one file per
-	 * component, FLAT beside it. Deliberately shallow — an agent should be able to list one directory
-	 * and see every component, then open exactly the one it needs.
+	 * `write` STOOD HERE AND WAS DELETED on 2026-10-05 ( TASK-730 ). It flushed a survey tree to disk,
+	 * and it DELETED EVERY `.json` IN ITS TARGET DIRECTORY before writing — an uncalled destructive
+	 * write sitting in a shared utility, with no caller and no test anywhere in the tree since before
+	 * the deletion was ruled. `Survey.run` builds the report and `Survey.project` is the lean text
+	 * projection an agent reads; neither touches disk, and `survey_project` serves one of those two.
+	 * Nothing regressed when this went, because nothing had ever called it.
 	 *
-	 * Destructive by design. The survey is a derived, temporary artifact; a stale component file left
-	 * behind after a rename would be worse than no file at all, so the directory is emptied first.
-	 * Refuses to flush anything that does not look like a survey directory.
+	 * If a survey ever needs persisting again, write it through a door that does not empty a directory
+	 * it does not own — the hazard here was not the writing, it was the flush.
 	 */
-	static write( report: SurveyReport, outDir: string ): string[] {
-		const dir = path.resolve( outDir );
-
-		if ( fs.existsSync( dir ) ) {
-			const stray = fs.readdirSync( dir ).filter( f => !f.endsWith( '.json' ) );
-			if ( stray.length ) throw new Error( `refusing to flush ${ dir }: it holds non-survey files ( ${ stray.slice( 0, 3 ).join( ', ' ) } )` );
-			for ( const f of fs.readdirSync( dir ) ) fs.rmSync( path.join( dir, f ), { force: true } );
-		} else {
-			fs.mkdirSync( dir, { recursive: true } );
-		}
-
-		const written: string[] = [];
-		const emit = ( name: string, data: unknown ): void => {
-			fs.writeFileSync( path.join( dir, name ), JSON.stringify( data, null, '\t' ) + '\n' );
-			written.push( name );
-		};
-
-		// The roster names every component and the file that describes it — the one hop an agent makes.
-		emit( INDEX_FILE, {
-			schema:       report.schema,
-			generated:    report.generated,
-			root:         report.root,
-			totals:       report.totals,
-			limits:       report.limits,
-			components:   report.components.map( c => ( {
-				id: c.id, kind: c.kind, path: c.path, file: `${ c.id }.json`, description: c.description,
-			} ) ),
-		} );
-
-		for ( const c of report.components ) emit( `${ c.id }.json`, { schema: report.schema, ...c } );
-		return written;
-	}
 
 	/**
 	 * The lean text projection — what an agent actually READS.

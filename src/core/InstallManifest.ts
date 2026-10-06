@@ -96,19 +96,10 @@ export class InstallManifest {
 	}
 
 	/**
-	 * The row governing a vault-relative deployed path, or null when nothing in the manifest owns
-	 * it. Longest matching `vaultHome` prefix wins, mirroring `VaultLayout.entryFor` — a specific row
-	 * ( `references/kcd_sdk` ) can sit inside a directory this table does not otherwise cover.
+	 * `entryFor` STOOD HERE AND WAS DELETED on 2026-10-05 ( TASK-730 ). Its only caller in the whole
+	 * tree was `VaultUtilities.reset`, which went the same day; `VaultLayout.entryFor` is a DIFFERENT
+	 * function on a different table and is live. If you need a path-to-row lookup again, note that
+	 * `VaultDeploy` reads this table by walking `all()` rather than by asking it about one path.
 	 */
-	static entryFor( vaultRelPath: string ): ManifestEntry | null {
-		const norm = vaultRelPath.replace( /\\/g, '/' )
-		let best: ManifestEntry | null = null
-		for( const entry of MANIFEST ) {
-			if( norm !== entry.vaultHome && !norm.startsWith( entry.vaultHome + '/' ) ) continue
-			if( best && best.vaultHome.length >= entry.vaultHome.length ) continue
-			best = entry
-		}
-		return best
-	}
 
 }

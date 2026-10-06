@@ -225,6 +225,14 @@ export class Vault {
 	 *     `scan()` walks the whole root, so before this gate existed backups, work notes and `.js` dev
 	 *     utilities were all graded as KCD documents — roughly half of every issue this vault has ever
 	 *     reported. Reported drift in a frozen backup is not drift; it is a category error.
+	 *
+	 *     UNINDEXED IS NOT THE SAME CLAIM AS DISPOSABLE, and this list reads as though it were
+	 *     ( TASK-732, 2026-10-05 ). `ephemeralDirs()` derives ephemeral from `indexed`, so the two
+	 *     travel together here — but *nothing validates links into here* and *this may be deleted at
+	 *     will* are independent facts, and `audits/ledgers` wants the first and emphatically not the
+	 *     second. Durability is now its own `durable` flag on the layout row, read through
+	 *     `VaultLayout.isDurablePath`. So every directory named above is unindexed, and all of them
+	 *     EXCEPT `audits/ledgers` are also disposable. Nothing on this grading axis changed.
 	 *   • ARCHIVAL ( `archival: true` — `plans/plans_complete` ). The opposite on the shipping axis: it
 	 *     DOES install, and live artifacts link to it for provenance, so it cannot be ephemeral without
 	 *     making those links illegal. It stops being graded because the standard moved on after the
@@ -522,11 +530,16 @@ export class Vault {
 	 *
 	 * Best-effort by construction. A document with no link, an unparseable href, or an unwritable file
 	 * leaves the move untouched: healing the graph is this operation's contract and a cosmetic link is
-	 * not worth failing it over. The corpus sweep ( `VaultUtilities.fixStylesheetLinks` ) remains the
-	 * backstop for whatever this passes over.
+	 * not worth failing it over.
+	 *
+	 * THERE IS NO LONGER A CORPUS-SWEEP BACKSTOP BEHIND IT, and that is worth knowing before relying on
+	 * this. `VaultUtilities.fixStylesheetLinks` swept the whole vault for the same repair and was deleted
+	 * on 2026-10-05 ( TASK-730 ) as callerless — it had no call site and no test. So whatever this
+	 * passes over stays unrepaired until something writes the document again; a document written through
+	 * `save_doc` is born with both stylesheet tiers, which is what makes that acceptable.
 	 */
 	private restampStylesheet( toRel: string ): void {
-		// ONE MATCHER, shared with `VaultUtilities.fixStylesheetLinks` — see `KcdEmit.stylesheetLink`.
+		// ONE MATCHER — see `KcdEmit.stylesheetLink`, which owns the form and is shared with the emitter.
 		try {
 			const destAbs = this.toAbs( toRel );
 			const raw     = fs.readFileSync( destAbs, 'utf8' );

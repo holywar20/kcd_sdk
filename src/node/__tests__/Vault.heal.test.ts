@@ -319,8 +319,10 @@ describe( 'Vault move — the moved document\'s OWN stylesheet link', () => {
 		expect( hrefIn( '_Claude/plans/alpha.html' ) ).toBe( '../kcd.css' );
 	} );
 
-	/** The retired absolute form is a different repair with a ruling behind it — `fixStylesheetLinks`
-	 *  owns those. A mover rewriting one would be making that decision on its own authority. */
+	/** The retired absolute form is a different repair with a ruling behind it, and a mover rewriting one
+	 *  would be making that decision on its own authority. `fixStylesheetLinks` used to own those and was
+	 *  deleted on 2026-10-05 ( TASK-730 ) as callerless, so nothing sweeps them now; the decline below is
+	 *  unchanged, because declining was never contingent on something else doing the repair. */
 	it( 'declines to rewrite a machine-bound absolute href', () => {
 		put( `_Claude/${ TARGET }`, linked( 'alpha', 'file:///C:/vault/kcd.css' ) );
 

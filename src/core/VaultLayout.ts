@@ -55,6 +55,26 @@ export interface LayoutEntry {
 	 *  Matched by LONGEST PREFIX rather than top-level segment, so a nested bucket can be archival
 	 *  while its parent stays graded. That is the whole reason the flag exists separately. */
 	archival?: boolean
+	/** Machine-written state that must SURVIVE a sweep of the directory it sits in — durable content in
+	 *  otherwise disposable space.
+	 *
+	 *  A THIRD INDEPENDENT CLAIM, and it is independent of both flags above ( TASK-732, 2026-10-05 ).
+	 *  `indexed: false` says *nothing validates links into here*; durability says *this may not be
+	 *  deleted at will*. Those are different facts, and `ephemeralDirs()` derives the first from
+	 *  `indexed` while nothing anywhere derived the second — so a directory that was merely unindexed
+	 *  read as disposable to every human and agent who looked at it. The seven audit analyzers keep
+	 *  their coverage ledgers under `audits/ledgers`, declared in each analyzer as a durable
+	 *  Input/Output, and `audit-doc-truth.json` went missing between a 2026-09-22 run and the next one.
+	 *
+	 *  A DURABLE ROW IS STILL EPHEMERAL ON THE LINK AXIS, deliberately. A ledger is machine state, not a
+	 *  document: it stays unindexed, ungraded and illegal to link into ( §1.1 ). Protecting it from
+	 *  deletion must not make it citable, which is why this is a separate flag and not a flip of
+	 *  `indexed`.
+	 *
+	 *  Matched by LONGEST PREFIX, like `archival` and unlike `ephemeralDirs`'s top-segment collapse:
+	 *  the point is that a nested bucket differs from its parent. `audits/` stays disposable; only
+	 *  `audits/ledgers` does not. */
+	durable?: boolean
 	/** The document types this directory ACCEPTS on a write, when that is broader than the single type
 	 *  it implies. Absent ⇒ exactly `[ type ]`, which is the common case.
 	 *
@@ -177,7 +197,20 @@ const LAYOUT: readonly LayoutEntry[] = [
 	},
 	{
 		dir: 'audits', type: 'unknown', layer: 'data', indexed: false,
-		purpose: 'Generator raw output and vault backups. Deliberately unindexed — backup copies here are what made the library accrue duplicate references.'
+		purpose: 'Generator raw output and vault backups. Deliberately unindexed — backup copies here are what made the library accrue duplicate references. Disposable, EXCEPT ledgers/ beneath it.'
+	},
+	{
+		// DURABLE INSIDE DISPOSABLE SPACE, and the nesting is the point ( TASK-732, 2026-10-05 ). Seven
+		// analyzers — audit-backlog, audit-dead-code, audit-defects, audit-doc-truth,
+		// audit-renderer-defects, audit-renderer-perf, audit-tests — each declare a ledger here as a
+		// durable Input/Output, loaded in Phase 1 and updated as each unit finishes. Nothing distinguished
+		// one from scratch, and `audit-doc-truth.json` disappeared between a 2026-09-22 run and the next.
+		//
+		// `indexed: false` IS LEFT EXACTLY AS IT WAS. A ledger is machine state and must not become a link
+		// target; what changed is only that deleting it is now declared off-limits. See `durable` above
+		// for why that had to be a separate flag rather than a flip of this one.
+		dir: 'audits/ledgers', type: 'unknown', layer: 'data', indexed: false, durable: true,
+		purpose: 'Analyzer coverage ledgers — durable state the audit analyzers read and rewrite across runs. Unindexed and never a link target, like the rest of audits/, but NOT disposable: these carry what has already been audited.'
 	},
 	{
 		dir: 'scratch', type: 'unknown', layer: 'data', indexed: false,
@@ -374,6 +407,35 @@ export class VaultLayout {
 		const anchor = parts.lastIndexOf( docRoot )
 		const rel    = ( anchor >= 0 ? parts.slice( anchor + 1 ) : parts ).join( '/' )
 		return VaultLayout.archivalDirs().some( d => rel === d || rel.startsWith( d + '/' ) )
+	}
+
+	/**
+	 * The directories holding durable machine state — content that must survive a sweep of the space it
+	 * sits in. NOT collapsed to a top-level segment, for the same reason `archivalDirs` is not: the whole
+	 * point of a durable row is that it differs from its disposable parent.
+	 *
+	 * THE ONE PLACE TO ASK. Anything that cleans, resets or empties part of a vault reads this rather
+	 * than deciding for itself, so there is no second list to fall out of step. `VaultDeploy` deletes
+	 * nothing at all today, which is why this currently has no enforcement caller — the declaration and
+	 * its fences exist so that the next thing which DOES delete has somewhere to look, rather than
+	 * rediscovering the hazard by destroying a ledger.
+	 */
+	static durableDirs(): string[] {
+		return LAYOUT.filter( e => e.durable ).map( e => e.dir )
+	}
+
+	/**
+	 * Does this path hold durable state? Same longest-prefix, doc-root-anchored matching as
+	 * `isArchivalPath`, so an href, a vault-relative path and an absolute file path all answer alike.
+	 *
+	 * Segment-boundary matching, never bare `startsWith`: a sibling named `audits/ledgers-old` is a
+	 * different directory and is NOT protected by the `audits/ledgers` row.
+	 */
+	static isDurablePath( href: string, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): boolean {
+		const parts  = href.replace( /\\/g, '/' ).replace( /^\.\//, '' ).split( '/' ).filter( p => p !== '' )
+		const anchor = parts.lastIndexOf( docRoot )
+		const rel    = ( anchor >= 0 ? parts.slice( anchor + 1 ) : parts ).join( '/' )
+		return VaultLayout.durableDirs().some( d => rel === d || rel.startsWith( d + '/' ) )
 	}
 
 	/**

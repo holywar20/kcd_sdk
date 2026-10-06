@@ -76,9 +76,9 @@ export const KcdEmit = new class KcdEmit {
 	}
 
 	/** TIER 1 as it is actually written into a head — `<style>` open, the baseline, `</style>`, all with
-	 *  the emitter's own indentation. ONE SOURCE: `document()` and `VaultUtilities.fixStylesheetLinks`
-	 *  both call this, so a swept document and a freshly-emitted one carry the identical block and the
-	 *  sweep cannot drift from the writer. */
+	 *  the emitter's own indentation. ONE SOURCE, so no writer can drift from another. `document()` is
+	 *  the live caller; `VaultUtilities.fixStylesheetLinks` was the second one and was deleted on
+	 *  2026-10-05 ( TASK-730 ) as callerless, which leaves this with one caller and the same contract. */
 	baselineBlock(): string {
 		return '\t<style>\n' + BASELINE_CSS + '\t</style>\n';
 	}
@@ -87,10 +87,11 @@ export const KcdEmit = new class KcdEmit {
 	 * TIER 2's href — one `../` per directory level from the document up to the vault root, then the
 	 * stylesheet's own location within it.
 	 *
-	 * THE ONE COPY OF THIS MATH ( protocol §8.1 ). The emitter and `VaultUtilities.fixStylesheetLinks`
-	 * both call this rather than each computing a run of `../`, which is the drift the 2026-07-29
-	 * absolute-href ruling was actually trying to prevent — it removed the relativity instead of the
-	 * duplication, and lost portability to buy it.
+	 * THE ONE COPY OF THIS MATH ( protocol §8.1 ). Every caller comes here rather than computing its own
+	 * run of `../`, which is the drift the 2026-07-29 absolute-href ruling was actually trying to
+	 * prevent — it removed the relativity instead of the duplication, and lost portability to buy it.
+	 * The second caller was `VaultUtilities.fixStylesheetLinks`, deleted 2026-10-05 ( TASK-730 ); the
+	 * rule is unchanged and holds for whatever is written next.
 	 *
 	 * `cssVaultRel` is where the stylesheet sits RELATIVE TO THE VAULT ROOT, and it is a parameter
 	 * rather than a constant because it genuinely varies: a current vault keeps `kcd.css` at the root,
@@ -111,8 +112,8 @@ export const KcdEmit = new class KcdEmit {
 	 * FIND the tier-2 stylesheet link in a document — the one matcher both readers of it share.
 	 *
 	 * THE ONE COPY OF THIS MATCH, for the same reason `cssHrefFor` is the one copy of the depth math.
-	 * Two callers used to declare the identical regex privately —
-	 * `VaultUtilities.fixStylesheetLinks` and `Vault.restampStylesheet` — and it was
+	 * Two callers used to declare the identical regex privately — `Vault.restampStylesheet` and the
+	 * since-deleted `VaultUtilities.fixStylesheetLinks` ( TASK-730, 2026-10-05 ) — and it was
 	 * `/<link\s+rel="stylesheet"\s+href="([^"]+)"\s*\/?>/`: FIRST MATCH ONLY, EXACT ATTRIBUTE ORDER.
 	 * A tag putting `href` before `rel`, or carrying any third attribute, matched nothing and was
 	 * skipped **without a report** — indistinguishable from a document that has no link at all.
