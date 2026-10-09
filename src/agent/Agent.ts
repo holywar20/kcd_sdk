@@ -9,8 +9,8 @@ import { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
 import type { ArtifactType, ContextSegment, PolicyEntry, SegmentKey, SerializedArtifact, SerializedLens, SlotMode, SourceLayer, TaggedBlock } from '../primitives/types';
 
 /**
- * One habit in the COMPOSITION view — an inventory entry, not a compiled block, so a habit that loses its slot
- * is still here. See `Agent.habitSlots()`.
+ * A habit in the COMPOSITION view: an inventory entry, not a compiled block, so one that loses its slot stays listed.
+ * See `Agent.habitSlots()`.
  */
 export interface HabitSlotCandidate {
 	path:        string;
@@ -23,26 +23,19 @@ export interface HabitSlotCandidate {
 }
 
 /**
- * One FILE in an agent's compiled context, with what it actually costs — the composition currency.
- *
- * A row per artifact, not per block: the question this answers is "what is this object built from, and what
- * does each piece cost me", which is what a composition surface ( the CLI chart, the agent screen ) shows.
- * `tokens` is read from the real compiled output at the artifact's effective mode — a full body at
- * `load`, its surviving routing row at `on`, zero at `off` — never a re-derived estimate.
+ * One row per artifact in an agent's compiled context, costed from the real compiled output at its effective mode.
+ * `tokens` is never a re-derived estimate.
  */
 export interface CompositionRow {
 	/** The artifact's own path — the row's identity. */
 	path:   string;
 	name:   string;
 	kind:   ArtifactType;
-	/** The lens that contributes this file, or `agent` for one the agent itself bolted on. An artifact
-	 *  declared by several lenses is attributed once, to the first that carries it — matching the dedup the
-	 *  compile itself applies. */
+	/** The lens that contributes this file, or `agent` for one the agent itself bolted on. Attributed once,
+	 *  to the first lens that carries it, matching the compile's dedup. */
 	source: string;
-	/** The mutual-exclusion SLOT this file competes in, from its own `habit-class` frontmatter, or null for
-	 *  a file that contends nothing. Habits are what use it today; the field is the artifact's, not the
-	 *  habit type's, so anything that later declares a class surfaces here without a change. Two files
-	 *  sharing a slot means only one of them reaches the compiled context. */
+	/** The mutual-exclusion SLOT this file competes in, from its `habit-class` frontmatter, or null. Two files
+	 *  sharing a slot means only one reaches the compiled context. Lives on the artifact, not the habit type. */
 	slot:   string | null;
 	mode:   SlotMode;
 	tokens: number;
@@ -56,72 +49,35 @@ export interface HabitSlotView {
 	candidates: HabitSlotCandidate[];
 }
 import { ACCOUNTLESS_ACCOUNT_ID, DEFAULT_MODEL_KEY, REASONING_EFFORTS, type ReasoningEffort } from './Model';
-// TYPE-ONLY, so there is no runtime edge back into the session module ( `Session.ts` already imports
-// `Agent` as a type for the same reason ). The policy SHAPE is the session's — an agent stating a default
-// must state it in exactly the currency a session stores, or the two drift into near-identical types.
+// TYPE-ONLY, so no runtime edge back into the session module ( `Session.ts` imports `Agent` as a type too ).
+// The policy SHAPE is the session's: an agent's default must be stated in the currency a session stores.
 import type { ReasoningPolicy } from '../session/TurnEntry';
 import { carries, type ToolMode } from '../primitives/ToolAccess';
 import type { ToolDef } from './ToolDef';
 
 /*
- * An Agent deliberately has NO status ( removed 2026-07-21 ). It used to carry
- * `status: 'idle' | 'thinking'`, which was run-state living on the wrong noun: an agent is a
- * CONFIGURATION — an identity, a lens stack, a tool composition — and configuration does not run.
- * A turn runs, inside a session. So the flag moved to `Session.turnStatus`, where the thing being
- * described actually exists.
- *
- * It was also, in fact, dead: it was set around each turn, broadcast on an `agent_status` event, and
- * mirrored renderer-side, but NO component ever read it — the UI's real busy signal was the Session
- * store's local `pending`. Two sessions of the same agent running at once would also clobber it
- * ( whichever finished first flipped the shared flag to idle while the other was still going ), so
- * even its intended reading was wrong. Moving it onto the session makes that case correct by
- * construction: each run owns its own flag.
+ * An Agent has NO status: it is configuration, and run state lives on `Session.turnStatus`, one flag per run.
  */
 
 /**
- * The wire / DB-seed form of an Agent. Deliberately LIGHT and DECLARATIVE: the lens
- * graphs (main dredges them; the renderer can't) plus the `base*` dumb-string inventories
- * and the runtime envelope. The `composed*` materialization is NOT here — it is rebuilt
- * from this seed on arrival (see Agent.compose), so it can never ride the wire stale.
+ * The wire / DB-seed form of an Agent: light and declarative. The `composed*` materialization is NOT here;
+ * it is rebuilt from this seed on arrival (see Agent.compose), so it can never ride the wire stale.
  */
 export interface SerializedAgent {
 	id: string;
-	/** The workspace this agent belongs to ( `projects.id` ). An agent's lens paths are vault-relative,
-	 *  so it only means anything inside its own project — which is why the project rides WITH the agent
-	 *  rather than being inferred from whichever one happens to be open. '' only before a row is read. */
+	/** The workspace this agent belongs to (`projects.id`). Lens paths are vault-relative, so the project
+	 *  rides WITH the agent rather than being inferred. '' only before a row is read. */
 	projectId: string;
 	name: string;
 	/** Presentation — a Glyph name + a color token string (e.g. `var(--generator)`). Null = fall back. */
 	icon: string | null;
 	color: string | null;
-	/** A ModelDescriptor registry key (see Model.ts), or null for an agent that never dispatches.
-	 *  Null is the VAULT case: a `Vault.buildAgent` agent exists only to compile context for delivery as
-	 *  CLI text or a tool result, so there is no model to name — and defaulting one would be a lie a later
-	 *  reader acts on. An authored agent is always concrete; the default still applies when none is given. */
+	/** A ModelDescriptor registry key, or null for a vault agent that never dispatches; defaulting one there
+	 *  would be a lie a later reader acts on. An authored agent is always concrete. */
 	model: string | null;
 	/**
-	 * WHICH ACCOUNT PAYS for this agent's turns — an account id, NEVER NULL, and the other half of the
-	 * binding `model` begins. `model` says which vendor and which connector; this says whose subscription
-	 * answers, which `provider` used to mean as a third job it was no good at.
-	 *
-	 * NON-NULL BY CONSTRUCTION. Absence is `ACCOUNTLESS_ACCOUNT_ID`, a reserved member that is honestly
-	 * empty, so no reader downstream needs a null branch — and the reader that would have forgotten one
-	 * cannot send on nobody's subscription. Three different facts land on the reserved id and all three are
-	 * legitimate: a connector that needs no account, an agent that never dispatches ( `model: null`, the
-	 * vault case — an account there would be a claim about billing that is simply untrue ), and an agent
-	 * that states no preference of its own and defers to its project.
-	 *
-	 * IT IS AN OVERRIDE, NOT THE ANSWER. Resolution cascades agent → project → house default, and the
-	 * reserved id at this rung means "nothing stated here" rather than "charge nobody" — so a stale id, a
-	 * record written before this field existed, and a deliberate deferral all fall through the same way. The
-	 * host owns that cascade, because the roster of accounts is main-side and this record resolves nothing.
-	 *
-	 * SEEDED AT BIRTH, NEVER RE-STAMPED. A new agent is stamped with its project's default for its
-	 * connector; an existing one is left exactly as it is, because re-seeding would silently move somebody's
-	 * work onto a different subscription.
-	 *
-	 * Optional ON THE WIRE and on a row written before the field existed, which reads as the reserved id —
-	 * the same tolerance `slug` and `reasoning` carry. The OBJECT's field is never optional.
+	 * An account id, never null: ACCOUNTLESS_ACCOUNT_ID is "nothing stated here", not "charge nobody".
+	 * An override, not the answer; seeded at birth and never re-stamped, or work silently changes subscription.
 	 */
 	account?: string;
 	/** The visible top-of-context lever. Null = none; '' is a deliberately empty one. */
@@ -129,23 +85,16 @@ export interface SerializedAgent {
 	/** The composed lenses, serialized whole. `[]` = a draft (cannot run yet). `[0]` is primary. */
 	lenses: SerializedLens[];
 	/**
-	 * The habits this agent HOLDS, as paths — its own, never inherited. A lens supplies no habits to an agent.
-	 *
-	 * THERE IS NO `baseTools` HERE ANY MORE. It was the tool half of this inventory and it never had a
-	 * consumer — `toolModes` answers both "does this agent carry it" and "how much of it rides", because
-	 * those are the only two questions an agent has about a tool. Two fields meant two answers that could
-	 * disagree, on the axis where a disagreement is silent permission.
+	 * The habits this agent HOLDS, as paths: its own, never inherited. Tools are NOT here: `toolModes` answers
+	 * whether a tool is carried, and a second field could disagree with it silently.
 	 */
 	baseHabits: string[];
 	/** The held habits whose whole text rides; every other held habit rides as its one-line routing row. Taking
 	 *  a habit off is removing it from `baseHabits` — there is no off state for a habit the agent still holds. */
 	loadedHabits?: string[];
 	/**
-	 * The agent's `baseHabits` MATERIALIZED into loaded artifacts — the dumb-string inventory turned
-	 * into objects the SlotResolver can rank ( main reads them from disk; the renderer can't, so they
-	 * ride the wire ). Derived, NOT a second source of truth: `baseHabits` ( the paths ) is authoritative
-	 * and persisted; these are rebuilt from it on every main-side load/save. Optional on the wire ( a seed
-	 * that predates them, or a draft, carries none ).
+	 * `baseHabits` materialized into artifacts the SlotResolver can rank. Derived, NOT a second source of truth:
+	 * `baseHabits` is authoritative and persisted; these are rebuilt from it on every main-side load.
 	 */
 	baseHabitNodes?: SerializedArtifact[];
 	/** Lenses the record names that did not load — see `BrokenLens`. */
@@ -196,13 +145,11 @@ export interface SerializedAgent {
 	folder?: string;
 	/** Human scratch-pad — per-agent sticky note. Null = empty. */
 	notes: string | null;
-	/** A one-line, third-party description of what this agent is FOR — a routing fact a manager reads when
-	 *  it has to choose between two lanes. Null = none, and none is legitimate; nothing synthesizes one,
-	 *  because a router cannot tell a guess apart from a statement. See `Agent.slug`. */
+	/** What this agent is FOR: a one-line, third-party routing fact. Null is legitimate; nothing synthesizes one,
+	 *  because a router cannot tell a guess apart from a statement. */
 	slug?: string | null;
-	/** THE REASONING DEFAULT a session spawned under this agent is born on — see `Agent.reasoning`. Null =
-	 *  no default was stated, which is NOT the same fact as "the default is medium" and must never collapse
-	 *  into it. Absent on a wire or row written before the field existed, which reads as the same null. */
+	/** The reasoning default a spawned session is born on. Null = none stated, which must never collapse into
+	 *  "medium". Absent on a wire or row written before the field existed reads as the same null. */
 	reasoning?: ReasoningPolicy | null;
 }
 
@@ -211,31 +158,20 @@ export interface SerializedAgent {
 export interface BrokenLens {
 	/** the doc-index id the record holds — frontmatter the document carries, not a key the database minted */
 	id:       string;
-	/** The lens's name: the index row's if it has one, else the name the RECORD stored, else the id. That
-	 *  middle step arrived 2026-09-26 and is the point of storing a name at all — before it, an id that
-	 *  resolved to no row left a uuid here, and a surface could not say which lens the agent had lost. */
+	/** The lens's name: the index row's, else the name the RECORD stored, else the id. Storing the name is
+	 *  the point: an id that resolves to no row would otherwise leave a bare uuid where the name belongs. */
 	name:     string;
 	/** its place in the authored stack */
 	position: number;
-	/** `missing` — the row is gone or the file left the vault. `invalid` — the file is there and will not
-	 *  validate or load. `ambiguous` — the id found nothing, so the name was tried, and more than one lens
-	 *  answers to it; resolving that by picking the first would be a guess about which agent this is. */
+	/** `missing`: row or file gone. `invalid`: will not load. `ambiguous`: the name matched several lenses, and
+	 *  picking the first would be a guess about which agent this is. */
 	reason:   'missing' | 'invalid' | 'ambiguous';
 	message?: string;
 }
 
 /**
- * A habit an agent's record names that could not be loaded — the habit twin of `BrokenLens`, kept for the
- * same two reasons: so the agent can say which habit it lost, and so a record write puts the id back
- * rather than dropping it.
- *
- * NO `position`, unlike a lens. A lens stack is ordered — the primary supplies the personality — so a
- * broken lens has to return to its own place. Habits are a SET, deduped on write, and one habit is never
- * ahead of another; a position here would be a field that means nothing and drifts.
- *
- * `loaded` rides along so a repair restores the habit intact rather than at its why: the record's
- * `{ id, loaded }` pair survives whole, which is the difference between remembering a habit and
- * remembering only that there was one.
+ * The habit twin of `BrokenLens`. No `position`: habits are a deduped set with no order, so one would drift.
+ * `loaded` rides along so a repair restores the `{ id, loaded }` pair whole, not merely that a habit existed.
  */
 export interface BrokenHabit {
 	/** the doc-index id the record holds */
@@ -255,12 +191,10 @@ export interface AgentSummary {
 	projectId: string;
 	name: string;
 	model: string | null;
-	/** The binding's other half — which account pays, never null ( see `SerializedAgent.account` ). It rides
-	 *  the roster form because a roster that can say which model a lane runs on and not which subscription
-	 *  it bills to is half an answer, and this is the read every picker and lane list already makes. */
+	/** Which account pays, never null (see `SerializedAgent.account`). Rides the roster form: a roster that
+	 *  names a model but not the subscription it bills to is half an answer. */
 	account: string;
-	/** The lens stack as paths, primary first. Nothing is appended under it — the base lens that used to
-	 *  sit beneath every stack was retired with the flat agent model. */
+	/** The lens stack as paths, primary first. Nothing is appended beneath it. */
 	lensPaths: string[];
 }
 
@@ -297,53 +231,28 @@ function _pathsOfType( nodes: KCDPrimitive[], type: ArtifactType ): string[] {
 	return nodes.filter( ( n ) => n.getType() === type ).map( ( n ) => n.getPath() );
 }
 
-/**
- * THE KEY ONE TOOL'S MODE IS FILED UNDER — its wire identity, and the bare name only when it has none.
- *
- * ONE READING, so the surfaces that WRITE a mode and the projections that READ one cannot disagree. They
- * did: the agent panel wrote a bare name and the capability deck wrote a qualified one into the same map,
- * while the manifest read bare and the harness cut read qualified — so each reader was blind to one writer
- * and a tool switched off on the wrong surface stayed on the wire. The identity rides on the def now ( see
- * `ToolDef.id` ), and this is the only place a reader decides what to look up.
- *
- * The bare fallback is for a def that never crossed the priced serve seam — a test double, which has no
- * server and therefore no identity to be filed under.
- */
-/** The tool identities this agent holds, as a set — every reader below asks the same question of the same
- *  list, and none of them re-derives it. A def with no identity cannot be held: policy keys on `group.tool`,
- *  so a def that never crossed the priced serve seam has no name the allowances could have been written
- *  under. That used to fall back to the bare name, which is precisely how one map came to be written under
- *  two spellings and read under two more. */
+/** The tool identities this agent holds. Every writer and reader of a tool's mode files it under `ToolDef.id`,
+ *  so they cannot disagree; a def with no id cannot be held, and a bare-name fallback once split one map in two. */
 function _heldIds( defs: readonly ToolDef[] ): ToolDef[] {
 	return defs.filter( ( d ) => !!d.id );
 }
 
 /**
- * Agent — THE composition primitive (formerly split across Recipe + Agent). Pure data plus
- * a single composition method; no `fs`, no file backing — it persists as a DB row, and crosses
- * the bridge whole via serialize / fromSerialized. (Its only disk-capable member, LensObject,
- * keeps disk behind an injected main-only reader the renderer never calls.)
+ * Agent — THE composition primitive. Pure data plus one composition method, with no `fs`: it crosses the bridge
+ * whole via serialize / fromSerialized. Its only disk-capable member, LensObject, keeps disk behind a main-only reader.
  *
- * The model in one breath: a **lens is a reusable, unenforced partial** (a file — it can be
- * anything); an **agent is the enforced, composable unit** that bolts components on directly.
+ * Three tiers: `lenses` + `base*` are the declarative SOURCE OF TRUTH, stored and light. `composed*` is materialized
+ * by `compose()`; trust the children, since a wrong contribution is a bug in the child, not corrected here.
+ * `effective*` = `base* ∪ composed*`, which is what a permissions gate reads.
  *
- *   • `lenses` + `base*` (dumb strings) are the DECLARATIVE SOURCE OF TRUTH — stored, light.
- *   • `composed*` is MATERIALIZED by `compose()`: ask each lens what it contributes, concat.
- *     Trust the children — a wrong contribution is a bug in the child, not corrected here.
- *   • `effective*` = `base* ∪ composed*` — what a permissions gate or the composer reads.
+ * FLUSH-AND-FILL: `compose()` rebuilds `composed*` whole at construction and on every base or lens change; it is never
+ * delta-managed. `composed*` is never persisted, because a lens is a file editable out-of-band and that would go stale.
  *
- * Composition is FLUSH-AND-FILL, never delta-managed: `compose()` blows `composed*` away and
- * rebuilds from the current lenses. It runs at construction (so a hydrated agent arrives whole)
- * and again whenever the base strings or lenses change. `composed*` is never persisted — that
- * is the one move that would let it go stale (a lens is a file, editable out-of-band).
- *
- * A draft is simply an agent with no lenses (`isDraft()`); "deploy" is a state transition on
- * this one object, not a different class.
+ * A draft is an agent with no lenses (`isDraft()`); "deploy" is a state transition on this object, not a new class.
  */
 /**
- * The wire's EXTERNAL layers — everything a compiled context needs that is not the agent's own object
- * graph. Every key OPTIONAL and applied only when present, which is what lets a caller bind one layer
- * without restating the other eleven.
+ * The wire's EXTERNAL layers: everything a compiled context needs beyond the agent's own graph.
+ * Every key is optional and applied only when present.
  */
 /** One package's injection. `id` is the key a toggle, a deck row and a trace line all read; there is no
  *  tier because a package makes no ranking decision — see `ContextContribution`. */
@@ -367,31 +276,15 @@ export type AgentEnvironment = {
 	hostEnvironment?: string;
 	toolDefs?:       ToolDef[];
 	/**
-	 * WHAT THIS RUN DEFERS — the ids it may call that its request does NOT carry, and so exactly the tools
-	 * the manifest marks `[schema on request]`. Bound by the host from the SAME subtraction that decides
-	 * whether the search door rides, so the prompt and the request cannot disagree about which tools need
-	 * fetching: the mark and the door are one fact with two readers.
-	 *
-	 * ABSENT ON A COMPOSITION SURFACE, which has no request to subtract from — the mark falls back to the
-	 * surface there, which is the best answer available without a run.
+	 * The ids this run may call but its request does NOT carry: exactly the `[schema on request]` tools.
+	 * Bound from the same subtraction as the search door, so prompt and request cannot disagree.
+	 * Absent on a composition surface, which has no request to subtract from.
 	 */
 	runDeferred?:    readonly string[];
 	searchTool?:     string;
 	/**
-	 * WHETHER SOMEBODY ELSE DECIDES WHICH OF THESE TOOLS IS LOADED — true on a host that owns the model
-	 * conversation and therefore owns the tool namespace ( the Claude Code harness lane ).
-	 *
-	 * It exists because our deferral and the host's are two mechanisms and only one of them can be true at a
-	 * time. On the wire lane WE cut the request, so `runDeferred` names exactly what is missing and
-	 * `searchTool` is the door that fetches it. On a managed lane neither is ours: the host hands the child
-	 * its own tool list, defers whatever it likes, and does not tell us which. A manifest that marked rows
-	 * there would be describing a cut nothing applied, and it would send the model to a search tool that
-	 * cannot exist on that lane — which is DEFECT-435, where a deferred tool reported as an absent one and an
-	 * agent rewrote a task's brief rather than posting to its thread.
-	 *
-	 * THE HOST STATES THE FACT; THIS PACKAGE OWNS THE WORDS. The inverse of `searchTool`, deliberately: there
-	 * the host knows a NAME we must not invent, here the host knows a SITUATION whose wording belongs beside
-	 * the mark it replaces.
+	 * True on a host that owns the model conversation and so the tool namespace: our deferral cannot apply
+	 * there, so a manifest marking rows would describe a cut nothing made. The host states the fact; we word it.
 	 */
 	hostManagedTools?: boolean;
 	contributions?:  Contribution[];
@@ -400,41 +293,31 @@ export type AgentEnvironment = {
 	commands?:       readonly Command[];
 	manifestGroups?: readonly { heading: string; body: string }[];
 	capability?:     string;
-	/** ONE SENTENCE saying this project's configuration moved since this session's last turn, or '' — the
-	 *  announcement half of project-configuration delivery. DERIVED at `Environment.compile` by comparing a
-	 *  stamp against `Session.lastConfigStamp`; never pushed, so nothing can be in flight to miss. */
+	/** One sentence saying this project's configuration moved since the session's last turn, or ''. Derived at
+	 *  `Environment.compile` from `Session.lastConfigStamp`, never pushed, so nothing can be in flight to miss. */
 	configNotice?:   string;
 	frame?:          string;
 	modeLine?:       string;
 };
 
 /**
- * A READER for the environment — the agent asks for its external layers instead of being told them.
- *
- * The twin of `LensObject`'s document reader, and the same argument: a receiver that pulls cannot be
- * handed a stale layer, and nobody outside has to remember to push one. It answers the WHOLE environment
- * rather than one key, so a layer added to `AgentEnvironment` reaches every reader in the same edit —
- * which is the whole reason the renderer's binder was retired. A key it leaves `undefined` falls back to
- * whatever a host bound, so a reader and a `bindEnv` can coexist without either shadowing the other by
- * accident.
- *
- * Called on every read, so a reader owes its own memoization — the renderer's is a Vue computed.
+ * A pull-reader for the environment: a receiver that pulls cannot be handed a stale layer. Called on every read,
+ * so it owes its own memoization. A key it leaves undefined falls back to whatever `bindEnv` bound.
  */
 export type EnvReaderFn = () => AgentEnvironment;
 
 export class Agent {
 
 	readonly id: string;
-	/** The workspace this agent belongs to ( see SerializedAgent.projectId ). READONLY: because its lens
-	 *  paths are vault-relative, moving an agent between projects is a migration, not a field write. */
+	/** The workspace this agent belongs to. READONLY: its lens paths are vault-relative, so moving projects is a
+	 *  migration, not a field write. */
 	readonly projectId: string;
 	name: string;
 	icon: string | null;
 	color: string | null;
 	model: string | null;
-	/** WHICH ACCOUNT PAYS — never null, and the reserved member when nothing is stated ( see
-	 *  `SerializedAgent.account` ). Written through the accessor, so the never-dispatching rule is enforced
-	 *  in ONE place rather than at four callers. */
+	/** Never null: the reserved member when nothing is stated. Written only through this accessor, so the
+	 *  never-dispatching rule is enforced in one place rather than at four callers. */
 	get account(): string { return this._account; }
 	set account( value: string | null | undefined ) { this._account = Agent.normalizeAccount( value, this.model ); }
 	private _account: string = ACCOUNTLESS_ACCOUNT_ID;
@@ -447,9 +330,8 @@ export class Agent {
 	baseHabits: string[];
 	/** The held habits that load in full (see SerializedAgent.loadedHabits). */
 	loadedHabits: string[];
-	/** The skills this agent holds, as slugs (see SerializedAgent.skills). Its own, never inherited; a
-	 *  slug naming no skill in the library is an absence, not a fault, and compiling it is the next card's
-	 *  job. */
+	/** The skills this agent holds, as slugs (see SerializedAgent.skills). Its own, never inherited; a slug
+	 *  naming no skill is an absence, not a fault. */
 	skills: string[];
 
 	/** What this agent carries, and how much of each rides — presence IS the answer (see
@@ -465,57 +347,16 @@ export class Agent {
 	notes: string | null;
 
 	/**
-	 * A ONE-LINE DESCRIPTION OF THIS AGENT, WRITTEN BY SOMEBODY ELSE, FOR SOMEBODY ELSE. "fast, less capable
-	 * — documentation and book-keeping" is the whole shape of it: what a manager routing work to a lane needs
-	 * in order to choose between two of them, which a name never says.
-	 *
-	 * THE AGENT DOES NOT RECEIVE IT. It reaches neither `compiledContext()` nor `wireSystem()` by any path,
-	 * and the sentinel suite in `Agent.wireSystem.test.ts` fails the moment it does. Two reasons, and the second is the one
-	 * that matters: it costs context to no purpose, because the agent already holds a lens stack and a system
-	 * prompt saying what it is at length — and a self-description SHAPES BEHAVIOUR. An agent told in its own
-	 * context that it is "less capable" acts less capably. This is a routing fact for a third party, not a
-	 * self-image.
-	 *
-	 * It is the next step past what `hostPrompt` and `capability` already carry: those are fields an agent
-	 * HOLDS but does not AUTHOR. This one it does not hold either — it is persisted on the record, crosses
-	 * the wire for a roster read and for the person editing it, and stops there.
-	 *
-	 * NULL IS THE ABSENT CASE and it is legitimate. Nothing derives one from the model name or the lens
-	 * stack: a guessed description is worse than none, because a router cannot tell the two apart.
-	 *
-	 * Normalized on every write through the accessor below rather than at the callers — a cap enforced in
-	 * one of four places is a cap somebody pastes an essay past.
+	 * A routing fact for a third party, never given to the agent itself: a self-description shapes behaviour.
+	 * Null is the absent case; nothing derives one, since a guessed description is worse than none.
 	 */
 	get slug(): string | null { return this._slug; }
 	set slug( value: string | null | undefined ) { this._slug = Agent.normalizeSlug( value ); }
 	private _slug: string | null = null;
 
 	/**
-	 * THE REASONING DEFAULT A SESSION UNDER THIS AGENT IS BORN ON — effort and mode, the same
-	 * `ReasoningPolicy` a session stores, so there is one currency rather than two near-identical ones.
-	 *
-	 * WHY IT EXISTS. The effort dial is per-SESSION and set from the composer, so every freshly spawned
-	 * session landed on the SDK's inert `medium` no matter which agent spawned it. A lane that opens a new
-	 * session per task could therefore never be benchmarked at an effort of its own — which is the whole
-	 * reason for the field ( Bryan, 2026-09-30: use known-good effort states per agent rather than
-	 * defaulting everything to medium ).
-	 *
-	 * IT IS A DEFAULT, NOT A GOVERNOR. It is read ONCE, at session creation, and stamped onto that
-	 * session's own `policies.reasoning`. Nothing re-reads it afterwards, so changing it moves no live
-	 * session, and the session's stored policy is true from birth — every reader downstream ( dispatch,
-	 * the harness, the transcript ) is already correct without knowing this field exists.
-	 *
-	 * NULL IS THE ABSENT CASE, exactly as it is for `slug`, and "no default was stated" is NOT the same
-	 * fact as "the default is medium". Nothing synthesizes one: an agent that states nothing gets whatever
-	 * a session is born on, decided by the session module, and this field says nothing about it.
-	 *
-	 * THE AGENT DOES NOT RECEIVE IT. Same rule as `slug` and for a milder version of the same reason: it is
-	 * a fact ABOUT the agent that the agent has no use for, and telling a model how hard it has been asked
-	 * to think is prompt content nobody authored.
-	 *
-	 * Normalized on every write through the accessor, so a malformed stop cannot land from one of four
-	 * callers. CLAMPING TO A MODEL is NOT done here — that needs a model descriptor, which the SDK record
-	 * has no business resolving; see `clampReasoningEffort` and the session-creation path that calls it.
+	 * The default a spawned session is born on: read ONCE at creation and stamped onto that session's own policy.
+	 * Null is 'none stated', never 'medium'. Never shown to the agent; clamping to a model happens at session creation.
 	 */
 	get reasoning(): ReasoningPolicy | null { return this._reasoning; }
 	set reasoning( value: ReasoningPolicy | null | undefined ) { this._reasoning = Agent.normalizeReasoning( value ); }
@@ -525,16 +366,14 @@ export class Agent {
 	composedHabits: string[] = [];
 	composedReferences: string[] = [];
 	composedPlans: string[] = [];
-	/** THE RUN'S deferred set, bound per turn by the host ( `AgentEnvironment.runDeferred` ) and never
-	 *  persisted. NULL — not empty — until a host binds one: empty means "this run defers nothing", and the
-	 *  manifest must be able to tell that apart from "there is no run to ask". */
+	/** The run's deferred set, bound per turn and never persisted. NULL, not empty, until bound: empty means "this run
+	 *  defers nothing", which the manifest must tell apart from "there is no run to ask". */
 	get runDeferred(): readonly string[] | null { return this._layer( 'runDeferred' ) ?? null; }
 
 	/**
-	 * The agent's OWN base habits as LOADED objects ( the `agent` source layer at composition ). Disk is
-	 * a main capability, so main materializes these from `baseHabits` ( the paths ) and they ride the wire
-	 * for the renderer's structured view. Never persisted to the DB ( `baseHabits` is ) — rebuilt from the
-	 * paths on every load/save so it can't go stale. Empty until materialized ( a draft, or a bare wire ). */
+	 * The agent's own base habits as loaded objects, materialized by main from `baseHabits` and rebuilt on every
+	 * load/save so they cannot go stale. They ride the wire for the renderer's view, and are never persisted.
+	 */
 	baseHabitNodes: KCDPrimitive[] = [];
 	/** Lenses the record names that did not load — set by the host that loaded the record. */
 	brokenLenses: BrokenLens[] = [];
@@ -543,113 +382,54 @@ export class Agent {
 	brokenHabits: BrokenHabit[] = [];
 
 	// ── Bound environment: the wire's EXTERNAL layers, injected post-hydration ( `bindEnv` ) ──
-	// The inputs the compiled context needs that aren't the agent's own object graph: the model-bound
-	// root context, the live MCP tool defs ( for the manifest + preload surface ), the baseline PRELOAD
-	// memory + its tag vocabulary, and the session's attachments. Set from OUTSIDE ( the renderer's Agent
-	// store, the main orchestrator ) the same way `baseHabitNodes` is — never persisted, never crosses the
-	// wire, flush-and-filled on change.
-	// With these bound, the agent answers `compiledContext()`/`wireSystem()`/`estimateTokens()` ALONE.
+	// Set from outside, never persisted and never crossing the wire, flush-and-filled on change. With these bound,
+	// the agent answers `compiledContext()` / `wireSystem()` / `estimateTokens()` alone.
 
-	/** What the HOST — Starmind itself — says to every agent running inside it. Leads the compiled context,
-	 *  above even the agent's own identity.
-	 *
-	 *  BOUND like the rest of the environment rather than authored here, and that is the layering: an agent
-	 *  knows WHERE the host's voice sits, never what it says. It is written in code by the dispatch tier —
-	 *  never in the vault, never through a link, and never user-editable, because a user cannot be allowed
-	 *  to rewrite the app's own description of its own surfaces. '' when nothing binds it, which is every
-	 *  SDK-built agent outside a dispatch. */
+	/** What the host says to every agent inside it, leading the compiled context. Bound in code by the dispatch
+	 *  tier, never in the vault and never user-editable: a user must not rewrite the app's account of its surfaces. */
 	get hostPrompt(): string { return this._layer( 'hostPrompt' ) ?? ''; }
 	/**
-	 * What the host says about the INSTALLATION this agent is running in — which copy of the app it is, and
-	 * whatever the person running it wrote about their environment.
-	 *
-	 * ITS OWN LAYER RATHER THAN PART OF `hostPrompt`, and the split is deliberate on both sides. That block is
-	 * the app's account of its own surfaces: authored in code, never user-editable, and priced by a ceiling
-	 * that a free-text field would make meaningless. This one is half derived from live state and half written
-	 * by a person, so it is bound separately, sits just beneath it on the wire, and carries a budget of its
-	 * own. '' when nothing binds it, which is every SDK-built agent outside a dispatch.
+	 * What the host says about the installation this agent runs in. Its own layer, not part of `hostPrompt`: that
+	 * block is code-authored under a fixed ceiling, while this one is part live state and part person-written.
 	 */
 	get hostEnvironment(): string { return this._layer( 'hostEnvironment' ) ?? ''; }
 	/** The live tool defs available to this agent — the flat set the manifest + preload surface read,
 	 *  each carrying its BAKED per-mode counts. Bound from the MCP store; `[]` until bound. */
 	get toolDefs(): ToolDef[] { return this._layer( 'toolDefs' ) ?? []; }
-	/** THE NAME OF THE TOOL THAT FETCHES A DEFERRED SCHEMA, as the model calls it — bound by the host that
-	 *  serves the search, the way `hostPrompt` is, so this package never spells a name it does not own. The
-	 *  manifest's note on deferred tools names the mechanism only when this is set; '' ( every SDK-built
-	 *  agent outside a dispatch ) keeps the note mechanism-free. Added for bug-report-9: a local model told
-	 *  the mechanism only inside a tool result went on calling the one tool it had already fetched. */
+	/** The name of the tool that fetches a deferred schema, as the model calls it. Bound by the host, so this
+	 *  package never spells a name it does not own; unset, the manifest's note stays mechanism-free. */
 	get searchTool(): string { return this._layer( 'searchTool' ) ?? ''; }
 	/** WHETHER THE HOST, NOT US, DECIDES WHICH TOOLS ARE LOADED — see `AgentEnvironment.hostManagedTools`.
 	 *  False until bound, which is the ordinary wire lane: we cut the request, so we can say what is deferred. */
 	get hostManagedTools(): boolean { return this._layer( 'hostManagedTools' ) ?? false; }
-	/** What the installed CONTRIBUTORS returned for this run — each carrying the band it declared. `[]`
-	 *  until bound, when nothing is installed that contributes, and when every contributor came back dry;
-	 *  all three mean the same thing to the compile, which is that those bands emit nothing. */
+	/** What the installed contributors returned for this run, each carrying its band. `[]` emits nothing, whether
+	 *  unbound, uninstalled, or every contributor came back dry. */
 	get contributions(): Contribution[] { return this._layer( 'contributions' ) ?? []; }
-	/** The bound session's PREFILL attachments, already composed ( `Session.attachmentManifest()` ). A
-	 *  STRING like memory, not the entry array: the array lives on the session, which owns
-	 *  it and composes it, and an agent reaching into `session/` would invert the layering — a session is a
-	 *  run of an agent, not the reverse. '' when nothing is attached. */
+	/** The bound session's PREFILL attachments, already composed to a string. An agent reaching into `session/`
+	 *  for the entry array would invert the layering: a session is a run of an agent, not the reverse. */
 	get attachments(): string { return this._layer( 'attachments' ) ?? ''; }
-	/** The bound session's CANONIZED grants ( `Session.grantRows()` ) — the what/where/why rows for
-	 *  everything the user handed this run whose turns have since been compacted.
-	 *
-	 *  STRUCTURED ROWS, unlike `attachments`, and the difference is not a style choice — it is what the
-	 *  destination requires. Attachments ride as an `extraBlock`, which passes through the assembler
-	 *  untouched, so a composed string is exactly right there. Grants ride as a manifest SECTION, and a
-	 *  manifest section is merged: the assembler reads each block's `rows` and re-renders from them, never
-	 *  parsing text back apart. Held as a string, this contributed nothing and every canonized grant was
-	 *  dropped between here and the wire.
-	 *
-	 *  Only the HOISTED set arrives here. A grant whose turn still rides already carries its reference line
-	 *  in the transcript, and a manifest row beside it would state one fact twice; promotion waits for the
-	 *  compaction that removed the line. Empty until something has been canonized, which is most sessions. */
+	/** The bound session's canonized grants, as STRUCTURED ROWS: the manifest section is merged from `rows` and never
+	 *  re-parsed from text. Only the hoisted set arrives; a grant whose turn still rides is already in the transcript. */
 	get grantRows(): SlotRow[] { return this._layer( 'grants' ) ?? []; }
-	/** THE COMMANDS THIS RUN MAY RUN — the objects, not a rendering of them. Bound with the denied ones
-	 *  ALREADY REMOVED: a command a person switched off is ABSENT here rather than present-and-refused, which
-	 *  is the only shape in which "the agent has not heard of it" can be true. `[]` until bound, and `[]` is a
-	 *  legitimate answer — holding no commands is not a failure to bind. */
+	/** The commands this run may run, as objects. Denied ones are ALREADY REMOVED, not present-and-refused: "the
+	 *  agent has not heard of it" is only true in that shape. `[]` is a legitimate answer. */
 	get commandRows(): readonly Command[] { return this._layer( 'commands' ) ?? []; }
 	/**
-	 * THE MANIFEST BANDS this run's tools author for themselves — each a `##` section under `# Manifest`,
-	 * composed by the HOST and bound here already rendered.
-	 *
-	 * A TOOL MAY BE A DOOR ONTO MORE THAN ITSELF. Every tool earns an ordinary manifest row saying what it
-	 * is; a few also OWN a band, which is what turns one tool into the entry point to a body of
-	 * functionality no schema could express — and what lets a person extend an agent's reach by authoring
-	 * content rather than by touching architecture. The command roster is the first: somebody writes a
-	 * command, and this grows a section describing it.
-	 *
-	 * ALREADY NARROWED, AND ALREADY SORTED, both by the host. Narrowed because a band describing something
-	 * the gate would refuse is the same defect as a manifest naming a tool the wire omits, and the passport
-	 * is the only thing entitled to answer that. Sorted because the ORDER is a prefix-cache contract: the
-	 * same holdings must compose the same context every turn, and nothing here is entitled to decide which
-	 * band matters more.
-	 *
-	 * `[]` is a legitimate answer — holding no bands is not a failure to bind.
+	 * The manifest bands this run's tools author for themselves: each a `##` section under `# Manifest`, composed
+	 * and narrowed by the host (the passport alone says what is refused), and sorted: order is a prefix-cache contract.
 	 */
 	get manifestGroups(): readonly { heading: string; body: string }[] { return this._layer( 'manifestGroups' ) ?? []; }
-	/** WHAT THIS RUN HOLDS, said to the agent itself — composed by the HOST from the run's passport and bound
-	 *  here as opaque text.
-	 *
-	 *  DELIBERATELY NOT DERIVED BY THIS OBJECT, and the reason is the same one `hostPrompt` carries: an agent
-	 *  describing its own permissions would be a second author on a question the permission authority already
-	 *  answers, and the failure mode of two authors on that question is a description that is reassuring and
-	 *  wrong. This holds the sentence; it does not write it. '' when nothing governs the run. */
+	/** What this run holds, said to the agent: opaque text the host composes from the run's passport. Not derived
+	 *  here, because two authors of a permission description produce one that is reassuring and wrong. */
 	get capability(): string { return this._layer( 'capability' ) ?? ''; }
-	/** THE ONE SENTENCE that says this project's configuration moved since this session's last turn — '' on
-	 *  every other turn, which is nearly all of them. Opaque bound TEXT like `modeLine`: whether anything
-	 *  changed is dispatch's question, and this object's job is knowing where the answer sits. */
+	/** One sentence saying the project configuration moved since the session's last turn. Opaque bound text:
+	 *  whether anything changed is dispatch's question. */
 	get configNotice(): string { return this._layer( 'configNotice' ) ?? ''; }
-	/** The CALLER's layer above the lens — a room frame, a Constellation step frame, whatever framed this
-	 *  particular turn. Bound per ROUND like the rest of the environment; '' when nothing framed it.
-	 *
-	 *  It trails the agent's own identity for the reason attachments do: general before specific. A standing
-	 *  identity is true of every turn this agent will ever take; a frame is true of exactly one. */
+	/** The caller's layer above the lens: a room or Constellation frame, bound per round. It trails the identity,
+	 *  since general comes before specific: a standing identity is true of every turn, a frame of exactly one. */
 	get frame(): string { return this._layer( 'frame' ) ?? ''; }
-	/** The turn's prompt-SHAPING line — today, the thinking-mode request to reason in the visible reply.
-	 *  Opaque bound TEXT, deliberately not something this object derives: deciding what shapes a turn is
-	 *  dispatch policy, and the agent's only job is knowing where it sits. '' when nothing shapes it. */
+	/** The turn's prompt-SHAPING line (today, the thinking-mode request). Opaque bound text: deciding what shapes
+	 *  a turn is dispatch policy, and this object only knows where the answer sits. */
 	get modeLine(): string { return this._layer( 'modeLine' ) ?? ''; }
 
 	/** What a host BOUND ( `bindEnv` ) — the push half, kept for the dispatch tier, which assembles one
@@ -661,12 +441,8 @@ export class Agent {
 	private _env: EnvReaderFn | null = null;
 
 	/**
-	 * ONE layer of the environment — what the reader answers, else what a host bound, else `undefined` for
-	 * the accessor to fall to its own empty value.
-	 *
-	 * The reader wins where it answers, and a key it leaves `undefined` falls through, so injecting a reader
-	 * never silently blanks a layer only a host can supply — which is what lets the renderer read the four
-	 * layers it can fetch while the dispatch tier keeps binding the twelve it assembles.
+	 * One layer of the environment: the reader's answer, else what a host bound. The reader wins where it answers,
+	 * and an undefined key falls through, so a reader never blanks a layer only a host can supply.
 	 */
 	private _layer<K extends keyof AgentEnvironment>( key: K ): AgentEnvironment[ K ] | undefined {
 		const read = this._env ? this._env()[ key ] : undefined;
@@ -722,31 +498,21 @@ export class Agent {
 
 	// ── Static entry points ──────────────────────────────────────────────────
 
-	/** THE SLUG'S CEILING, in characters. A slug is read off a roster by a router choosing a lane, so an
-	 *  unbounded one is a context leak waiting for somebody to paste an essay into a field nobody thought
-	 *  was load-bearing. 120 is a line. */
+	/** The slug ceiling in characters: a router reads slugs off a roster, so an unbounded one is a context leak. */
 	static readonly SLUG_MAX = 120;
 
-	/** The one normalizer every write goes through ( see the `slug` accessor ). One line, trimmed, clamped —
-	 *  CLAMPED rather than refused, because the field has no failure lane and a silently dropped edit is the
-	 *  worse answer. Empty, blank and undefined all land on null: absent is one state, not three. */
+	/** The one normalizer every write goes through. Clamped rather than refused, since a dropped edit is the worse failure;
+	 *  empty, blank and undefined all land on null: absent is one state, not three. */
 	static normalizeSlug( value: string | null | undefined ): string | null {
 		if( value == null ) return null;
-		// A slug is ONE line by definition, so a newline is folded to a space rather than allowed to make
-		// the roster read multi-line — the cap would otherwise measure something a reader never sees.
+		// Newlines fold to spaces so the roster stays one line and the cap measures what a reader sees.
 		const flat = value.replace( /\s+/g, ' ' ).trim();
 		return flat === '' ? null : flat.slice( 0, Agent.SLUG_MAX );
 	}
 
 	/**
-	 * The one normalizer every write of `reasoning` goes through ( see the accessor ). Absent, null and a
-	 * shape this build cannot read all land on NULL: absent is ONE state, not four, and a half-read policy
-	 * would be a default nobody stated.
-	 *
-	 * REFUSED RATHER THAN REPAIRED, which is the opposite of `normalizeSlug`'s clamp, because the two fail
-	 * differently. A slug is prose and a too-long one still says what it meant; an effort is a name off a
-	 * closed roster and a name not on it means nothing at all. Guessing which stop somebody meant would
-	 * invent a default — exactly the assertion-on-the-agent's-behalf this field exists to stop.
+	 * The one normalizer every write of `reasoning` goes through. Absent, null and an unreadable shape all become null.
+	 * Refused rather than repaired, unlike a slug: guessing which stop somebody meant would invent a default.
 	 */
 	static normalizeReasoning( value: ReasoningPolicy | null | undefined ): ReasoningPolicy | null {
 		if( value == null || typeof value !== 'object' ) return null;
@@ -758,22 +524,8 @@ export class Agent {
 	}
 
 	/**
-	 * The one normalizer every write of `account` goes through ( see the accessor ) — and the whole of what
-	 * makes a non-null field actually non-null.
-	 *
-	 * ABSENT, NULL, BLANK AND THE RESERVED ID ALL LAND ON THE RESERVED ID. Four spellings of "nothing was
-	 * stated" become one, which is the point: the host's cascade has a single thing to fall through on, and
-	 * no reader has to know which of the four it is looking at.
-	 *
-	 * AN AGENT THAT NEVER DISPATCHES CANNOT HOLD AN ACCOUNT, and that is why this takes the model. A
-	 * `Vault.buildAgent` agent exists only to compile context for delivery as CLI text or a tool result
-	 * ( `model: null` ), so an account on it would be a claim about billing with nothing behind it. The
-	 * non-null rule is satisfied by the reserved member rather than by a real id — honestly empty, which is
-	 * the difference between expressing absence and manufacturing a stub that looks valid and fails at send.
-	 *
-	 * NOTHING IS VALIDATED AGAINST THE ROSTER here, deliberately. Whether an id names a live account is a
-	 * main-side fact, and the record resolves nothing — an id whose account has since been deleted falls
-	 * through the host's cascade exactly as a re-keyed model does. This is the SDK's floor, not a gate.
+	 * The one normalizer for `account`: absent, null, blank and the reserved id all become the reserved id.
+	 * Non-dispatching agents always get it (an account there would be a false billing claim); no roster check here.
 	 */
 	static normalizeAccount( account: string | null | undefined, model: string | null ): string {
 		if( model === null ) return ACCOUNTLESS_ACCOUNT_ID;
@@ -791,10 +543,8 @@ export class Agent {
 			opts.name ?? lenses[ 0 ]?.getName() ?? 'agent',
 			opts.icon ?? null,
 			opts.color ?? null,
-			// `=== undefined`, never `??` — the two differ exactly where it matters. ABSENT means "give me the
-			// default" ( an authored agent built without a model ); explicit NULL means "this agent never
-			// dispatches" ( the vault case ). `??` collapses both to the default, which would hand a vault
-			// agent the Test Brain and quietly reintroduce the dishonest field this widening removed.
+			// `=== undefined`, never `??`: absent is the default model, explicit null is a vault agent that never
+			// dispatches, and `??` would collapse the two.
 			opts.model === undefined ? DEFAULT_MODEL_KEY : opts.model,
 			opts.account,
 			opts.systemPrompt ?? null,
@@ -839,9 +589,7 @@ export class Agent {
 			json.slug ?? null,
 			json.reasoning ?? null,
 		);
-		// The materialized habits ride the wire ( the renderer can't dredge disk ). Main
-		// re-materializes from the paths on every load/save, so an absent field just means "not materialized
-		// yet", never a loss.
+		// Main re-materializes from the paths on every load/save, so an absent field means not-yet, never a loss.
 		agent.baseHabitNodes = ( json.baseHabitNodes ?? [] ).map( ( n ) => KCDPrimitive.fromSerialized( n ) );
 		agent.brokenLenses   = ( json.brokenLenses ?? [] ).map( ( b ) => ( { ...b } ) );
 		agent.brokenHabits   = ( json.brokenHabits ?? [] ).map( ( b ) => ( { ...b } ) );
@@ -902,14 +650,8 @@ export class Agent {
 	// ── Composition (flush-and-fill; trust the children) ──────────────────────
 
 	/**
-	 * Rebuild every `composed{X}` from the current lenses — wholesale, no deltas. Ask each lens
-	 * for its Know graph and sort the contributed paths by artifact type. Cheap (in-memory; the
-	 * expensive dredge already happened when the lens was loaded), so call it freely: at
-	 * construction, and whenever a base string or a lens changes.
-	 *
-	 * NO TOOLS COME OUT OF A LENS. A lens is documentation — personality, philosophy and references — and
-	 * tools belong to the agent ( task 58 ). There were two composed tool maps here, overlaid lens by lens;
-	 * they contributed nothing after that ruling and are gone.
+	 * Rebuild every `composed{X}` wholesale from the current lenses, never by delta. Cheap, so call it on every change.
+	 * No tools come out of a lens: tools belong to the agent.
 	 */
 	compose(): void {
 		const nodes = this.lenses.flatMap( ( l ) => l.getNodes() );
@@ -919,30 +661,16 @@ export class Agent {
 	}
 
 	/**
-	 * READ the environment instead — hand the agent a reader and it pulls its external layers on access,
-	 * the way a lens pulls its document. Idempotent; `null` takes it back to whatever a host bound.
-	 *
-	 * THIS IS THE HALF THE RENDERER USES, and it replaced a binder in its Agent store that pushed four
-	 * layers onto every agent on every source change. The objection to that binder was never that it was
-	 * wrong — it was that a layer had to be added in two places, the compile and the push, and nothing made
-	 * the second one happen. A reader answers the whole `AgentEnvironment`, so a new layer reaches the
-	 * preview the moment the compile reads it.
+	 * Hand the agent a reader it pulls its external layers from on access, the way a lens pulls its document.
+	 * Idempotent; `null` takes it back to whatever a host bound.
 	 */
 	setEnvReader( read: EnvReaderFn | null ): void {
 		this._env = read;
 	}
 
 	/**
-	 * Bind the wire's EXTERNAL layers onto the agent — the environment `compiledContext()` needs beyond the
-	 * agent's own object graph. Flush-and-fill, like `compose()`: pass the whole environment ( a partial
-	 * overwrites only the keys it names ), call it whenever a source changes, and trust the fresh rebuild.
-	 * Cheap; there is no delta path to keep in sync.
-	 *
-	 * THE PUSH HALF, and it belongs to the DISPATCH TIER — the orchestrator assembles one environment per
-	 * round from things no reader could ask for ( the run's passport, this turn's attachments, the caller's
-	 * frame ) and binds it on the canonical agent. A surface with sources it can read from instead injects a
-	 * reader; see `setEnvReader`. Where both exist the reader wins per key, and a key it does not answer
-	 * still falls through to what was bound here. Never persisted — this is live environment, not identity.
+	 * Push half for the dispatch tier: a partial bind overwrites only its keys, flush-and-fill like `compose()`.
+	 * Never persisted: this is live environment, not identity. Where a reader also answers, the reader wins per key.
 	 */
 	bindEnv( env: AgentEnvironment ): void {
 		const next: AgentEnvironment = { ...this._bound };
@@ -953,12 +681,8 @@ export class Agent {
 	}
 
 	/**
-	 * THE TOOLS THIS AGENT CARRIES, by identity — the ones at `on` or `preload`, with the mode each is at.
-	 *
-	 * NOTHING UNCARRIED SURVIVES, so no reader can forget to check. `off` is never stored, but a map written
-	 * by an older build or hand-edited can still hold one, and it is dropped here rather than trusted.
-	 *
-	 * A LENS IS NOT READ HERE, and there is nothing to read: tools belong to the agent.
+	 * The tools this agent carries, by identity: those at `on` or `preload`. An `off` left in a stale or hand-edited
+	 * map is dropped here, so no reader can forget to check.
 	 */
 	carriedTools(): Record<string, ToolMode> {
 		const held: Record<string, ToolMode> = {};
@@ -967,13 +691,8 @@ export class Agent {
 	}
 
 	/**
-	 * HOW MUCH OF ONE TOOL RIDES — `preload` for its whole schema, `on` for its manifest line, `off` for a
-	 * tool this agent does not carry.
-	 *
-	 * NO RUN LAYER ABOVE IT. A session used to be able to hold its own surfaces, bound per turn by the host,
-	 * because the cost axis lived on the passport. It does not: preload is semantic priming, decided while
-	 * building the agent, and a run in flight can simply call for a schema it turns out to want. One answer,
-	 * from the prototype, for every session of it.
+	 * How much of one tool rides: `preload` for its whole schema, `on` for its manifest line, `off` if not carried.
+	 * There is no per-run layer above this; preload is decided while building the agent, not per session.
 	 */
 	toolModeFor( id: string ): ToolMode {
 		const mode = this.toolModes[ id ];
@@ -981,11 +700,8 @@ export class Agent {
 	}
 
 	/**
-	 * The mode a LENS authored for one path — read off its policy table, or `on` for a node a lens dredges
-	 * without naming. `null` when no lens supplies the path. Final: an agent cannot change it.
-	 *
-	 * Read from POLICY, never from the node's live `included` flag, which `getContextBlocks` sets on the
-	 * agent's own habits every compile. Policy is authored state; it holds still.
+	 * The mode a lens authored for one path: its policy entry, `on` for an unnamed node, or `null` if none supplies it.
+	 * Read from POLICY, not the live `included` flag, which `getContextBlocks` rewrites on every compile.
 	 */
 	lensMode( path: string ): SlotMode | null {
 		const norm  = ( s: string ): string => s.replace( /\\/g, '/' );
@@ -1005,28 +721,8 @@ export class Agent {
 	// ── Lens surface ──────────────────────────────────────────────────────────
 
 	/**
-	 * THE composition surface — every file in this agent's compiled context, priced at what it really costs.
-	 *
-	 * The read a composition view wants, as opposed to `compiledBlocks()`, which is the read the WIRE wants.
-	 * Same underlying compile, projected by artifact instead of by block, so a chart built on this and the
-	 * text that ships can never disagree. Rows come out in load order: each lens, then the files it brings.
-	 *
-	 * Where each weight comes from:
-	 *
-	 * - **A lens** — its own non-care body plus its share of the merged care bands. The bands merge every
-	 *   lens's prose into one block, so a share is apportioned proportionally against the band's REAL weight
-	 *   rather than by summing the parts ( the merge strips each section's heading and adds its own labels,
-	 *   so the parts do not equal the whole ). Without this the inheritance floor prices at zero, because
-	 *   base is care prose and routing tables and nothing else.
-	 * - **`load`** — the artifact's own blocks in the compiled body. Real text, real weight.
-	 * - **`on`** — its surviving row in the deduped manifest ( `ContextAssembler.manifestRows` ). An `on`
-	 *   artifact contributes a pointer, not a body, and that row is the only text it puts on the wire.
-	 * - **`off`, or a slot nothing fills** — zero, and still listed. What an object declines is part of how
-	 *   it is composed, so the inventory keeps it.
-	 *
-	 * Walks POLICY rather than the dredged node list, because the dredge drops `off` targets and plans
-	 * entirely — the inventory has to survive that. An artifact several lenses declare is attributed once,
-	 * to the first, matching the compile's own dedup.
+	 * Every file in this agent's compiled context, priced at its real cost, in load order. Walks POLICY rather than the
+	 * dredge, so `off` artifacts stay listed. Care prose is apportioned from the merged bands, never summed per part.
 	 */
 	composition(): CompositionRow[] {
 		const norm      = ( s: string ): string => s.replace( /\\/g, '/' );
@@ -1057,9 +753,8 @@ export class Agent {
 		const root = this.firstLens;
 		const rel  = ( abs: string ): string => norm( ( root ?? this.lenses[ 0 ] )?.vaultRelative( abs ) ?? abs );
 
-		// A habit a more specific layer displaced puts nothing on the wire, so the chart must not price
-		// it as though it did — chart and compile are two projections of one plan, and the whole reason the
-		// slot bug read as correct behaviour was that they disagreed.
+		// A displaced habit puts nothing on the wire, so the chart must not price it: chart and compile are one
+		// plan projected twice, and must agree.
 		const displaced = this.displacedHabitPaths();
 
 		// A file's slot is its own `habit-class` frontmatter ( protocol §6 ) — the mutual-exclusion class
@@ -1122,13 +817,8 @@ export class Agent {
 	}
 
 	/**
-	 * The FIRST lens in the stack, or null for a draft.
-	 *
-	 * It was `primaryLens` until 2026-09-26, and the rename is the point rather than tidying: "primary"
-	 * meant the lens that supplied the agent's personality, and personality is authored on the agent now
-	 * ( `systemPrompt` ). No lens outranks another. What position still decides is narrow and mechanical —
-	 * which lens claims a reference two of them name — so the accessor says what it returns, which is the
-	 * first one, and callers that just want "a lens to put a name to" are no longer implying a rank.
+	 * The first lens in the stack, or null for a draft. No lens outranks another: position only decides which
+	 * lens claims a reference two of them name.
 	 */
 	get firstLens(): LensObject | null { return this.lenses[ 0 ] ?? null; }
 
@@ -1149,37 +839,18 @@ export class Agent {
 	// ── Context assembly ────────────────────────────────────────────────────────
 
 	/**
-	 * THE context-composition point — the fat-object query, and the ONE source of truth every reader
-	 * below shares. It asks each lens for its region-blocks ( a lens recursively folds its own dredged +
-	 * injected nodes ), then adds this agent's OWN materialized base habits tagged the `agent` source
-	 * layer ( so they OUTRANK the lens in a contended slot — an agent's habit choice supersedes the
-	 * lens's, the composability of behaviour ). Deduped so one artifact contributes ONCE, from its most
-	 * specific source. `contribute()` ( the wire text ) and `slots()` ( the structured view ) are both
-	 * thin reads of this, so a composition screen can never show a resolution the compiled context
-	 * doesn't honour, and neither can drift into a leak the other doesn't see.
+	 * The one composition point: every reader reads it, so no view can show a resolution the compile does not honour.
+	 * Base habits outrank the lens in a contended slot; one artifact contributes once, from its most specific source.
 	 */
 	getContextBlocks(): TaggedBlock[] {
-		// A lens compiles as it was authored — its dredged nodes carry the mode its policy gave them. The agent's
-		// own habits are the only thing this layer decides: `load` rides the full body, anything else held
-		// rides as its one-line routing row ( `setIncluded( false )` ). Taking a habit off is removing it.
-		//
-		// ONE ARTIFACT, ONE CONTRIBUTOR ( bug-report-26 ). Lenses are walked in STACK ORDER and each artifact
-		// path is claimed by the first lens to contribute it; a later lens's copy of that path is dropped
-		// whole. A path is the id — no file shares one — so this is a dictionary insert and nothing here has
-		// to reason about what a block contains.
-		//
-		// CLAIMED PER LENS, NOT PER BLOCK, and that is the whole trick: an artifact hands over all its regions
-		// inside ONE lens's pass, so they all ride, while the same artifact reached through a second lens finds
-		// its path already taken. Deduping a flat block list cannot draw that line — one artifact's three
-		// regions and three lenses' copies of one region are both "three blocks sharing a path" by then, which
-		// is why the fix belongs here and not downstream in `dedupeBySource`.
+		// Lenses are walked in stack order and the first to contribute an artifact path claims it, so one artifact
+		// contributes once. Claimed per lens, not per block: a flat block list cannot tell one artifact's regions from a copy.
 		const claimed: Set<string> = new Set();
 		const lensBlocks: TaggedBlock[] = [];
 		for ( const lens of this.lenses ) {
 			const blocks = lens.getContextBlocks();
 			for ( const b of blocks ) if ( !claimed.has( b.path ) ) lensBlocks.push( b );
-			// Claimed AFTER the lens is drained, never during — claiming as we go would let an artifact's own
-			// second region collide with its first.
+			// Claimed after the lens drains: claiming as we go would let an artifact's second region collide with its first.
 			for ( const b of blocks ) claimed.add( b.path );
 		}
 		const habitBlocks = this.baseHabitNodes.flatMap( node => {
@@ -1190,20 +861,8 @@ export class Agent {
 	}
 
 	/**
-	 * The anti-leak core: one ARTIFACT contributes once, from its most-specific ( lowest-rank ) source
-	 * layer. When the same path arrives from two layers — a base habit the lens also dredges, an injected
-	 * node already loaded — the more specific layer's blocks win and every block of the losing layer is
-	 * dropped BEFORE slot resolution, so a duplicate can never survive into the corpus. Same-path,
-	 * same-rank blocks all stay ( one artifact's several regions ), and load order is preserved throughout.
-	 *
-	 * THE LAYER AXIS IS ALL THIS OWNS ( bug-report-26, 2026-09-25 ). It once carried the whole burden and
-	 * could not: every lens tags its blocks `lens`, so a reference three stacked lenses each load arrived as
-	 * three same-path, SAME-RANK blocks, all tied for best, all kept — `js-style-guide` rode three times in
-	 * Churchill's context, ~5-6k tokens every turn. The carve-out above was the hole, and it cannot be
-	 * closed here: by this point one artifact's several regions and several lenses' copies of one region are
-	 * the same shape, and dropping either would cost real content. Sibling lenses are now settled upstream
-	 * in `getContextBlocks`, where the lens boundary is still visible and a path is a clean key. Every block
-	 * reaching here has already contributed exactly once per layer.
+	 * Anti-leak core: an artifact contributes once, from its most specific (lowest-rank) layer, before slot resolution.
+	 * Same-rank blocks all stay (one artifact's regions); sibling lenses are settled in `getContextBlocks`, not here.
 	 */
 	static dedupeBySource( blocks: TaggedBlock[] ): TaggedBlock[] {
 		const best = new Map<string, number>();
@@ -1216,11 +875,8 @@ export class Agent {
 	}
 
 	/**
-	 * The recursive context query as one source-blind string: `getContextBlocks()` run through
-	 * `SlotResolver` ( habit-class contention resolved — a losing log-action-ask never rides alongside
-	 * the log-action-often it lost to ) and `ContextAssembler` ( merged by `data-kcd-merge-key`,
-	 * sorted Care-first / injected-last ). A draft contributes nothing. ( The `systemPrompt` lever rides the
-	 * wire but is not prepended here — `wireSystem` folds it in. )
+	 * `getContextBlocks()` run through `SlotResolver` and `ContextAssembler`, as one source-blind string.
+	 * A draft contributes nothing; the `systemPrompt` is not prepended here, since `wireSystem` folds it in.
 	 */
 	contribute(): string {
 		if ( !this.lenses.length ) return '';
@@ -1228,64 +884,23 @@ export class Agent {
 	}
 
 	/**
-	 * THE compiled context surface ( the context-compiler, 2026-07-12 ) — the Agent owns the WHOLE
-	 * assembly, not just identity. Shape: the merged body FIRST, then a MANIFEST at the very bottom
-	 * ( once ). The lens's identity + prose is the cache-stable prefix that rarely changes turn to turn,
-	 * so it leads; the manifest is the changeable, curated surface of affordances, so it trails ( Bryan,
-	 * 2026-07-12: "place all manifest at the bottom of the context window" ).
-	 *
-	 * The manifest is what/where/why tables — the one format ( `- what — why (where)` ) that stays
-	 * identical for agents and engineers all the way through: a `Files` table naming every loaded lens
-	 * ( name — description — vault-relative path, the file's ID ), then one deduped routing table per
-	 * `MANIFEST_SECTIONS` entry ( References / Domains / Habits / Contracts ) listing every affordance the
-	 * agent can hit indirectly. It is NOT an index of "where the content is" — it is a section of tools /
-	 * interactable surfaces, and its curation is a first-class lever.
-	 *
-	 * The body is every loaded artifact's full text, habit-class-resolved ( `SlotResolver` ) then merged
-	 * + sorted ( `ContextAssembler` ), with NO per-artifact header: a loaded file's identity lives once
-	 * in the manifest, its content merges into the body at its point. The legacy `stub` ( Available-on-
-	 * request ) block is dropped — the References table already carries those rows. A draft compiles to
-	 * nothing.
+	 * Merged body first, then the manifest at the bottom: the stable prose leads and the changeable tables trail.
+	 * A draft compiles to nothing; the legacy `stub` block is dropped, since the References table already carries it.
 	 */
 	compile(): string {
 		return Agent.projectSystem( this.compiledBlocks() );
 	}
 
 	/**
-	 * THE compiled-block currency ( the compiled-context plan, 2026-07-12/13 ) — the flat, merged,
-	 * post-resolution `TaggedBlock[]` `compile()` now projects to text. Shape ( band model re-ratified
-	 * 2026-07-13 ): the merged body — **Care** ( by-kind `# Purpose` / `# Philosophy` bands, `buildCareBands` ) → **Memory**
-	 * ( reserved, empty ) → **Knowledge** ( core, forced-read ), via `ContextAssembler.assembleBlocks` +
-	 * `withBandHeadings` — first, then the bottom-of-context **Manifest** blocks ( `manifestBlocks()` —
-	 * Files, then each non-empty `MANIFEST_SECTIONS` table, in `INDEX_ORDER` ), each pair of PRESENT
-	 * segments separated by a literal `---` divider block. Kept as TWO separate assembles rather than one
-	 * combined pass through `ContextAssembler.sort` on purpose: a single pass would tier `injected` BELOW
-	 * `manifest` ( matching `ContextAssembler`'s own documented intent ), but today's actual wire puts
-	 * injected content ABOVE the manifest — unifying the sort would silently change output whenever a
-	 * session has injected content, which is a real behavior change, not a refactor. Flagged in the plan;
-	 * not resolved either way here.
-	 *
-	 * `extras` ( Phase 2, 2026-07-13 ): `before` rides ahead of the body ( the model-bound root context —
-	 * the ONE layer that genuinely leads everything else ), `after` trails the manifest ( the on-mode
-	 * tool manifest, every preload tool's full schema — today assembled renderer-side in
-	 * `Session.wireSystemFor` ). A flat trailing array couldn't express "some extras lead, some trail";
-	 * this is the real positioning the Phase 1 doc comment deferred to Phase 2.
-	 *
-	 * `contributed` — what the installed CONTRIBUTORS returned, each block already tagged with the band its
-	 * server declared. Unlike `before`/`after` it does NOT bracket the join: it joins the BODY block list
-	 * and sorts by declared tier ( `ContextAssembler.tierOf` ), because a contribution's position is a
-	 * property of the merged sort rather than a fixed lead/trail slot. Band headings are spliced by
-	 * `withBandHeadings` like any other body tier, and a tier with no members contributes nothing to splice
-	 * around — so a band nobody filled emits no bare heading.
+	 * The flat, merged `TaggedBlock[]` that `compile()` projects: body (Care, Knowledge) first, then the manifest tables,
+	 * with `before`/`after` bracketing the join and `contributed`/`sections` sorted into the body by their declared tier.
+	 * Body and manifest are assembled separately: one sort would tier `injected` below `manifest`, which the wire does not do today.
 	 */
 	compiledBlocks( extras: { before?: TaggedBlock[]; after?: TaggedBlock[]; contributed?: TaggedBlock[]; sections?: TaggedBlock[] } = {} ): TaggedBlock[] {
 		const before = extras.before ?? [];
 		const after  = extras.after ?? [];
 		const contributed = extras.contributed ?? [];
-		// `sections` joins the BLOCK LIST rather than bracketing the join, for the reason `contributed` does: its
-		// position is a property of the merged sort, not a fixed lead/trail slot. A manifest-tagged block
-		// sinks to the manifest tier and fuses with the lens graph's own rows for that section — which is
-		// how a SESSION-sourced table ( grants ) lands in the same place an artifact-sourced one does.
+		// `sections` joins the block list, not the bracket: a manifest-tagged block fuses with the lens's own rows for that section.
 		const sections = extras.sections ?? [];
 		if ( !this.lenses.length ) return Agent.joinSegments( [ before, contributed, sections, after ] );
 		const blocks  = [ ...SlotResolver.compilePlan( this.getContextBlocks() ).survivors, ...contributed, ...sections ];
@@ -1293,21 +908,14 @@ export class Agent {
 		// The body is everything that ISN'T an index table and isn't the legacy Available-on-request stub.
 		const body = blocks.filter( b => !inIndex( b ) && b.section !== 'stub' );
 
-		// The care bands ( compilation pass, 2026-07-19 ): the care-region prose, grouped by KIND — one
-		// `# Purpose` / `# Philosophy` block merging every lens's contribution as labeled `## {lens}`
-		// sub-sections ( primary marked + leading, base last ). Built here ( `buildCareBands` ) rather than
-		// in the generic merge because it needs lens NAMES + primacy; handed back as ordinary care-tier
-		// blocks, so `withBandHeadings` still keeps care first with no wrapper heading over it.
+		// Care prose is grouped by kind, one `## {lens}` sub-section per lens; built here because it needs lens names and primacy.
 		const careBlocks = body.filter( b => b.region === 'care' );
 		const rest       = body.filter( b => b.region !== 'care' );
 		const careBands  = this.buildCareBands( careBlocks );
 
-		// Band headings over the body's tiers — real headings on the real wire text, not a view-only re-skin.
-		// Fires per NON-EMPTY tier only, so an agent with no core content never carries a bare "# Knowledge"
-		// over nothing. Injections bring their own heading and so get none from here.
+		// Band headings fire per non-empty tier only, so no bare heading lands over nothing.
 		const bodyBlocks  = ContextAssembler.withBandHeadings( ContextAssembler.assembleBlocks( [ ...careBands, ...rest ] ) );
-		// Habit-class contention has to be settled over the NODE inventory, not the blocks: an `on`-mode
-		// habit emits no blocks at all, so `SlotResolver` never sees it contend ( see `displacedHabitPaths` ).
+		// Habit contention is settled over nodes, not blocks: an `on`-mode habit emits no block for `SlotResolver` to see.
 		const rawManifest = this.manifestBlocks( Agent.withoutRows( blocks.filter( inIndex ), this.displacedHabitPaths() ) );
 		const manifestBlocks = rawManifest.length
 			? [ ContextAssembler.headingBlock( ContextAssembler.bandHeading( ContextAssembler.TIER.manifest )! ), ...rawManifest ]
@@ -1320,9 +928,7 @@ export class Agent {
 	// agent's own bound environment, so ONE zero-arg call answers "what is my context" and both the renderer
 	// preview and ( Phase 5 ) the send path read the SAME method — no second door, no drift by construction.
 
-	/** The documents this agent's lenses are still waiting on — empty once its compile is complete, and always
-	 *  empty in main, whose reader is disk. A caller shows a pending state while it is not, and composes again
-	 *  once it is. */
+	/** Documents the lenses are still waiting on; always empty in main, whose reader is disk. */
 	pending(): string[] {
 		const out: string[] = [];
 		for ( const lens of this.lenses ) out.push( ...lens.pending() );
@@ -1330,107 +936,44 @@ export class Agent {
 	}
 
 	/**
-	 * THE compiled context for this agent's live wire — `compiledBlocks()` with the bound environment folded
-	 * in as real blocks: the model root context LEADS ( `before` ), each package's injection sorts into its band,
-	 * and the TOOL MANIFEST, the attachments and the two caller layers TRAIL ( `after` ).
-	 * An injection rides only while this agent's own per-package gate is on. Zero-arg: the extras that
-	 * used to be hand-gathered in `Session.compiledBlocksFor` are the agent's own bound env now.
-	 *
-	 * WHAT IS DELIBERATELY NOT HERE: a preload-surface tool's SCHEMA. It rides the request's own `tools`
-	 * array, which is where a schema belongs — the field the provider parses, caches and validates calls
-	 * against. Prose beside it bought nothing and cost the schema twice on every single turn, which on a
-	 * dozen preloaded tools is the largest duplicate in the context.
-	 *
-	 * THE TOOL ITSELF IS VERY MUCH HERE, and that distinction cost a real defect to learn ( 2026-09-05 ).
-	 * Cutting the duplicated schema also cut the only place a preloaded tool was named beside its SERVER,
-	 * and the wire carries no server at all — so those tools stayed callable and stopped being
-	 * identifiable. The manifest names every tool the run holds; the surface axis decides what one COSTS,
-	 * never whether it is named. The schema is what still divides them, and only the schema.
-	 *
-	 * This list is TOTAL — every layer that reaches the system wire is a block in it, including the caller's
-	 * frame and the turn's shaping line, which the dispatcher used to join onto the projected text from
-	 * outside. Totality is the point rather than a tidiness: it is what lets the wire, the round breakdown,
-	 * the budget and the renderer preview all be projections of one object instead of four descriptions of
-	 * the same thing, which is how they drifted before.
+	 * The live wire's context: `compiledBlocks()` with the bound environment folded in as blocks, zero-arg.
+	 * Every layer that reaches the system wire is in this list, so the wire, budget and preview all project one object.
+	 * A preload tool's schema stays in the request's `tools` array, not here; the tool still must be named here, since the wire carries no server.
 	 */
 	compiledContext(): TaggedBlock[] {
 		const manifest  = this.toolManifest();
 		const bands     = this.manifestBands();
-		// The host narrows before it CALLS a contributor, so a disabled one costs nothing. This is the same
-		// answer read a second time, on the object that owns it — a bound env from anywhere still obeys.
+		// The host narrows before it calls a contributor; this is the same gate read again on the owning object.
 		const contributed = this.contributions.filter( ( c ) => this.injectionEnabled( c.id ) );
-		// Canonized grants ride as a real MANIFEST section, not as a trailing extra — they are a what/where/why
-		// lookup table exactly like References and Habits, and tagging them as one is what puts them under the
-		// `# Manifest` band with its read-on-demand directive rather than inside required reading. Being a
-		// section also means the compressive merge dedupes them for free.
-		// EMPTY MEANS ABSENT, and it has to be checked on the rows rather than on a composed string: a
-		// heading with nothing under it is not a harmless artifact of an empty session, it is what a dropped
-		// table looks like, and it told every reader the section was working.
+		// Grants are a manifest section, not a trailing extra, so they sit under the `# Manifest` band.
+		// Empty means absent, checked on the rows: a heading over nothing reads as a dropped table.
 		const grants = this.grantRows.length
 			? [ Agent.sectionBlock( 'grants', this.grantRows.map( ( r ) => KcdContext.renderRow( r ) ).join( '\n' ), this.grantRows ) ]
 			: [];
 		return this.compiledBlocks( {
 			sections: grants,
 			before: Agent.joinSegments( [
-				// The HOST's own prompt leads everything — Starmind describing the environment the agent is
-				// running inside, above the agent's identity rather than beside it. Ordered first for the
-				// prefix cache as much as for meaning: it is the most-SHARED layer on the wire, identical for
-				// every agent in every session, and a cache invalidates from the earliest edit forward, so the
-				// layer that never varies belongs where nothing beneath it can force it to be re-prefilled.
+				// Host prompt leads: the most-shared layer, identical across agents, so it sits where nothing above can invalidate it.
 				this.hostPrompt   ? [ Agent.extraBlock( 'host-prompt',   this.hostPrompt   ) ] : [],
-				// WHICH INSTALLATION THIS IS, directly under the host's voice and above the agent's identity.
-				// Positioned for the prefix cache on the same argument the host prompt is: it is shared by every
-				// agent in this instance and changes only when a person edits their note, so it belongs above
-				// everything that varies per agent and per turn. Beneath the host prompt rather than above it
-				// because that block is identical in every INSTALL as well, and a cache invalidates forward.
+				// Host environment follows the host prompt: shared per instance, so above everything per-agent or per-turn.
 				this.hostEnvironment ? [ Agent.extraBlock( 'host-environment', this.hostEnvironment ) ] : [],
-				// The agent's NAME, straight after the host. Per-agent where the host is shared, and stable across
-				// every turn this agent takes, so it sits above everything that varies more.
+				// Name follows the host: stable across every turn this agent takes.
 				this.nameBlock()  ? [ Agent.extraBlock( 'agent-name',    this.nameBlock()  ) ] : [],
-				// The agent's OWN authored instruction follows it — the most specific statement of
-				// who this agent is, and it led the wire long before the compile existed ( the orchestrator's
-				// old `assembleSystem([ systemPrompt, ... ])` put it first ). Folding it in HERE is what closes
-				// the preview ≠ wire gap on the system half: the preview showed the compile WITHOUT the system
-				// prompt while the wire always carried it, so every context gauge read low by its weight.
+				// The authored system prompt sits here so the preview and the wire carry the same weight.
 				this.systemPrompt ? [ Agent.extraBlock( 'system-prompt', this.systemPrompt ) ] : []
 			] ),
 			contributed: contributed.map( ( c ) => Agent.contributionBlock( c ) ),
 			after: Agent.joinSegments( [
 				manifest ? [ Agent.extraBlock( 'tool-manifest', manifest ) ] : [],
-				// THE AUTHORED BANDS CLOSE THE MANIFEST — second categories beside the tool manifest, never
-				// subsections inside it. The command roster is the one that made the argument and it generalizes
-				// unchanged: a command is not a tool from a different source, it has no tier, no deferred schema
-				// and its own call convention, and the same is true of whatever a later tool authors for itself.
-				// Sat with the manifests rather than with the volatile trailers below because a roster is STABLE
-				// across a conversation, and the prefix cache wants the settled things above the churning ones.
-				//
-				// ONE BLOCK FOR ALL OF THEM, not one block each. The tag names the CATEGORY, and a per-band tag
-				// would let the set of blocks change shape with a person's authoring — which is a compiled-context
-				// surface moving for a reason no reader of it could see.
+				// Authored bands close the manifest as sibling categories, one block for all of them, not subsections of the tool manifest.
 				bands     ? [ Agent.extraBlock( 'manifest-groups', bands ) ] : [],
-				// WHAT IT MAY DO closes the band that said what it HOLDS. Last of the three because it is the
-				// most run-specific: tools and commands are configuration, while this is one run's resolved
-				// policy and moves the moment a person touches the deck. The prefix cache wants the churning
-				// layer below the settled ones — and when it does churn, invalidating from here is correct
-				// rather than unfortunate: the agent's capability actually changed.
+				// Capability is last of the three: it is the most run-specific, so the churning layer goes below the settled ones.
 				this.capability ? [ Agent.extraBlock( 'capability', this.capability ) ] : [],
-				// THE CONFIGURATION NOTICE sits beside capability and for the same reason: it is about this run's
-				// environment rather than about what the agent is, and it is the most volatile block of the three.
-				// It appears on one turn and vanishes on the next, and a prefix cache invalidates from the earliest
-				// edit forward — so it belongs as LOW as its meaning allows. Below capability rather than above it
-				// because capability rides every turn and this rides almost none, and the churning layer goes last.
-				// Empty is the normal case and drops the block entirely.
+				// Config notice is the most volatile block, so it sits as low as its meaning allows; empty drops it.
 				this.configNotice ? [ Agent.extraBlock( 'config-notice', this.configNotice ) ] : [],
-				// Attachments TRAIL the whole system half, deliberately. They are its most volatile part — a
-				// user attaches and detaches mid-conversation while root context and lens identity sit still —
-				// and prefix caching invalidates from the earliest edit forward, so the churning thing belongs
-				// last. Placed beside root context it would re-prefill the lens + tool weight on every attach.
+				// Attachments trail the system half: they churn mid-conversation, and placed earlier would re-prefill everything beneath.
 				this.attachments ? [ Agent.extraBlock( 'attachments', this.attachments ) ] : [],
-				// The two CALLER layers close the system half. They were joined onto this string from OUTSIDE
-				// until the one-assembly pass; folding them in is what makes this list TOTAL, so the wire, the
-				// round breakdown, the budget and the renderer preview each project from one place instead of
-				// three of them rebuilding it separately. The order is the order the hand-assembly used —
-				// frame, then shaping — which is what keeps the projection byte-identical to what it replaced.
+				// Frame, then shaping: the order the hand-assembly used, kept so the projection stays byte-identical.
 				this.frame    ? [ Agent.extraBlock( 'frame', this.frame ) ] : [],
 				this.modeLine ? [ Agent.extraBlock( 'mode-line', this.modeLine ) ] : []
 			] )
@@ -1459,28 +1002,14 @@ export class Agent {
 		return blocks.map( b => b.text ).join( '\n\n' );
 	}
 
-	/** The system half a real turn sends — `compiledContext()` projected to text. THE one string, and the
-	 *  WHOLE of it: `_buildReq` sends exactly this, with nothing joined on afterwards, and the renderer
-	 *  preview reads the same method — so preview == wire by construction rather than by two formulas kept
-	 *  in step. Its dynamic twin is `session.wireMessages()`. */
+	/** The system half a real turn sends: `compiledContext()` projected to text, and nothing joined on after it. */
 	wireSystem(): string {
 		return Agent.projectSystem( this.compiledContext() );
 	}
 
 	/**
-	 * The same compiled list, projected to the per-source BREAKDOWN the round record and the inspector read
-	 * — `wireSystem()`'s sibling, and the second of the two projections this object exists to serve.
-	 *
-	 * A projection, never a second derivation. The breakdown used to be rebuilt from the agent's parts by a
-	 * different method under different rules, which is precisely how it came to disagree with the string
-	 * that shipped. Reading the one list makes the two incapable of drifting, and the property is
-	 * CHECKABLE rather than merely intended: joining these segments' text reproduces `wireSystem()` exactly,
-	 * because every block's text reaches exactly one segment.
-	 *
-	 * Adjacent blocks sharing an identity merge into one segment, which is what keeps structure out of the
-	 * reader's way — a divider does not become a row that says nothing, and one source does not appear
-	 * twice under the same name. Counts are null here: the tokenizer lives main-side on the connector, and
-	 * a guess would be worse than an absence.
+	 * The same compiled list projected to the per-source breakdown: joining the segments reproduces `wireSystem()` exactly.
+	 * Counts are null: the tokenizer lives main-side, and a guess would be worse than an absence.
 	 */
 	contextSegments(): ContextSegment[] {
 		const out: ContextSegment[] = [];
@@ -1490,10 +1019,7 @@ export class Agent {
 		for ( const block of this.compiledContext() ) {
 			const owner = Agent.segmentKey( block );
 
-			// STRUCTURAL — a `---` divider or a band heading. It has no identity of its own, and it belongs
-			// to the segment it INTRODUCES rather than to the one before it, so hold it until that segment
-			// arrives. Holding rather than dropping is what keeps this a projection: every block's text
-			// reaches exactly one segment, so joining the segments reproduces the wire.
+			// Structural blocks (dividers, band headings) belong to the segment they introduce, so they wait for it.
 			if ( !owner ) {
 				pending.push( block.text );
 				continue;
@@ -1502,8 +1028,7 @@ export class Agent {
 			const text = [ ...pending, block.text ].join( '\n\n' );
 			pending = [];
 
-			// The open segment already carries this identity, so this block continues it rather than
-			// starting a second segment under the same name.
+			// Same identity as the open segment: continue it rather than open a second under one name.
 			const open = out[ out.length - 1 ];
 			if ( open && open.source === owner.source && open.label === owner.label ) {
 				open.text = open.text + '\n\n' + text;
@@ -1513,34 +1038,21 @@ export class Agent {
 			out.push( { source: owner.source, label: owner.label, text, tokens: null } );
 		}
 
-		// A TRAILING divider has nothing after it to introduce, so it joins the last segment instead. A
-		// compile of nothing but structure has no segment to join, and produces none.
+		// A trailing divider joins the last segment; a compile of only structure produces no segments.
 		const last = out[ out.length - 1 ];
 		if ( pending.length && last ) last.text = last.text + '\n\n' + pending.join( '\n\n' );
 
 		return out;
 	}
 
-	/** This agent's whole-context token ESTIMATE — a single pile over its assembled `wireSystem()`, so it
-	 *  equals the estimate of the exact string that rides ( the atom the budget gauge reads ). The agent's
-	 *  own `estimateTokens` ( it is not a `KCDPrimitive`, but shares the shape one level up ). Deliberately
-	 *  loose; only the wire `usage` is exact. */
+	/** Whole-context token estimate over `wireSystem()`. Deliberately loose; only the wire `usage` is exact. */
 	estimateTokens(): number {
 		return KCDPrimitive._estimateTokens( this.wireSystem() );
 	}
 
 	/**
-	 * The compiled currency summed by coarse budget bucket — System ( root context ) / Lenses ( the agent's
-	 * own identity + routing ) / Tools ( the manifest lines ). Read per-block off `compiledContext()`'s own
-	 * `section` tags, the same split the ring + legend group by. Attached files + conversation turns aren't
-	 * compiled blocks, so they stay their own reads wherever this is summed.
-	 *
-	 * IT SUMS BLOCKS, AND ONLY BLOCKS, which is what lets a band header equal the list underneath it. So the
-	 * preload schemas on the request's `tools` array are NOT in `tools` here: they are real spend with no block
-	 * to sum. That gap is not new — this never saw the `tools` array, and while the schemas ALSO sat in the
-	 * prompt it was counting the duplicate copy and landing on the right number by accident. Removing the
-	 * duplicate leaves the estimate exactly as far off as it was and the real spend one copy lower. Closing
-	 * it wants a bucket the atlas can render, not a number added here where no band could show it.
+	 * Compiled blocks summed by budget bucket. Sums blocks only, so a band header equals the list beneath it;
+	 * the preload schemas on the request's `tools` array are not counted (a known gap, deferred).
 	 */
 	compiledBudget(): { system: number; lenses: number; tools: number } {
 		const out = { system: 0, lenses: 0, tools: 0 };
@@ -1548,10 +1060,7 @@ export class Agent {
 		return out;
 	}
 
-	/** Group tool defs by their owning MCP server ( `ToolDef.server`, stamped main-side ), preserving
-	 *  first-seen order — the folder split the roster + drawer already show, now shared onto the wire. A def
-	 *  with no `server` ( a test double / pre-seam ) falls into a trailing "Other tools" bucket so nothing is
-	 *  ever dropped from the manifest. */
+	/** Tool defs grouped by `ToolDef.server` in first-seen order; a def with no server falls into "Other tools", never dropped. */
 	static groupByServer( defs: ToolDef[] ): { name: string; doc: string; tools: ToolDef[] }[] {
 		const order: string[] = [];
 		const groups = new Map<string, { name: string; doc: string; tools: ToolDef[] }>();
@@ -1564,65 +1073,23 @@ export class Agent {
 	}
 
 	/**
-	 * THE TOOL MANIFEST — every tool this run holds, grouped by SERVER ( folder ): each server heads its
-	 * block with its own description, then one `- name — description` line per tool. The `###` server
-	 * headings let the fold view + drawer reproduce the folders.
-	 *
-	 * ── EVERY TOOL, NOT ONLY THE DEFERRED ONES ( Bryan, 2026-09-05 ) ──
-	 * This listed ONLY manifest-surface tools, on the reasoning that a preloaded tool is already on the wire
-	 * and needs no advertisement. That was wrong, and HOW it was wrong is worth keeping: the wire carries
-	 * `{ name, description, input_schema }` and nothing else — no server, no group, no server doc. So a
-	 * preloaded tool arrived as a bare verb with nothing to place it. An agent holding `learn` and `recall`
-	 * was asked for its memory tool and answered, correctly by its own lights, that it had none: the word
-	 * "Memory" and the sentence saying what that server is FOR existed nowhere in its context.
-	 *
-	 * SO THIS IS WHERE A TOOL GETS ITS IDENTITY. The surface axis decides what a tool COSTS, never whether
-	 * it is named — and one section listing everything in server order is also the accurate reading of the
-	 * heading this has always carried.
-	 *
-	 * WHAT STILL DIVIDES THE TWO is the schema, and only the schema: a preloaded tool carries its own on the
-	 * request, a deferred one is marked here and fetched on demand. The description does repeat between this
-	 * list and the wire entry for a preloaded tool, and that is a deliberate few tokens — a name and a blurb,
-	 * against the full JSON schema this still refuses to restate.
-	 *
-	 * NO POLICY IS READ HERE, and that is the point. `toolDefs` is bound to the tools this run may actually
-	 * call, so a denied tool was never in the list — the compiler cannot advertise one because it is not
-	 * holding one.
-	 *
-	 * IT IS LOAD-BEARING, not a legacy convenience: a search searches nothing an agent has not read here
-	 * first. Deleting it would not save the prompt a line, it would blind the search.
+	 * Every tool the run holds, grouped by server, one `- name — description` line each: this is where a tool gets its identity,
+	 * since the wire carries no server. Only the schema divides preloaded from deferred; the manifest names all of them.
+	 * Reads no policy: `toolDefs` is already the callable set. Load-bearing: a search searches nothing not read here first.
 	 */
 	toolManifest(): string {
 		const held = _heldIds( this.toolDefs );
 		if ( !held.length ) return '';
 
-		// The mark rides the ROWS and the sentence explains it ONCE, so saying it costs per manifest rather
-		// than per tool.
-		//
-		// THE MECHANISM IS NAMED WHEN THE HOST HAS NAMED IT ( bug-report-9 ). This sentence used to name no
-		// tool on purpose — the search tool describes itself on the wire, and a name spelled here too would
-		// be a second copy to keep in step. A local model on deferred tools showed the cost of that: told the
-		// mechanism only in a tool result, it kept calling the one tool it had fetched while saying it meant
-		// another, until the round ceiling. So the note says which tool to call, that a server's name fetches
-		// every tool it holds, and that a tool already fetched is no stand-in — and the name is BOUND by the
-		// host that serves the search ( `searchTool` ), never spelled here, so there is still one speller.
+		// The mark rides the rows and the note explains it once per manifest. The search tool's name comes from
+		// `searchTool`, bound by the host that serves it, so it is never spelled here.
 		const MARK = '[schema on request]';
 		const NOTE = this.searchTool
 			? `Everything you hold is listed here. A tool marked ${ MARK } is not callable yet: call ${ this.searchTool } with its exact name, or with a server's name for all of that server's tools, then call it. A tool you already have never stands in for one you have not fetched.`
 			: `Everything you hold is listed here. A tool marked ${ MARK } is not in your callable set yet — ask for its schema, then call it.`;
 
-		// THE RUN'S ANSWER WHEN THERE IS ONE, and it is not the surface. A host can put a tool on the request
-		// for a reason no surface records — a person granted it on this session, say — and a mark read off the
-		// surface told the model that tool was not callable yet, and to fetch it through a search tool the
-		// request was not even carrying. The host binds what the request actually defers; only a composition
-		// surface, with no request to ask, falls back to the surface.
-		// WHAT A MANAGED LANE SAYS INSTEAD, and it is a different sentence rather than a softer one. The host
-		// owns the callable set and will not tell us what it loaded, so there is nothing true to mark and no
-		// door of ours to name. What the agent needs is the one thing it cannot work out from a refusal: that
-		// this list is what it HOLDS, that absence from it is the only denial there is, and that the host's
-		// own "no such tool" on a listed row is a loading state. DEFECT-435 is what it costs to leave unsaid —
-		// an agent read that refusal as a withheld capability, reported a gap that did not exist, and took a
-		// worse repair it was confident in.
+		// The mark follows what the request actually defers, not the surface: only a composition surface falls back to the surface.
+		// A managed lane gets `HOST_NOTE` instead, since its host does not say what it loaded and nothing is true to mark.
 		const HOST_NOTE = 'Everything you hold is listed here, and every row is yours to call. Your HOST loads '
 			+ 'these into the conversation and does not tell us which it has loaded yet, so a tool on this list '
 			+ 'can refuse the first time with "no such tool" or "not available". THAT IS A LOADING STATE, NOT A '
@@ -1632,9 +1099,7 @@ export class Agent {
 			+ 'same end another way. If it still refuses after you have named it, THEN say so and name the tool.';
 
 		const runDeferred = this.runDeferred;
-		// NOTHING IS MARKED ON A MANAGED LANE. Not even the fallback: a composition surface binds no
-		// `runDeferred`, so without this a harness agent's preview would mark every non-preload row and point
-		// at a search tool that lane cannot carry — which is the artifact the defect was diagnosed from.
+		// Managed lanes mark nothing: their preview would point at a search tool the lane cannot carry.
 		const deferred = ( t: ToolDef ): boolean => this.hostManagedTools
 			? false
 			: runDeferred
@@ -1646,19 +1111,14 @@ export class Agent {
 			return head + '\n' + g.tools.map( t => `- ${ t.wire ?? t.name } — ${ t.description }${ deferred( t ) ? ' ' + MARK : '' }` ).join( '\n' );
 		} );
 
-		// THE CALLING RULE, stated rather than left to judgment: a tool call is parsed mechanically, so the
-		// name must be the row's name exactly. The example is a real row's own name, so this never spells the
-		// wire separator itself.
+		// The example is a real row's own name, so the rule never spells the wire separator itself.
 		const example = held[ 0 ].wire ?? held[ 0 ].name;
 		const RULE = `Call a tool by the exact name its row begins with — \`${ example }\`, letter for letter, server part included. `
 			+ 'A name that is not on this list is not a tool you hold.';
 
-		// EMPTY IS ABSENT, on the note as much as on the section: an agent whose tools are all loaded is told
-		// nothing about fetching schemas, because for that run there is nothing to fetch.
+		// Empty is absent: an agent with every tool loaded is told nothing about fetching schemas.
 		const parts = [ '## Available tools', RULE ];
-		// ONE NOTE OR THE OTHER, never both and never neither-when-one-is-needed. The managed note is
-		// UNCONDITIONAL on its lane: the host may have loaded everything this turn and defer something on the
-		// next, and a note that appeared only once the damage was done would be the defect with a delay on it.
+		// One note or the other. The managed note is unconditional: the host may defer something on a later turn.
 		if ( this.hostManagedTools ) parts.push( HOST_NOTE );
 		else if ( held.some( deferred ) ) parts.push( NOTE );
 		parts.push( sections.join( '\n\n' ) );
@@ -1666,67 +1126,32 @@ export class Agent {
 	}
 
 	/**
-	 * THE AUTHORED BANDS, rendered — each `##` heading with its body under it.
-	 *
-	 * IT RENDERS AND NOTHING ELSE. What the bands say, which ones exist, and what order they come in were
-	 * all decided by the host before they were bound; this method cannot narrow, sort or edit them, and that
-	 * is the point of it being this short. The composer does not reach the passport, so anything it could
-	 * decide here it would be deciding blind.
-	 *
-	 * WHAT STOOD HERE was `commandManifest()`, which hard-coded ONE band for ONE tool — the heading, the
-	 * calling convention, and the roster's rendering, all in the composer, for a capability that belongs to
-	 * `sm_core.command_run`. It reads its own section now, and every other tool may author one too. The
-	 * text is unchanged; only its author moved.
-	 *
-	 * EMPTY IS ABSENT. No bands means no block at all rather than a `# Manifest` band with nothing under it.
+	 * The authored bands, each `##` heading over its body. Renders only: which bands exist and their order were decided
+	 * by the host before binding, so this cannot narrow or sort them. Empty means no block at all.
 	 */
 	manifestBands(): string {
 		if ( !this.manifestGroups.length ) return '';
 		return this.manifestGroups.map( g => `## ${ g.heading }\n\n${ g.body }` ).join( '\n\n' );
 	}
 
-	/** The tool IDENTITIES this agent PRELOADS — the set that rides the wire as structured `tools`, distinct
-	 *  from the manifest's one-liners.
-	 *
-	 *  IDENTITIES RATHER THAN BARE NAMES, because everything about a tool is keyed by identity and a resolver
-	 *  matching on the bare half would admit a same-named tool belonging to another server — the exact
-	 *  collision the group segment exists to make impossible. Read off the DEFS rather than off any map's
-	 *  keys, so a setting left behind for a tool no longer served cannot name a tool that is not there. */
+	/** The tool identities this agent preloads, read off the defs. Identities, not bare names, so a same-named tool on another server cannot match. */
 	preloadedToolIds(): string[] {
 		return _heldIds( this.toolDefs ).filter( t => this.toolModeFor( t.id! ) === 'preload' ).map( t => t.id! );
 	}
 
-	/** A plain string wrapped as a synthetic wire-order `TaggedBlock` — root context / tool manifest /
-	 *  preload schemas ride `compiledBlocks()`'s one list this way instead of being hand-concatenated onto
-	 *  its text a second time. `section` labels which extra it is ( the budget bucket keys off it ); never
-	 *  read by the compiler itself. */
+	/** A plain string as a synthetic wire-order block. `section` labels it for the budget bucket; the compiler never reads it. */
 	static extraBlock( section: string, text: string ): TaggedBlock {
 		return { region: 'know', section, mergeKey: null, text, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
 	}
 
-	/** The compiled sections that price as SYSTEM rather than as lens identity — the layers above and around
-	 *  the lens rather than the lens itself.
-	 *
-	 *  `attachments` is PARKED here knowingly. It is not lens identity and not tools, and a fourth bucket is
-	 *  probably right — the whole point of the gauge is seeing what context costs what, and folding files
-	 *  into "Root context" hides the exact number a user attaches a file to watch. That is a
-	 *  `compiledBudget()` signature change plus the inspector band, so it lands with the renderer slice
-	 *  rather than being half-done here. `frame` and `mode-line` join for the same reason and carry the same
-	 *  reservation. */
+	/** Sections that price as SYSTEM, not lens identity. `attachments`, `frame` and `mode-line` are parked here: a fourth bucket is probably right, deferred. */
 	private static readonly SYSTEM_SECTIONS = new Set<string>( [ 'host-prompt', 'host-environment', 'agent-name', 'system-prompt', 'root-context', 'attachments', 'frame', 'mode-line' ] );
 	/** The compiled sections that price as TOOLS — the surface, not the identity that may reach for it. */
 	private static readonly TOOL_SECTIONS = new Set<string>( [ 'tool-manifest' ] );
-	/** Every section the bottom-of-context manifest emits — the routing tables a reader finds filed together.
-	 *
-	 *  `files` is deliberately NOT a `MANIFEST_SECTIONS` entry: no lens slots into it, the agent synthesizes
-	 *  it from its own lens list. But it is a routing table exactly like the rest, so the breakdown files it
-	 *  with them. Reading `MANIFEST_SECTIONS` alone dropped it through to the artifact branch, where a
-	 *  synthetic block has no artifact to be named after and reported its source as `unknown`. */
+	/** Every section the bottom manifest emits, so the breakdown files `files` with the routing tables; `MANIFEST_SECTIONS` alone omits it. */
 	private static readonly ROUTING_SECTIONS = new Set<string>( [ 'files', ...MANIFEST_SECTIONS ] );
 
-	/** The coarse budget bucket one compiled block groups under — read straight off its `section` tag
-	 *  against the two tables above; everything they do not claim — identity, routing, memory, headings,
-	 *  dividers — is Lenses. One read of a field the block already carries, no second compilation. */
+	/** The budget bucket for one block, read off its `section` tag; everything the tables do not claim is Lenses. */
 	static bucketOf( b: TaggedBlock ): 'system' | 'lenses' | 'tools' {
 		if ( !b.section ) return 'lenses';
 		if ( Agent.SYSTEM_SECTIONS.has( b.section ) ) return 'system';
@@ -1734,12 +1159,7 @@ export class Agent {
 		return 'lenses';
 	}
 
-	/** The human label for a synthetic section — the name a reader sees in the breakdown beside a block
-	 *  that has no source artifact to be named after. A section absent from this table labels itself.
-	 *
-	 *  Read through `labelFor` from OUTSIDE, never copied. What a block is CALLED belongs here beside what
-	 *  it is; a view that keeps its own list of the same names is a second answer to one question, and the
-	 *  two only ever agree until one of them is edited. */
+	/** Canonical names for synthetic sections. Views read through `labelFor` rather than keeping a copy. */
 	private static readonly SECTION_LABELS: Record<string, string> = {
 		'host-prompt':     'host prompt',
 		'host-environment': 'environment',
@@ -1752,25 +1172,18 @@ export class Agent {
 		'tool-manifest':   'available tools'
 	};
 
-	/** This section's canonical name, or `null` for one that has none — a lens section, a routing table, or
-	 *  anything that already names itself off its source artifact. Lowercase, as the wire breakdown wants
-	 *  it; a display surface that wants it capitalized or decorated does that to the answer rather than
-	 *  keeping a second copy of the question. */
+	/** The lowercase canonical name for a synthetic section, or `null` for one that names itself off its artifact. */
 	static labelFor( section: string ): string | null {
 		return Agent.SECTION_LABELS[ section ] ?? null;
 	}
 
 	/**
-	 * Where one compiled block files in the per-source breakdown, or `null` when it is STRUCTURAL — a `---`
-	 * divider or a band heading, which has no identity of its own and belongs to the segment it introduces.
-	 *
-	 * `source` is the reader's FOLDER, deliberately not `bucketOf`'s pricing bucket. Pricing asks what a
-	 * block costs against; this asks where a person should find it — and an artifact body wants its own
-	 * type either way, so the two questions genuinely have different answers.
+	 * The breakdown segment for one block, or `null` for structural blocks (dividers, band headings).
+	 * `source` is the reader's folder, deliberately not the pricing bucket.
 	 */
 	static segmentKey( b: TaggedBlock ): SegmentKey | null {
 		if ( !b.section ) return null;
-		// FIRST, so a package whose id happens to match a section name cannot misfile itself.
+		// Injection first, so a package id matching a section name cannot misfile itself.
 		if ( b.sourceLayer === 'injected' )           return { source: 'injection', label: b.section };
 		if ( Agent.SYSTEM_SECTIONS.has( b.section ) ) return { source: 'system', label: Agent.SECTION_LABELS[ b.section ] ?? b.section };
 		if ( Agent.TOOL_SECTIONS.has( b.section ) )   return { source: 'tools',  label: Agent.SECTION_LABELS[ b.section ] ?? b.section };
@@ -1779,26 +1192,15 @@ export class Agent {
 		return { source: b.artifactType, label: Agent.basename( b.path ) || b.section };
 	}
 
-	/** A path's file name without its extension — the human label for an artifact-sourced segment. Plain
-	 *  string work rather than the `path` module, so this stays Node-free like the rest of core. */
+	/** A path's file name without its extension. Plain string work, so core stays Node-free. */
 	private static basename( p: string ): string {
 		const tail = p.split( /[\\/]/ ).pop() ?? '';
 		return tail.replace( /\.[^.]+$/, '' );
 	}
 
 	/**
-	 * The by-KIND care bands ( compilation pass, 2026-07-19 ) — Purpose and Philosophy each become ONE
-	 * block that MERGES every active lens's contribution as a labeled sub-section, instead of one band per
-	 * lens. The primary lens leads and is marked `( Primary )` ( disputes resolve in its favor ). The reader
-	 * sees each identity kind ONCE, its sources folded underneath.
-	 *
-	 * Each merged block is `# {Kind}` over, per contributing lens, `## {label}` over that lens's care prose.
-	 * A care block carries its section's OWN surviving `### heading` ( the `data-kcd-heading` survivor ) —
-	 * stripped here so the `# {Kind}` band isn't shadowed by a near-duplicate, keeping only the prose. Kinds
-	 * surface in first-appearance order ( Purpose before Philosophy — natural authoring order ). The block
-	 * keeps its first member's care/section tagging ( so it sorts into the care tier and labels as its kind );
-	 * only `text` is synthesized. A care block belonging to no active lens ( an injected-care drop ) rides at
-	 * the tail of its kind, never dropped.
+	 * Each care kind (Purpose, Philosophy) becomes one block merging every active lens as a `## {lens}` sub-section,
+	 * primary leading and marked. A section's own `### heading` is stripped so the kind band is not shadowed.
 	 */
 	buildCareBands( careBlocks: TaggedBlock[] ): TaggedBlock[] {
 		const norm     = ( s: string ): string => s.replace( /\\/g, '/' );
@@ -1807,8 +1209,7 @@ export class Agent {
 
 		const title     = ( k: string ): string => k ? k.charAt( 0 ).toUpperCase() + k.slice( 1 ) : 'Care';
 		const lensLabel = ( l: LensObject ): string => `${ l.getName() }${ l === ordered[ 0 ] ? ' ( Primary )' : '' }`;
-		// Drop a care section's own leading `### {title}` heading ( the survivor of the parser's heading nuke ),
-		// so the `# {Kind}` band above it isn't shadowed by a near-duplicate; everything after it is the prose.
+		// Drops a section's own leading `###` heading so the kind band is not shadowed by a near-duplicate.
 		const prose = ( text: string ): string => {
 			const lines = text.split( '\n' );
 			let i = 0;
@@ -1818,7 +1219,7 @@ export class Agent {
 				: text.trim();
 		};
 
-		// Distinct care KINDS in first-appearance order ( Purpose, then Philosophy ).
+		// Care kinds in first-appearance order.
 		const kinds: string[] = [];
 		for ( const b of careBlocks ) { const k = b.section ?? ''; if ( !kinds.includes( k ) ) kinds.push( k ); }
 
@@ -1832,7 +1233,7 @@ export class Agent {
 				parts.push( `## ${ lensLabel( lens ) }` );
 				for ( const m of mine ) parts.push( prose( m.text ) );
 			}
-			// Care belonging to no active lens ( an injected-care drop ) — kept under its own label, never dropped.
+			// Care with no active lens stays under its own label, never dropped.
 			const orphans = members.filter( b => !allPaths.has( norm( b.path ) ) );
 			if ( orphans.length ) { parts.push( '## Injected' ); for ( const o of orphans ) parts.push( prose( o.text ) ); }
 			out.push( { ...members[ 0 ], text: parts.join( '\n\n' ), mergeKey: null } );
@@ -1840,11 +1241,7 @@ export class Agent {
 		return out;
 	}
 
-	/** Join several block-list SEGMENTS with a literal `---` divider block between each pair of
-	 *  segments that BOTH have content — an empty segment ( no root context bound, no `preload`
-	 *  tools armed, a draft with no body ) contributes nothing, not even a stray divider. The same
-	 *  `.filter(Boolean).join(SEP)` semantics `wireSystemFor` used to hand-roll over raw strings, now a
-	 *  block-list operation any caller stitching wire-order layers can reuse. */
+	/** Joins segments with a `---` divider between each pair that both have content; an empty segment adds no stray divider. */
 	static joinSegments( segments: TaggedBlock[][] ): TaggedBlock[] {
 		const out: TaggedBlock[] = [];
 		for ( const seg of segments.filter( s => s.length ) ) {
@@ -1854,46 +1251,19 @@ export class Agent {
 		return out;
 	}
 
-	/** The literal `---` boundary block between two wire-order segments ( see `joinSegments` ).
-	 *  Synthetic — no source artifact — so it carries the same neutral tagging every other
-	 *  compiler-synthesized block does. */
+	/** The literal `---` boundary block; synthetic, so it carries the neutral tagging of every compiler-made block. */
 	static dividerBlock(): TaggedBlock {
 		return { region: 'know', section: null, mergeKey: null, text: '---', sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
 	}
 
-	/** The KCD manifest sections — the what/where/why routing tables. Each is hoisted OUT of the body and
-	 *  into the bottom-of-context manifest as its own deduped table; every other section is prose that
-	 *  stays in the body. Derived from `MANIFEST_SECTIONS` ( the ONE registry shared with
-	 *  `ContextAssembler`, so the hoist set and the routing-tier/heading logic can never drift apart );
-	 *  `INDEX_ORDER` is the manifest's table order after `## Files`. */
+	/** The what/where/why routing sections, hoisted out of the body into the manifest. Derived from `MANIFEST_SECTIONS`, the one registry shared with `ContextAssembler`. */
 	static readonly INDEX_ORDER = MANIFEST_SECTIONS;
 	static readonly INDEX_SECTIONS = new Set<string>( MANIFEST_SECTIONS );
 
 	/**
-	 * The bottom-of-context manifest ( see `compiledBlocks` ), AS BLOCKS: a `Files` block naming every
-	 * loaded lens, then one routing-table block per non-empty manifest section ( References / Domains /
-	 * Habits / Contracts ), in `INDEX_ORDER`. Every row is one what/where/why line; every file appears
-	 * exactly once, deduped across sources by `ContextAssembler.manifestTable` so a manifest table and an
-	 * inline merge can't differ. The `Files` heading is itself a manifest section — single-sourced via
-	 * `ContextAssembler.title` so no caller hardcodes a `###` string. Paths are vault-relative — the
-	 * primary lens's `vaultRelative`, so a stack sharing a vault root all resolve against it.
-	 */
-	/**
-	 * Vault-relative hrefs of habits that LOST their habit-class contest — the rows a manifest must not
-	 * advertise.
-	 *
-	 * `SlotResolver` already drops a losing habit's own blocks, and for a `load` habit that is the
-	 * whole story. But an `on`-mode habit ( ~90% of them ) emits NO blocks — a routing ROW in its
-	 * declaring lens's habits table is its entire contribution, and that table is the LENS's block:
-	 * classless, therefore never a contender, therefore surviving the cascade with the loser's row still
-	 * inside it. The compiled manifest then advertised two occupants of one mutually-exclusive slot
-	 * ( `write-memory-never` beside `write-memory-sparing` ), which is the exact contradiction §6 exists
-	 * to prevent, and it failed SILENTLY — nothing errors, the agent simply reads both.
-	 *
-	 * So the contest is settled here over the node INVENTORY, which knows every habit regardless of mode.
-	 * Specificity, most specific first: the agent's own bolted-on habits, then each lens in load order.
-	 * Ties inside one rank keep the incumbent, so a habit two lenses both declare is one artifact, not a
-	 * rival of itself.
+	 * Vault-relative hrefs of habits that LOST their habit-class contest. Settled over the node inventory: an `on`-mode
+	 * habit emits no block for `SlotResolver`, so a lens's habits table would otherwise advertise both occupants of one slot.
+	 * Most specific rank first, agent then lenses in load order; ties keep the incumbent.
 	 */
 	displacedHabitPaths(): Set<string> {
 		const norm = ( s: string ): string => s.replace( /\\/g, '/' );
@@ -1920,9 +1290,7 @@ export class Agent {
 		return out;
 	}
 
-	/** Manifest index blocks with the named rows removed — the projection `displacedHabitPaths` feeds.
-	 *  Copies rather than mutates: the same blocks are read again by `composition()`, and a compile that
-	 *  edited them in place would make the chart depend on whether anyone had compiled first. */
+	/** Manifest index blocks with the named rows removed. Copies rather than mutates, since `composition()` reads the same blocks. */
 	static withoutRows( index: TaggedBlock[], drop: Set<string> ): TaggedBlock[] {
 		if ( !drop.size ) return index;
 		const norm = ( s: string ): string => s.replace( /\\/g, '/' );
@@ -1931,6 +1299,10 @@ export class Agent {
 			: b );
 	}
 
+	/**
+	 * The bottom-of-context manifest as blocks: a `Files` block naming every lens, then one routing table per non-empty
+	 * `INDEX_ORDER` section. Paths are vault-relative against the primary lens, so a shared vault root resolves.
+	 */
 	manifestBlocks( index: TaggedBlock[] ): TaggedBlock[] {
 		const root = this.firstLens;
 		const out: TaggedBlock[] = [];
@@ -1957,26 +1329,18 @@ export class Agent {
 		return { region: 'know', section, mergeKey: null, text, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
 	}
 
-	/** This agent's overrides for one package's injection — the toggle and the declared-param values in ONE
-	 *  bag, keyed by package id, so the host that resolves the call and the compile that gates it read the
-	 *  same entry rather than two flags that can disagree. */
+	/** This agent's overrides for one package's injection, keyed by package id, so the host and the compile read one entry. */
 	contributionSettings( id: string ): ContributionSettings {
 		const bag = ( this.system[ 'contributions' ] ?? {} ) as Record<string, ContributionSettings>;
 		return bag[ id ] ?? {};
 	}
 
-	/** Whether this agent takes package `id`'s injection. Default ON, and stated once here because both the
-	 *  host ( which skips the call ) and `compiledContext` ( which drops the block ) ask it. */
+	/** Whether this agent takes package `id`'s injection. Default on. */
 	injectionEnabled( id: string ): boolean {
 		return this.contributionSettings( id ).enabled !== false;
 	}
 
-	/** One injected block. `sourceLayer: 'injected'` IS the ranking — `tierOf` already sinks injected
-	 *  content last, so this needed no new rule. The heading rides in the TEXT rather than being spliced by
-	 *  `withBandHeadings`, which splices one heading per tier: several packages share this tier and would
-	 *  otherwise collapse under a single heading. `section` carries the PACKAGE so `segmentKey` can name the
-	 *  injection in the breakdown — a null section reads as structural there and silently folds the text into
-	 *  a neighbouring segment. */
+	/** One injected block. `sourceLayer: 'injected'` is the ranking. The heading rides in the text so packages sharing a tier keep their own; `section` carries the package id. */
 	static contributionBlock( c: Contribution ): TaggedBlock {
 		return { region: 'know', section: c.id, mergeKey: null, text: `## ${ c.heading }
 
@@ -1984,25 +1348,17 @@ ${ c.text }`,
 			sourceLayer: 'injected', path: '', artifactType: 'unknown', habitClass: null };
 	}
 
-	/** A block tagged as one of the MANIFEST sections — the door for a manifest table sourced from OUTSIDE
-	 *  the lens graph. Identical to `extraBlock` but for what the tag means downstream: a section in
-	 *  `INDEX_SECTIONS` sinks to the manifest tier, merges compressively with any other source's rows for
-	 *  that section, and wears the canonical heading rather than an ad-hoc one.
-	 *
-	 *  TAKES ITS ROWS, and a caller that omits them gets a heading and nothing else. That is not a defensive
-	 *  note — it is what happened: the grants section passed text alone, the merge read `rows` as it is
-	 *  documented to, and the whole table evaporated. `text` is what a lone-block preview renders; `rows` is
-	 *  what survives a merge. A manifest section owes BOTH.
+	/**
+	 * A manifest-section block sourced from outside the lens graph. It owes both `text` (what a lone-block preview renders)
+	 * and `rows` (what survives a merge): a caller that passes text alone loses the whole table in the merge.
 	 */
 	static sectionBlock( section: string, text: string, rows: SlotRow[] = [] ): TaggedBlock {
 		return { region: 'know', section, mergeKey: null, text, rows, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
 	}
 
 	/**
-	 * The habit-class slot resolution across this agent's WHOLE composed set — the visualization twin of
-	 * `contribute()`, for the Slot UI to show every class's candidates and which one won. Reads the exact
-	 * same `getContextBlocks()` and resolves it through the same `SlotResolver`, so this view can never
-	 * show a different winner than the one actually compiled into the wire text.
+	 * Every habit class's candidates and winner, for the Slot UI. Resolved by the same `SlotResolver` over `getContextBlocks()`,
+	 * so it cannot show a winner the compiled text does not carry.
 	 */
 	slots(): SlotResolution[] {
 		if ( !this.lenses.length ) return [];
@@ -2010,27 +1366,17 @@ ${ c.text }`,
 	}
 
 	/**
-	 * The habit cascade as a COMPOSITION surface sees it — every habit this agent carries, from either
-	 * layer, each with the mode it compiles at, whether or not it wins its slot.
+	 * The habit cascade as a composition surface sees it: every habit from either layer, whether or not it wins its slot.
 	 *
-	 * Built from the INVENTORY — the lens's dredged habit nodes plus the agent's own `baseHabitNodes` —
-	 * rather than from `slots()`, which reads the compile and so shows only the winners.
-	 *
-	 * Same `SlotResolver.RANK` as the real resolution ( agent beats lens ), so the winner shown here is
-	 * still the winner that compiles. Pure: no `setIncluded` mutation, so calling it never perturbs what a
-	 * later compile produces — the bug that made the old path order-dependent.
-	 *
-	 * Classless habits ride along, one entry each with `habitClass: null` and a single candidate: nothing
-	 * contends a slot they don't have, but a composition surface still wants them in the same currency.
+	 * Built from the inventory rather than from `slots()`, which shows only the winners. Pure: it never mutates the
+	 * compile's state. Classless habits ride along as single-candidate entries with `habitClass: null`.
 	 */
 	habitSlots(): HabitSlotView[] {
 		const candidates: HabitSlotCandidate[] = [];
 		const seen = new Set<string>();
 		const add = ( node: KCDPrimitive, sourceLayer: SourceLayer ): void => {
 			const path = node.getPath();
-			// one artifact contributes ONE candidate, from its most specific layer — the agent's own pick of
-			// a habit its lens also carries is the same artifact, not a rival of itself. Agent is added first,
-			// so the lens copy of the same path is skipped.
+			// One artifact is one candidate, from its most specific layer: agent is added first, so the lens copy is skipped.
 			if ( seen.has( path ) ) return;
 			seen.add( path );
 			const cls = node.getFrontmatter()[ 'habit-class' ];
@@ -2063,42 +1409,20 @@ ${ c.text }`,
 		return views;
 	}
 
-	/** The separator between system-prompt layers — the one place any caller stitching wire-order layers
-	 *  agrees on how they join, so no two of them can drift apart. `joinSegments` spells the same boundary
-	 *  as a block, which is what lets a hand-joined string and a compiled block list produce identical
-	 *  text. */
+	/** The separator between system-prompt layers, shared by every text joiner so none can drift from `joinSegments`. */
 	static readonly SYSTEM_SEP = '\n\n---\n\n';
 
-	/** The id every `Vault.buildAgent` agent carries — a lens substrate with no authored identity, built to
-	 *  compile and then discarded. Reserved and deliberately SHARED across every vault build: it makes "this
-	 *  is not an authored agent" legible on the object itself, rather than a fact known only to whoever wrote
-	 *  the call site. Never persisted — the database only ever holds authored agents, which is why
-	 *  `AgentRow.model` stays concrete while `Agent.model` is nullable. */
+	/** The id every `Vault.buildAgent` agent carries: a lens substrate, compiled then discarded. Never persisted, which is why `AgentRow.model` stays concrete while `Agent.model` is nullable. */
 	static readonly VAULT_AGENT_ID = 'vault-agent';
 
-	/**
-	 * Join system layers in order, dropping empties, with the canonical separator — for a caller stitching
-	 * RAW STRINGS rather than blocks.
-	 *
-	 * The live turn no longer does: its system half is one projection of `compiledContext()`, and the
-	 * boundary is a real block ( `joinSegments` ) rather than a separator spliced between strings. What is
-	 * left here are the callers that genuinely have no block list to project — a tier that assembles an
-	 * identity as text, and `identity()` below.
-	 */
+	/** Joins raw strings with the canonical separator, dropping empties. For callers with no block list to project, such as `identity()`. */
 	static assembleSystem( parts: ( string | null | undefined )[] ): string {
 		return parts.filter( Boolean ).join( Agent.SYSTEM_SEP );
 	}
 
 	/**
-	 * This agent's frozen IDENTITY — the "who": its `systemPrompt` over its recursive lens contribution.
-	 *
-	 * The ONE remaining caller that freezes an identity to text instead of letting the agent project it
-	 * live, and therefore the one place an agent's context is decided anywhere other than
-	 * `compiledContext()`. A run that carries this string carries a snapshot: no bound root context, no
-	 * memory, no tool manifest, and no way to reflect anything tuned after the freeze.
-	 *
-	 * That is a limitation of the caller, not a second design. Anything asking "what does this agent send"
-	 * wants `wireSystem()`; anything asking "what did it send, broken out" wants `contextSegments()`.
+	 * The frozen identity: `systemPrompt` over the lens contribution. A snapshot, so no bound root context, memory or tool
+	 * manifest. What the agent sends is `wireSystem()`; the breakdown is `contextSegments()`.
 	 */
 	identity(): string {
 		return Agent.assembleSystem( [ this.systemPrompt, this.compile() ] );

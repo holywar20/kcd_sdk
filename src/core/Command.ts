@@ -4,39 +4,11 @@ export type { FillKind, PartKind, PartType, PathAccess, PathAccessInfo } from '.
 export { PART_TYPES, FILL_KINDS, PATH_ACCESS, PATH_ACCESS_LEVELS, partType, isPathAccess } from './CommandTypes';
 
 /**
- * ONE PART OF A COMMAND LINE — and the reason a command is an ARRAY rather than a string.
- *
- * A template with slots is still a string, so something has to parse it, and a parser is where the bugs
- * live. An array of parts is an argv: it is handed to `spawn` with NO SHELL, so `;` `&&` `|` backtick and
- * `$( )` are not dangerous characters that must be caught — they are ordinary letters inside one argument,
- * because nothing on the path ever interprets them. Chaining is not forbidden, it is UNREPRESENTABLE, and
- * a path with spaces needs no quoting because it was never adjacent to anything to be confused with.
- *
- * That is the whole trade: structural impossibility instead of correct escaping. The guards are then
- * defence in depth rather than the mechanism, which is the right way round — a mechanism that depends on
- * catching every bad character is one missed character from being no mechanism at all.
- *
- * ── TWO STRUCTURAL KINDS, AND A VOCABULARY OF TYPES INSIDE ONE OF THEM ── ( Bryan, 2026-09-27 )
- * There were three kinds and they were named `fix`, `in` and `pick` on the authoring surface. Nobody could
- * tell from that what any of them did, and worse, `in` applied ONE blanket character rule to every value —
- * so a file path, the commonest thing anybody wants a hole to hold, was refused for containing `(`.
- *
- *   literal   fixed text the author wrote. The binary, its subcommands, flags that must not vary. Never
- *             appears in the agent's schema; an agent cannot reach it, change it or remove it.
- *   a TYPE    a hole the agent fills, named by WHAT IT HOLDS — `text`, `file_path` — with the validation
- *             for it owned by that type's row in `PART_TYPES`, not by a shared ladder.
- *   retired   a part carried forward from a kind that no longer exists. Not authorable, never run; it
- *             blocks the command so a person re-authors it. See `fromSerialized`.
- *
- * ── AND A HOLE ALSO DECLARES WHAT IS DONE WITH IT ── ( 2026-09-30 )
- * `access` — `read`, `write` or `delete`, required, never defaulted. The TYPE says a value is shaped like a
- * path; the ACCESS says what the program does with it, which is the operation the file door is asked at.
- * Without it every path argument was judged at `read`, which silently admits an output file. See
- * `PathAccess`, where the reasoning and the accepted limit live.
- *
- * The structural half of the distinction is what the security property rests on and it has NOT moved: the
- * first part must be a literal, so an agent never chooses the program. A type only ever decides what may go
- * in a hole a person already decided to leave.
+ * ONE PART OF A COMMAND LINE. A command is an ARRAY because an argv handed to `spawn` with no shell makes
+ * `;` `&&` `|` and `$( )` ordinary letters: chaining is UNREPRESENTABLE, and the guards are defence in depth.
+ * A part is a `literal` (fixed text an agent never reaches), a TYPE (a hole the agent fills, validated by its
+ * `PART_TYPES` row) or `retired` (blocks the command until re-authored). Every hole declares `access`, never
+ * defaulted. The first part is always a literal, so an agent never chooses the program.
  */
 export type CommandPart =
 	| { kind: 'literal'; text: string }
@@ -48,18 +20,8 @@ export type CommandPart =
 export type FillablePart = Extract<CommandPart, { name: string }>;
 
 /**
- * WHAT INSPECTION FOUND — a fact about a value, never a decision about a call.
- *
- * A command does NOT refuse. It sanitizes itself ( the parts array makes escaping unrepresentable ) and it
- * reports what it found; whether the call happens is the passport's answer, arrived at the same way it is
- * arrived at for every other thing an agent asks for. A command that could veto on its own configuration
- * would be a second gate with its own vocabulary, and an agent would face two refusals that look nothing
- * alike for reasons it cannot tell apart. One gate, one verdict, one reason code.
- *
- * SO THERE IS NO PROSE HERE. `code` is for the machine, `detail` is the offending data, and the sentence an
- * agent reads is authored beside every other refusal in the system, next to the policy ladder that words
- * them. A fault crossing a process boundary as data is the point: main words it, and a surface can key on
- * the code without parsing English.
+ * Inspection reports facts and never refuses: the verdict is the passport's, so an agent meets one gate and
+ * one reason code. A fault is a code, a slot name and raw data, never a sentence.
  */
 export type CommandFaultCode =
 	| 'missing_value'      // a required slot got nothing
@@ -79,28 +41,8 @@ export interface CommandFault {
 }
 
 /**
- * WHAT CAN BE WRONG WITH A COMMAND — the closed set, and the reason it is a set of CONSTANTS.
- *
- * A CODE IS A JOINT, NOT A MESSAGE ( Bryan, 2026-08-22 ). Validation does not belong to one surface: the
- * editor wants to light a field red, the deck wants to mark a row a draft, a registry wants to refuse to
- * expose one, and each of those is a DIFFERENT display decision about the same fault. So each consumer
- * writes the check it needs — that is what it is there for — and what keeps them all talking about the same
- * fault is the constant they name it with. `Command.NO_INTENT` is find-and-replaceable across every
- * component that ever reacted to it; a string literal typed into a template is not, and the day the wording
- * changes one surface goes quietly dark.
- *
- * SO THE MESSAGE IS NOT THE IDENTITY. The identity is the code. The sentence, the field it belongs to and
- * whether it blocks all hang off it in the directory below, where they can be edited without touching a
- * single consumer.
- *
- * NOT `CommandFaultCode`. A fault is about values an AGENT sent; a code here is about work a PERSON has not
- * done. Two different questions with two different audiences, and merging them would hand every surface one
- * list it has to sort back apart.
- *
- * `undescribed_input` AND `empty_menu` ARE GONE ( Bryan, 2026-09-27 ). The first was unclearable — a hole's
- * `hint` had no control on any surface, so every command with a hole was a permanent draft that no agent was
- * ever offered. Naming the TYPE is what a hint was for, and the type is now on the part itself. The second
- * went with the menu kind it described.
+ * The closed set of ways a command is incomplete, as constants: a consumer names a fault by constant, so a
+ * reworded message cannot silently disconnect a surface. Not `CommandFaultCode`, which is about values sent.
  */
 export type CommandCode =
 	| 'no_name'
@@ -111,73 +53,33 @@ export type CommandCode =
 	| 'retired_part'
 	| 'no_access';
 
-/**
- * ONE ROW OF THE DIRECTORY. `field` is the load-bearing one: it is how a consumer maps a fault it did not
- * itself detect onto the control that shows it, without a switch statement per surface that has to be
- * extended every time a code is added.
- */
+/** One row of the directory. `field` is how a consumer maps a fault it did not detect onto the control showing it. */
 export interface CommandCodeInfo {
 	code:     CommandCode;
 	/** WHICH PART OF THE OBJECT IS AT FAULT — what a surface keys its display off. */
 	field:    'name' | 'intent' | 'parts';
 	/** What a person reads. Authored here, once, so four surfaces cannot word the same fault four ways. */
 	message:  string;
-	/** Stops it being handed to an agent. A non-blocking code is a remark — `no_intent` is the first and so
-	 *  far only one ( Bryan, 2026-09-28 ), which is what the flag was put here in anticipation of. */
+	/** Stops it being handed to an agent. A non-blocking code is a remark. */
 	blocking: boolean;
 }
 
 /**
- * A COMMAND — a command line a person authored, exposed to an agent as a tool.
+ * A COMMAND: a command line a person authored, exposed to an agent as a tool. A shell is unauditable, so a
+ * command is fixed parts plus typed holes, reviewed once by a person and gated like any other tool.
  *
- * ── DECLARED RATHER THAN TYPED, AND THAT IS THE WHOLE IDEA ──
- * A shell is unsafe because it is UNAUDITABLE: one string can be anything, so there is no honest gate to
- * put in front of it and no review that means anything. A command inverts exactly that — fixed parts,
- * typed fillable ones, reviewed once by a person and gated forever after like any other tool. This is the
- * shape that makes shell-adjacent capability governable, rather than the shape that gives up and ships a
- * terminal.
+ * It sanitizes itself and never gates itself: the verdict is the passport's, one gate with one reason code.
+ * Inspection is strict because a false finding costs an author a different type, while a false clean bill
+ * costs arbitrary execution.
  *
- * THIS IS A PRIVILEGED PIPE INTO A COMMAND LINE and is treated as one. The parts array removes the class of
- * bug rather than defending against it, and inspection is ruthless about the rest — one character a type
- * dislikes is a fault, because the cost of a false finding is an author picking a different type and the
- * cost of a false clean bill is arbitrary execution.
+ * The name is the gate, so there is no gate field: the passport fans per command name. Nor an output format:
+ * a command states a template, and what happens to the bytes belongs to the keystone. `on` is absent for the
+ * same reason as in `Keystone`: tool modes own whether an agent holds it.
  *
- * ── IT SANITIZES ITSELF. IT DOES NOT GATE ITSELF ── ( Bryan, 2026-08-21 )
- * Inspection is internal and needs no passport: it is mechanical, it is about the values and not about the
- * agent, and it would give the same answer for anyone. THE VERDICT IS NOT ITS BUSINESS. A command that
- * refused on its own configuration would be a second security path beside the passport, with its own
- * refusal shape and its own reason vocabulary, and every new governed thing would grow another one. A turn
- * arrives packaged, the orchestrator checks the passport against the request — whatever the request may be,
- * and an agent can ask for infinitely many things — and one yes-or-no with one reason code comes back. A
- * command is not an exception to that; it is the case that most tempts you to make one.
+ * Substitution lives here and nowhere else: a call site filling parts inline is how a parameterised command
+ * decays back into an arbitrary shell.
  *
- * ── SAME FAT-OBJECT RULE AS `Keystone` ──
- * This object is the display model, the tool definition and the execution recipe at once. `parts` draws the
- * chip strip a person reads, generates the manifest line an agent is handed, and IS the argv. Splitting
- * those into three types would put a registry between them whose only job is to reassemble them, and would
- * give three places for one command to be described differently.
- *
- * `on` is absent for the same reason it is absent there: whether an agent holds this is that agent's tool
- * modes, which already own the fact.
- *
- * ── NO GATE FIELD EITHER ── ( Bryan, 2026-08-22 )
- * There was a `gate` here naming which permission row governed the command, and its own note predicted this
- * retirement. Every command now gets its own passport entry, one for one: the permission table carries a
- * single `command` row that fans PER SUBJECT, and the subject is the command's name. So a command IS its own
- * gate and does not need to name one — the name it already has does the work, and a field pointing at a row
- * would be a second answer to a question that now has one.
- *
- * ── NO OUTPUT FORMAT ── ( Bryan, 2026-08-22 )
- * There was a `format: 'text' | 'json'` here and it is gone. A command's job is to state a TEMPLATE that
- * satisfies the contract with an agent — what runs, when to reach for it, which holes it may fill. What
- * happens to the bytes coming back is a different job at a different boundary, and a keystone is where it
- * will land. A command that also declared its output shape would be the first of a series: an encoding, a
- * timeout, a retry, a parser — each individually reasonable, and collectively a second execution engine
- * grown inside a description.
- *
- * ── SUBSTITUTION LIVES HERE, SAID BEFORE SOMEBODY PUTS IT SOMEWHERE ELSE ──
- * Filling the parts from an agent's arguments is THIS class's job and no caller's. A call site doing it
- * inline is precisely how a parameterised command decays back into an arbitrary shell.
+ * Fat-object rule, as in `Keystone`: this is the display model, tool definition and execution recipe at once.
  */
 export interface SerializedCommand {
 	name:      string;
@@ -185,9 +87,8 @@ export interface SerializedCommand {
 	parts:     CommandPart[];
 }
 
-/** Characters that end the call whatever a part's type says, because they break the argv itself rather than
- *  merely looking dangerous: NUL, newline, carriage return, tab and the rest of the C0 range. Newline is
- *  not theoretical — the npm/npx shims truncate an argument at the first one, silently. */
+/** Characters that end the call whatever a part's type says, because they break the argv itself. Newline
+ *  is not theoretical: the npm/npx shims truncate an argument at the first one, silently. */
 const CONTROL = /[\u0000-\u001F\u007F]/;
 
 /** No argument may pass itself off as a flag. This is the injection that survives having no shell at all:
@@ -198,34 +99,14 @@ const FLAGLIKE = /^-/;
 const MAX_LEN = 512;
 
 /**
- * SPLIT ONE LITERAL INTO ARGV ELEMENTS — and the asymmetry that makes it safe.
+ * SPLIT ONE LITERAL INTO ARGV ELEMENTS. A literal splits on whitespace; an agent's value NEVER splits.
+ * Splitting the author's own fixed text reads it the way they typed it. Never splitting a value is what stops
+ * a `file_path` smuggling a second argument: a path with spaces stays exactly one element, always.
  *
- * ── THE RULE, IN ONE SENTENCE ──
- * A literal splits on whitespace. An agent's value NEVER splits.
+ * Quotes hold a run together, since a fixed argument can contain a space. That is a small parser, admissible
+ * only because it reads the AUTHOR's text; nothing here touches a value that came from a model.
  *
- * That asymmetry is the whole security story of this function. Splitting the author's own fixed text is
- * reading it the way they wrote it: they typed `npm run typecheck` because that is the command line they
- * know, and three argv elements is what they meant. Never splitting an agent's value is what stops a
- * `file_path` from smuggling a second argument — a path with spaces in it stays exactly one element, always,
- * so `--config x` cannot arrive through a hole that was authored to hold a filename.
- *
- * ── WHY IT EXISTS ──
- * Before this, a literal WAS one argv element, so a person authoring `npm run typecheck` in one field
- * produced `argv[0] = "npm run typecheck"` and `BinaryResolver` went looking for a program with spaces in
- * its name. The message read "not on this machine's PATH", which was true and told nobody anything: a person
- * types a command line, and being told their command line is not a program is not a sentence they can act
- * on.
- *
- * ── QUOTES, AND WHY THIS IS NOT THE PARSING WE REFUSE ──
- * A fixed argument may legitimately contain a space — `C:\Program Files\node\node.exe` is the commonest
- * argv[0] on Windows — so double or single quotes hold a run together. That IS a small parser, and the
- * reason it is admissible where parsing an agent's input is not: this reads the AUTHOR's own text, and the
- * author is the person the whole design trusts. Nothing here ever touches a value that came from a model.
- *
- * STILL OWED: the editor does not yet DRAW the split. `describe()` prints a literal's text verbatim, so a
- * person authoring `node -e process.stdout.write( 1 )` sees it as one line and cannot see that it became six
- * arguments. Showing the resolved argv beside the strip is what makes a mis-parse visible at the keyboard,
- * and until it lands the quoting rule is something an author has to know rather than something they can see.
+ * Owed: the editor does not draw the split, so a mis-parse is invisible at the keyboard.
  */
 export function commandWords( text: string ): string[] {
 	const out: string[] = [];
@@ -263,57 +144,22 @@ const KNOWN_KINDS: readonly string[] = [ 'literal', 'file_path', 'folder_path', 
 export class Command {
 
 	/**
-	 * THE TOOL NAME AN AGENT SEES — always lower case, canonicalized by the constructor.
-	 *
-	 * ── WHY THE MODEL FORCES IT RATHER THAN A SURFACE VALIDATING IT ── ( Bryan, 2026-09-27 )
-	 * A command is matched by name in several places and stamped by name in one more: the roster looks one up,
-	 * the manifest prints it, and the permission table fans a policy per command using the name as the gate's
-	 * SUBJECT. Case-folding some of those comparisons and not others is how a command runs under a policy set
-	 * for a differently-spelled version of itself, so the ambiguity is removed at the source instead — there
-	 * is only ever one spelling to compare.
-	 *
-	 * Canonicalized HERE, in the constructor, because `fromSerialized` routes through it: a roster written
-	 * before this rule reads back canonical without a migration, and every surface that rebuilds a Command
-	 * from the wire gets the same answer as the one that authored it.
+	 * The tool name an agent sees, lower case. Canonicalized here, once: case-folding some name lookups and not
+	 * others would run a command under a policy written for a differently-spelled one.
 	 */
 	readonly name: string
 
 	constructor(
 		name: string,
 		/**
-		 * WHEN TO REACH FOR THIS — authored by a person, and the only sentence an agent reads before deciding
-		 * to call it. Not "what it does": the command line already says that, and an agent can read it. This is
-		 * the judgement a person has and a model does not — that `check_types` is the thing to run after an
-		 * edit and before claiming the edit worked.
-		 *
-		 * AUTHORED, NEVER DERIVED ( Bryan, 2026-08-22 ). Everything else about a command can be produced from
-		 * its parts. This cannot, and a generated stand-in would be worse than an empty one: an empty intent is
-		 * visibly missing, and a plausible sentence assembled from the binary's name reads as though somebody
-		 * decided it. That rule is untouched by everything below — the choice is between a person's sentence
-		 * and NO sentence, and it is never between a person's sentence and a machine's.
-		 *
-		 * OPTIONAL ( Bryan, 2026-09-28 ). "Agents don't need context to know when to type check." Requiring
-		 * this made a command with no intent a DRAFT, which is a blocking state: the manifest filtered it out
-		 * and `CommandService.run` refused it as `unfinished_draft`. So the commonest command anybody authors
-		 * — one binary, one subcommand, no holes, nothing to explain — could not be used at all until a
-		 * sentence was invented for it, and an invented sentence is the thing the paragraph above refuses.
-		 *
-		 * `Command.NO_INTENT` SURVIVES AS AN ADVISORY rather than being deleted. The nudge is still worth
-		 * making for the command where the judgement genuinely is not obvious; what changed is that it no
-		 * longer pins the command. And the manifest prints NOTHING where an empty intent would go — see
-		 * `manifest()`, where a warning string was once handed to a model as though it were guidance.
+		 * When to reach for this, authored by a person: the one sentence an agent reads before calling it. Authored,
+		 * never derived, because an empty intent is visibly missing where a generated one reads as a decision.
+		 * Optional, because requiring it turned a runnable command into a draft. The manifest prints nothing for it.
 		 */
 		readonly intent: string = '',
 		/**
-		 * THE COMMAND LINE, in order, as parts. Never a string: see `CommandPart`.
-		 *
-		 * Held verbatim so a reviewer reads exactly what will run — the same array the surface draws and the
-		 * agent's manifest line is generated from, so a person approving a command and an agent calling it
-		 * cannot be looking at two different things.
-		 *
-		 * ONE PART IS NOT ONE ARGV ELEMENT ( Bryan, 2026-09-27 ). A literal splits on whitespace, so
-		 * `npm run typecheck` is one part and three arguments. A FILLED part is always exactly one element,
-		 * whatever it contains. `argv()` is where that happens and `commandWords` is why.
+		 * The command line as parts, never a string. The array a person approves is the one an agent calls.
+		 * A literal splits on whitespace into argv elements; a filled part is always exactly one, whatever it holds.
 		 */
 		readonly parts: readonly CommandPart[] = []
 	) {
@@ -321,12 +167,8 @@ export class Command {
 	}
 
 	/**
-	 * THE ONE SPELLING OF A COMMAND'S NAME — trimmed and lower-cased.
-	 *
-	 * A SINGLE AUTHOR for the rule, so the roster, the manifest, the gate's subject and any surface that
-	 * displays one cannot disagree about what a command is called. An authoring surface may call this to show
-	 * a person what their name will become; nothing needs to call it to COMPARE, because every `Command`
-	 * already holds a canonical name.
+	 * The one spelling of a command's name, trimmed and lower-cased. Surfaces may preview it; nothing needs it
+	 * to compare, since every `Command` already holds a canonical name.
 	 */
 	static normalizeName( raw: string ): string {
 		return raw.trim().toLowerCase();
@@ -350,18 +192,8 @@ export class Command {
 			code: 'no_name', field: 'name', blocking: true,
 			message: 'No name. An agent calls this by name and has nothing to call.'
 		},
-		/*
-		 * ADVISORY, NOT BLOCKING ( Bryan, 2026-09-28 ). "Agents don't need context to know when to type
-		 * check." A command whose line is self-evident is a usable command, and pinning it as a draft made
-		 * the commonest thing anybody authors — one binary, one subcommand, no holes — unreachable until
-		 * somebody wrote a sentence nobody needed.
-		 *
-		 * KEPT RATHER THAN DELETED, because the nudge is still worth making. A command whose judgement is
-		 * NOT self-evident is the case intent exists for, and a surface that says nothing about the empty
-		 * field stops asking the question entirely. Non-blocking is exactly the shape for that: the editor
-		 * still remarks on it, `ready` does not care, the manifest offers the command, and nothing refuses
-		 * to run it.
-		 */
+		/* Advisory, not blocking: pinning self-evident commands as drafts made them unreachable, and an empty
+		 * intent is still worth a remark. */
 		no_intent: {
 			code: 'no_intent', field: 'intent', blocking: false,
 			message: 'No intent authored. Not required — but if WHEN to reach for this is not obvious from the line above, this is the only place to say so.'
@@ -383,17 +215,8 @@ export class Command {
 			message: 'A part of this command was authored as a kind that no longer exists. It cannot run — replace it with fixed text or a typed hole.'
 		},
 		/*
-		 * THE SAME FAMILY AS `retired_part`, AND FOR THE SAME REASON ( 2026-09-30 ). A path hole that does not
-		 * say what is done with the path cannot be judged at the right rung, and the one thing that must not
-		 * happen is for it to be judged at the shallowest one by default — a forgotten annotation would become
-		 * a silent grant that looks harmless. So it blocks: nothing runs, nothing is offered to an agent, the
-		 * roster still loads, and the surface shows a person exactly which hole to finish.
-		 *
-		 * THE COMPILER IS THE FIRST LINE AND THIS IS THE SECOND. `access` is required on the part, so no
-		 * authored code can omit it; `fromSerialized` degrades a stored part that lacks one to `retired`, so
-		 * no roster written before this change can either. What is left is data that reached a `Command`
-		 * without passing either — and the honest answer to that is a blocking fault rather than a cast and a
-		 * shrug. A guard whose job is to never fire is still the guard that makes the claim checkable.
+		 * A path hole must not default its access: a forgotten annotation would become a silent grant. The
+		 * compiler requires `access`, `fromSerialized` degrades a stored part that lacks it, and this is the backstop.
 		 */
 		no_access: {
 			code: 'no_access', field: 'parts', blocking: true,
@@ -402,15 +225,8 @@ export class Command {
 	};
 
 	/**
-	 * BASIC VALIDATION — the faults this object can see about itself, as codes.
-	 *
-	 * DELIBERATELY BASIC. It catches what is true of any command regardless of who is looking at it, and
-	 * stops there. A surface with a narrower question — this chip, right now, as somebody types — writes its
-	 * own check and reports it under the same code. That is the arrangement: the object owns the VOCABULARY,
-	 * every consumer owns its own DETECTION, and neither has to know what the other checks.
-	 *
-	 * ONE OF EACH. A code names a CLASS of fault, so three retired parts raise it once — the surface drawing
-	 * those parts is the one that knows which three, and it is already looking at them.
+	 * Basic validation: the faults this object can see about itself, as codes. Deliberately basic; a narrower
+	 * surface check reports under the same code. A code names a class of fault, so it is raised once.
 	 */
 	getErrors(): CommandCode[] {
 		const found: CommandCode[] = [];
@@ -421,25 +237,10 @@ export class Command {
 		if( !this.parts.length )  found.push( Command.NO_COMMAND );
 
 		/*
-		 * THE FIRST PART, not merely SOME part — corrected 2026-09-27.
-		 *
-		 * This tested `some( literal )` while its own message said "the agent would choose the program
-		 * itself", and those are not the same rule. `«tool» --version` carries a fixed part and passed,
-		 * which handed argv[0] — THE PROGRAM — to whichever agent called it. That is the one thing this
-		 * whole design rests on not being possible: everything an agent can run is chosen at a person's
-		 * keyboard, and a command whose binary is a hole is a shell with extra steps.
-		 *
-		 * Strictly stronger than what it replaces: a command with no literal anywhere has no literal
-		 * first either, so every case the old predicate caught is still caught.
+		 * The FIRST part must be fixed text, not merely some part: a hole in argv[0] lets the agent choose the program.
 		 */
 		/*
-		 * AND IT MUST CONTRIBUTE A WORD — added 2026-09-27, with the literal split.
-		 *
-		 * Once a literal splits on whitespace it can contribute ZERO argv elements: `{ literal: '' }`, or one
-		 * holding only spaces. A command whose first part was an empty literal followed by a hole would build
-		 * an argv whose FIRST element came from the agent — reopening, through a blank field, the exact hole
-		 * `no_fixed_part` exists to close. Being a literal is no longer sufficient; it has to actually say
-		 * something.
+		 * The first part must also split to at least one word: an empty literal would hand argv[0] to the agent.
 		 */
 		const first = this.parts[ 0 ];
 		if( this.parts.length && ( first?.kind !== 'literal' || !commandWords( first.text ).length ) ) {
@@ -470,11 +271,8 @@ export class Command {
 		return !this.getErrors().some( ( c ) => this.fetchCode( c ).blocking );
 	}
 
-	/** The parts an agent supplies a value for, in order. THE ORDER IS THE CONTRACT — a call passes an array
-	 *  positionally, so this is also the manifest's parameter list.
-	 *
-	 *  NARROWED, by predicate. Every caller wants a slot's `name`, and a caller re-proving that a list of
-	 *  non-literals holds no literals is the type doing nothing useful twice. */
+	/** The parts an agent supplies, in order: the order is the contract, since a call passes positionally.
+	 *  Narrowed here so no caller re-proves that a list holds no literals. */
 	get fillable(): readonly FillablePart[] {
 		return this.parts.filter( ( p ): p is FillablePart => p.kind !== 'literal' && p.kind !== 'retired' );
 	}
@@ -490,17 +288,8 @@ export class Command {
 	}
 
 	/**
-	 * THE ARGV, AS FAR AS IT CAN BE KNOWN BEFORE A CALL — one entry per argument, holes marked.
-	 *
-	 * WHY A SURFACE NEEDS THIS. `describe()` prints a literal verbatim, so `node -e process.stdout.write( 1 )`
-	 * reads as one line and is silently five arguments. An author cannot see the whitespace split from the
-	 * strip, which makes the quoting rule something they have to KNOW rather than something they can check —
-	 * and the failure it produces arrives much later, from a program complaining about arguments nobody meant
-	 * to send.
-	 *
-	 * So this is `argv()` minus the values: the same `commandWords` split over the same literals, with each
-	 * hole standing in for what an agent will supply. One implementation, because a surface computing its own
-	 * would be a second opinion about the thing the author is checking.
+	 * The argv as far as it can be known before a call: one entry per argument, holes marked. `describe()`
+	 * prints a literal verbatim, which hides the quoting split, so surfaces draw it from here.
 	 */
 	argvShape(): { text: string; hole: boolean }[] {
 		const out: { text: string; hole: boolean }[] = [];
@@ -517,21 +306,9 @@ export class Command {
 	}
 
 	/**
-	 * THE BLOCK THE AGENT IS HANDED — this command's entire tool description, and the only thing about it a
-	 * model ever sees.
-	 *
-	 * TWO AUTHORS, AND THE SPLIT IS THE POINT. The judgement is a person's: `intent`, and the choice of type
-	 * on every hole. The CALL SHAPE is generated from `parts`, because a human typing the argument list beside
-	 * an array that already states it is a human maintaining a second copy — and the copy is what drifts. So a
-	 * person cannot describe a parameter that does not exist, and cannot forget to describe one that does.
-	 *
-	 * A HOLE'S DESCRIPTION COMES FROM ITS TYPE ( Bryan, 2026-09-27 ), not from a hand-written hint. The hint
-	 * was the one field no surface ever gave a person a control for, so it was always empty and the command
-	 * was always a draft. Picking `file_path` says everything a sentence was going to say, and cannot be
-	 * left blank.
-	 *
-	 * Rendered verbatim in the editor while it is being written. A person authoring this is looking at the
-	 * exact text the agent gets, gaps and all — no preview mode, no "roughly like this".
+	 * The block an agent is handed: this command's whole tool description. The judgement is a person's (intent,
+	 * and each hole's type); the call shape is generated from parts, so no parameter can be described that does
+	 * not exist. A hole's description comes from its type, never a free hint. Rendered verbatim in the editor.
 	 */
 	manifest(): string {
 		const slots = this.fillable.map( ( p ) => {
@@ -539,19 +316,7 @@ export class Command {
 			return `  ${ p.name } — ${ type?.describe ?? p.kind }${ p.optional ? '   ( may be omitted )' : '' }`;
 		} );
 
-		/*
-		 * NO INTENT MEANS NO LINE — not a line saying there is no intent ( Bryan, 2026-09-28 ).
-		 *
-		 * This printed `⚠ no intent authored — this command is a draft` in the intent's place, which was
-		 * harmless only for as long as an intent-less command was filtered out before any model saw it. It
-		 * is not filtered out any more, so that string would be delivered INTO an agent's tool description
-		 * in the one slot reserved for a person's judgement — a defect report read as guidance.
-		 *
-		 * Nor a neutral stand-in like "no guidance authored", which is the tempting compromise and is worse
-		 * than silence: it spends a line telling a model about the authoring process rather than about the
-		 * command. The point of the ruling is that some commands need no explanation, and the manifest
-		 * should LOOK like that.
-		 */
+		/* No intent means no line: a warning here would reach a model as the command's guidance. */
 		const intent = this.intent.trim();
 
 		return [
@@ -565,12 +330,8 @@ export class Command {
 	}
 
 	/**
-	 * THE VALUES AS THEY WILL ACTUALLY RUN — each one put through its slot's type, in ONE place.
-	 *
-	 * THE ONLY NORMALIZATION POINT, and that is a security property rather than tidiness. If validation read
-	 * a raw value while argv received a cleaned one, the string that was judged and the string that runs would
-	 * be different — validate-then-mutate, which is how a check gets passed by a value that never faced it.
-	 * `inspect` and `argv` both come through here.
+	 * The values as they will run, each through its slot's type. This is the only normalization point: judging
+	 * one string and running another is validate-then-mutate, and that is how a check gets passed by a value it never saw.
 	 */
 	filled( values: readonly string[] ): string[] {
 		return this.fillable.map( ( part, i ) => {
@@ -581,14 +342,8 @@ export class Command {
 	}
 
 	/**
-	 * WHAT IS WRONG WITH THESE VALUES — every fault, not the first.
-	 *
-	 * ALL OF THEM, deliberately. The gate emits ONE verdict, so an agent told about one bad character at a
-	 * time would round-trip once per character while a person watches it flail. Finding everything costs
-	 * nothing and turns three refusals into one.
-	 *
-	 * An empty array means nothing is wrong with the values. It does NOT mean the call may proceed — that
-	 * sentence has one author and it is not this class.
+	 * Every fault, not the first: one verdict per call, and an agent told one bad character at a time would
+	 * round-trip once per character. An empty array means the values are clean, not that the call may proceed.
 	 */
 	inspect( values: readonly string[] ): CommandFault[] {
 		const faults: CommandFault[] = [];
@@ -605,16 +360,9 @@ export class Command {
 	}
 
 	/**
-	 * ONE SLOT, ONE VALUE. Public because an authoring surface wants exactly this as somebody types, and a
-	 * second copy of these rules living in a component is how the field a person tests against and the check
-	 * that actually runs start disagreeing.
-	 *
-	 * NORMALIZES FIRST, so this answers about the string that would RUN rather than the one that was typed —
-	 * which is what makes it safe for a surface to call with a raw value and get the real answer. The type's
-	 * `normalize` is idempotent, so `inspect` calling this and `filled` normalizing again agree.
-	 *
-	 * Ordered so the most specific fault is the one reported. A type may narrow; nothing may widen past the
-	 * control, length and flag checks, which are the three that bite even with no shell anywhere on the path.
+	 * One slot, one value. Public so an authoring surface cannot drift from the rules that run. It normalizes
+	 * first, so it judges the string that would run, which means normalize must be idempotent. A type may narrow
+	 * the check; nothing may widen past the control, length and flag checks.
 	 */
 	inspectPart( part: CommandPart, value: string ): CommandFault | null {
 		if( part.kind === 'literal' || part.kind === 'retired' ) return null;
@@ -636,12 +384,8 @@ export class Command {
 	}
 
 	/**
-	 * THE ARGV, built from an agent's positional values.
-	 *
-	 * IT THROWS ON A FAULT, AND THAT IS AN ASSERTION RATHER THAN A GATE. Reaching here with a faulty value
-	 * means the call was never inspected, which means something bypassed the checkpoint — so it fails loud
-	 * instead of building a command line nobody vetted. The throw is not the refusal path; the refusal path
-	 * is a verdict, and by the time anything calls this the verdict was already yes.
+	 * The argv, built from an agent's positional values. It throws on a fault: reaching here faulty means the
+	 * checkpoint was bypassed, so it fails loud. The refusal path is the verdict, not this throw.
 	 */
 	argv( values: readonly string[] ): string[] {
 		const faults = this.inspect( values );
@@ -673,26 +417,15 @@ export class Command {
 	}
 
 	/**
-	 * THE WIRE FORM — and it is PLAIN DATA all the way down, rebuilt rather than spread ( 2026-09-28 ).
-	 *
-	 * This spread `this.parts` into a new array, which copies the element REFERENCES. A renderer that had
-	 * let a `Command` be deep-proxied by Vue therefore handed a fresh array of reactive Proxies into an IPC
-	 * payload, where structured clone refuses them — and the caller's save vanished with no error anybody
-	 * saw. That happened, cost a defect, and the comment warning about it sat one layer away from the
-	 * mistake in a component that was already obeying it.
-	 *
-	 * So the invariant is enforced where the wire form is MADE rather than asked of every surface that
-	 * builds one. Each part is rebuilt as a literal, so whatever wrapper a caller's framework put around it
-	 * is left behind here and cannot cross.
+	 * The wire form, plain data all the way down. Parts are rebuilt rather than spread, because a spread copies
+	 * element references, and a reactive proxy in an IPC payload is refused by structured clone.
 	 */
 	serialize(): SerializedCommand {
 		const parts = this.parts.map( ( p ): CommandPart => {
 			if( p.kind === 'literal' ) return { kind: 'literal', text: p.text };
 			if( p.kind === 'retired' ) return { kind: 'retired', was: p.was };
-			// `optional` only when it is actually set — a key carrying `undefined` is a key, and it would
-			// turn an equality check between a stored row and a round-tripped one into a puzzle. `access` is
-			// NOT conditional: it is required, so it is always written, and a stored part without one is the
-			// pre-2026-09-30 shape that `fromSerialized` refuses to guess at.
+			// `optional` only when set: an `undefined` key breaks equality against a round-tripped row. `access` is
+			// always written, and `fromSerialized` refuses a stored part that lacks it.
 			return p.optional
 				? { kind: p.kind, name: p.name, access: p.access, optional: true }
 				: { kind: p.kind, name: p.name, access: p.access };
@@ -701,23 +434,9 @@ export class Command {
 	}
 
 	/**
-	 * REBUILD FROM STORAGE OR THE WIRE.
-	 *
-	 * A PART OF A KIND THAT NO LONGER EXISTS IS KEPT, VISIBLY BROKEN ( Bryan, 2026-09-27 ). The `choice` kind
-	 * was retired with the three-kind vocabulary, and a roster written before that may hold one. The three
-	 * ways to handle that are to crash, to guess, or to say so, and only the last is honest: guessing would
-	 * silently change what a privileged command runs — turning a menu into whichever option happened to be
-	 * first is a different command line than the one somebody reviewed.
-	 *
-	 * So it becomes a `retired` part, which blocks the command. Nothing runs, nothing is offered to an agent,
-	 * the roster still loads, and the surface shows a person exactly which part to replace.
-	 *
-	 * A PATH HOLE WITH NO `access` IS THE SAME CASE, and lands in the same place ( 2026-09-30 ). Every path
-	 * part authored before that date carries no level, and the one thing that must not happen is for it to
-	 * come back defaulted to `read` — a roster would then keep running, judged at the shallowest rung,
-	 * against an annotation nobody ever made. Guessing here would be guessing at a SECURITY declaration,
-	 * which is strictly worse than guessing at a menu's first option. So it comes back visibly broken, with
-	 * the kind it was named in its place, and a person re-picks the level they always meant.
+	 * Rebuild from storage or the wire. A part of a kind that no longer exists is kept visibly broken as `retired`:
+	 * guessing would silently change what a privileged command runs. A path hole with no `access` is the same case;
+	 * defaulting it to `read` would be guessing at a security declaration.
 	 */
 	static fromSerialized( json: SerializedCommand ): Command {
 		const parts = ( json.parts ?? [] ).map( ( p ): CommandPart => {

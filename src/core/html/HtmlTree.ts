@@ -1,27 +1,7 @@
 /**
- * HtmlTree — the Node-free HTML substrate the whole parser family sits on.
- *
- * ONE reader, ONE navigation surface. Both heads — KcdValidate ( binary conform check ) and
- * KcdParse ( object-model emit ) — walk THIS tree; neither re-implements HTML reading or node
- * traversal. This is the layer the parser lens defends: small total functions behind a clean seam,
- * never a regex pile re-grown in two places.
- *
- * TWO entry points, ONE node shape:
- *   • parse( html )   — a dependency-free reader for Node ( the SDK / converter / CLI ).
- *   • fromDOM( el )   — wraps a real DOM element/Document ( the Starmind renderer, where DOMParser
- *                       already produced the tree ). Same output shape, so every consumer is
- *                       environment-agnostic.
- *
- * Node shape:  { type:'el', tag, attrs:{}, kids:[ … ], start?, end? }  |  { type:'text', value }
- *
- * `parse()` also records each element's source span ( `start`/`end` — byte offsets into the input
- * string ), so a caller can splice a node's exact span out of the original source without a lossy
- * re-serialize ( KcdExcise, the delete-cascade surgeon ). `fromDOM()` has no source, so those are
- * absent on renderer-built trees — span-based edits are a Node-side ( string-source ) operation.
- *
- * `parse()` is the placeholder MiniHtml reader, ported verbatim from the dev-utilities validator so
- * the substrate is proven. It handles the subset KCD docs use: nested elements, quoted attributes,
- * comments, doctype, void elements, and raw <script>/<style>.
+ * HtmlTree — the Node-free HTML substrate the parser family sits on. Both heads (KcdValidate, KcdParse) walk this tree;
+ * neither re-implements HTML reading. `parse` (Node) and `fromDOM` (renderer) emit one node shape. Only `parse` records
+ * source spans (`start`/`end`, for KcdExcise), so span-based edits are a Node-side operation.
  */
 
 export type HtmlNode = HtmlEl | HtmlText;
@@ -34,17 +14,8 @@ export const HtmlTree = new class HtmlTree {
 	VOID = new Set( [ 'meta', 'link', 'input', 'br', 'hr', 'img', 'source', 'col', 'area', 'base', 'wbr' ] );
 	RAW  = new Set( [ 'script', 'style' ] );
 
-	/**
-	 * Elements that live INSIDE a line of text. Everything not named here is treated as block-level and
-	 * gets its own line when `serialize` pretty-prints.
-	 *
-	 * The set is deliberately the inline one rather than the block one: the block vocabulary is open
-	 * ( `section`, `article`, `figure`, and every `div` a document invents ), while the inline
-	 * vocabulary is small and closed. Guessing wrong about a block costs a newline nobody sees;
-	 * guessing wrong about an inline WELDS OR SPLITS WORDS — `</strong> <code>` collapsing to
-	 * `canonical:_Claude` is the defect the parser's own whitespace rule already exists to prevent.
-	 * So the safe default is "block", and this list is what opts out.
-	 */
+	/** Elements inside a line of text; everything else pretty-prints as block. Guessing block wrong costs a newline,
+	 *  guessing inline wrong welds or splits words, so the default is block and this list opts out. */
 	INLINE = new Set( [
 		'a', 'abbr', 'b', 'bdi', 'bdo', 'br', 'cite', 'code', 'data', 'del', 'dfn', 'em', 'i', 'img',
 		'ins', 'kbd', 'label', 'mark', 'q', 'rp', 'rt', 'ruby', 's', 'samp', 'small', 'span', 'strong',
@@ -65,11 +36,8 @@ export const HtmlTree = new class HtmlTree {
 				const next = html.indexOf( '<', i );
 				const end  = next < 0 ? html.length : next;
 				const text = html.slice( i, end );
-				// A whitespace-only run between two INLINE elements ( `</strong> <code>` ) is a significant
-				// space — dropping it welds words together ( "canonical:_Claude" ). Collapse it to a single
-				// space rather than discarding it. In BLOCK context that lone space renders to nothing
-				// ( `KcdContext.inline` trims it away ), so keeping it is safe there. A truly empty run adds
-				// nothing.
+				// A whitespace-only run between two INLINE elements is a significant space: dropping it welds words together.
+				// KcdContext.inline trims it away in block context, so keeping it there is safe.
 				const value = text.trim() !== '' ? this.decode( text ) : ( text === '' ? '' : ' ' );
 				if ( value ) top().kids.push( { type: 'text', value } );
 				i = end;
@@ -171,20 +139,8 @@ export const HtmlTree = new class HtmlTree {
 		return this.collect( el, pred )[ 0 ] ?? null;
 	}
 
-	/**
-	 * Re-serialize an element's children back to an HTML string — the section-body payload.
-	 * NORMALIZED, not byte-original: the source's incidental whitespace/quote style is not preserved.
-	 * That is fine by ruling — the section body is the substrate-coupled half of the seam, free to
-	 * change; parity is asserted on section NAMES / links / policy, never on body bytes.
-	 *
-	 * PRETTY-PRINTED since 2026-08-17. It used to concatenate with no separator at all, which — since
-	 * `parse` collapses every whitespace-only run to a single space and `serialize` emitted no
-	 * newlines — flattened each document onto ONE PHYSICAL LINE. A 6KB body on line 11 was the
-	 * standing example. The cost was not cosmetic: `KcdSynth` built carefully indented markup and
-	 * `KcdEmit.spliceFrontmatter` re-parsed it through here in the same call and discarded the
-	 * formatting, so the two halves of one pipeline undid each other; and every diff of an
-	 * agent-written document was one unreadable line.
-	 */
+	/** Re-serialize an element's children to HTML. NORMALIZED, not byte-original: parity is asserted on section
+	 *  NAMES, links and policy, never on body bytes. */
 	innerHtml( el: HtmlEl, indent: string = '' ): string {
 		const kids = el.kids.filter( k => !this.isBlank( k ) );
 		if ( !kids.length ) return '';
@@ -192,9 +148,8 @@ export const HtmlTree = new class HtmlTree {
 		return kids.map( k => this.serialize( k, indent ) ).join( sep ).trim();
 	}
 
-	/** A text node that is only whitespace — `parse` emits these as a single space to keep adjacent
-	 *  inline elements from welding. They carry no content, so a block layout drops them and rebuilds
-	 *  the spacing structurally; an INLINE run keeps them, which is the whole reason they exist. */
+	/** A whitespace-only text node. `parse` emits these to keep adjacent inline elements from welding; a block layout
+	 *  drops them, and only an INLINE run keeps them. */
 	isBlank( n: HtmlNode ): boolean {
 		return n.type === 'text' && n.value.trim() === '';
 	}
@@ -204,10 +159,8 @@ export const HtmlTree = new class HtmlTree {
 		return n.type === 'text' || this.INLINE.has( n.tag );
 	}
 
-	/**
-	 * Node tree → HTML string. The inverse of `parse`, and the two must agree on every text path or a
-	 * save corrodes what it did not touch — see `HtmlTree.entities.test.ts` for the seam this locks.
-	 */
+	/** Node tree → HTML string, the inverse of `parse`. The two must agree on every text path, or a save corrodes
+	 *  what it did not touch (see `HtmlTree.entities.test.ts`). */
 	serialize( n: HtmlNode, indent: string = '' ): string {
 		if ( n.type === 'text' ) return this.escapeText( n.value );
 		const attrs = Object.entries( n.attrs )
@@ -215,34 +168,21 @@ export const HtmlTree = new class HtmlTree {
 			.join( '' );
 		if ( this.VOID.has( n.tag ) ) return `<${ n.tag }${ attrs }>`;
 
-		// RAW content round-trips VERBATIM, because `parse` captured it verbatim — its RAW branch is the
-		// one text path that skips `decode`, so escaping here adds a layer nothing ever removes. Same
-		// rule as the entity seam: what parse leaves alone, serialize leaves alone.
-		//
-		// Not cosmetic. Protocol §10 seed payloads are markdown inside <script type="text/kcd-md">, and
-		// `>` is markdown's blockquote character — escaped here, it is written into a real CLAUDE.md by
-		// the next seed emit. The corruption is one-time and then stable, so nothing ever gets
-		// visibly worse and nothing prompts a look.
-		//
-		// `RAW` is script/style ONLY. <pre> is deliberately not raw, and the double-escape trade pinned
-		// in HtmlTree.entities.test.ts stays exactly as it is.
+		// RAW content round-trips VERBATIM: `parse` skips `decode` there, so escaping would corrupt markdown inside
+		// <script type="text/kcd-md"> — its `>` is blockquote syntax. `RAW` is script/style ONLY; <pre> is not raw.
 		if ( this.RAW.has( n.tag ) ) {
 			const raw = n.kids.map( k => k.type === 'text' ? k.value : this.serialize( k ) ).join( '' );
 			this.assertRawContainable( n.tag, raw );
 			return `<${ n.tag }${ attrs }>${ raw }</${ n.tag }>`;
 		}
 
-		// `<pre>` is whitespace-SIGNIFICANT — reformatting it changes what the reader sees, so its
-		// children are concatenated exactly as an inline run and never indented. It is deliberately not
-		// in RAW ( see the double-escape trade pinned in HtmlTree.entities.test.ts ); this is the other
-		// half of that decision.
+		// `<pre>` is whitespace-SIGNIFICANT: its children are concatenated as an inline run, never indented.
+		// It is deliberately not in RAW (see `HtmlTree.entities.test.ts`).
 		if ( n.tag === 'pre' )
 			return `<${ n.tag }${ attrs }>${ n.kids.map( k => this.serialize( k ) ).join( '' ) }</${ n.tag }>`;
 
-		// THE ONE RULE: an element breaks lines only when it actually CONTAINS a block child. A run of
-		// text and inline elements is emitted exactly as it was, on one line, because whitespace between
-		// inline nodes is rendered content — injecting a newline there splits or welds words. Whitespace
-		// BETWEEN blocks renders to nothing, so it is free to use for structure.
+		// An element breaks lines only when it CONTAINS a block child: whitespace between inline nodes is rendered
+		// content, so a newline there would split or weld words. Whitespace between blocks renders to nothing.
 		const kids = n.kids.filter( k => !this.isBlank( k ) );
 		if ( !kids.some( k => !this.isInline( k ) ) )
 			return `<${ n.tag }${ attrs }>${ n.kids.map( k => this.serialize( k ) ).join( '' ) }</${ n.tag }>`;
@@ -252,31 +192,10 @@ export const HtmlTree = new class HtmlTree {
 		return `<${ n.tag }${ attrs }>\n${ body }\n${ indent }</${ n.tag }>`;
 	}
 
-	/**
-	 * REFUSE to emit a raw element that would terminate itself — the raw-text breakout.
-	 *
-	 * There is no escape hatch to reach for here, which is why this refuses rather than repairs: entity
-	 * references are NOT decoded inside raw text, so writing `&lt;/script` would leave those literal
-	 * characters in the payload — broken JS, broken markdown — while making the document look fixed.
-	 * The content is unrepresentable in HTML, not merely awkward.
-	 *
-	 * Emitting it anyway is the dangerous outcome, not a cosmetic one: the element ends early on the next
-	 * read and everything after it is re-tokenized as markup, so the document that comes back is a
-	 * DIFFERENT TREE from the one written. That is the shape every raw-text injection takes.
-	 *
-	 * `parse` can never produce this ( its lexer ends the element at the first `</tag` ), so reaching
-	 * here means a hand-built or DOM-sourced node — a bug in the caller, which is exactly what should
-	 * fail loudly. Throwing is safe at this layer: the tool handlers above catch and return a structured
-	 * refusal, so a malformed write is declined whole and nothing lands.
-	 *
-	 * The test is the LEXER'S OWN condition, deliberately — `parse` searches for a bare `'</' + tag`
-	 * with no following-character check, so a stricter-than-spec reader and this guard agree by
-	 * construction. Leaving a gap between what the writer permits and what the reader stops at is the
-	 * affordance a breakout needs.
-	 */
+	/** REFUSE a raw element that would end itself: raw text has no entity escaping, so there is no repair, and emitting it
+	 *  reparses as a different tree. Uses the LEXER'S OWN condition, so writer and reader agree by construction. */
 	assertRawContainable( tag: string, raw: string ): void {
-		// Both sides folded here rather than trusting the caller's normalization — this is public, and a
-		// guard that only works when its input was already lowercased is a guard with a quiet edge.
+		// Folded here: this is public, and a guard that trusts lowercased input has a quiet edge.
 		if ( !raw.toLowerCase().includes( '</' + tag.toLowerCase() ) ) return;
 		throw new Error(
 			`HtmlTree.serialize: <${ tag }> content contains "</${ tag }", which cannot be represented ` +
@@ -320,23 +239,8 @@ export const HtmlTree = new class HtmlTree {
 			.replace( /&amp;/g, '&' );
 	}
 
-	/**
-	 * Escaping is IDEMPOTENT — an `&` that already opens an entity reference ( `&mdash;`, `&#8212;`,
-	 * `&amp;` ) is left alone; only a BARE `&` is escaped.
-	 *
-	 * This is the other half of `decode` above, and the two must agree. `decode` knows a handful of
-	 * entities and passes every other one through as literal text; escaping every `&` unconditionally
-	 * therefore added a layer to `&mdash;` on the first parse → serialize round trip ( `&amp;mdash;` ),
-	 * and the document rendered the literal text to the reader. Every `save_doc` runs that round trip —
-	 * `KcdEmit.spliceFrontmatter` re-parses and re-serializes the whole body — so an unowned entity was
-	 * corroded by any edit that touched the file. The rule is now symmetric: what decode leaves alone,
-	 * escape leaves alone. Widening `decode` to a named-entity table is the alternative and is worse —
-	 * there are thousands of them and the list would rot.
-	 *
-	 * `escapeAttr` carries the same rule for the same reason: attribute values are re-serialized by the
-	 * identical round trip. The quoting guarantee is untouched — `"` is still escaped unconditionally,
-	 * so a value can never break out of its attribute.
-	 */
+	/** Escaping is IDEMPOTENT: an `&` opening an entity is left alone, as `decode` leaves it. A save round-trips the body
+	 *  here, so an unowned `&mdash;` would corrode. Quotes are always escaped, so an attribute cannot break out. */
 	escapeText( s: string ): string { return s.replace( /&(?!#?\w+;)/g, '&amp;' ).replace( /</g, '&lt;' ).replace( />/g, '&gt;' ); }
 	escapeAttr( s: string ): string { return s.replace( /&(?!#?\w+;)/g, '&amp;' ).replace( /"/g, '&quot;' ); }
 }();

@@ -21,17 +21,8 @@ export class KCDValidationError extends Error {
 	readonly field?: string;
 	readonly section?: string;
 	/**
-	 * EVERY finding, not only the one the message names.
-	 *
-	 * `message` can carry one error and one alone — it is a sentence — so a document failing on four
-	 * counts threw a sentence about the first, and every consumer that rebuilt a report from
-	 * `e.message` reported N errors as 1. That reads as PROGRESS to a repair loop: fix the named
-	 * error, re-run, meet the next one, and the tally falls by one each pass while the document is
-	 * still broken. Found 2026-09-10 against a live migration, where a whole-vault sweep said 13 and
-	 * the truth was 34.
-	 *
-	 * The message is unchanged and still names the first error — anything reading it keeps working.
-	 * This is the list beside it, for a consumer that wants the whole set.
+	 * Every finding, not only the one `message` names. A consumer that rebuilds from `message` counts N errors as 1,
+	 * and a repair loop reads that as progress. `message` is unchanged and still names the first.
 	 */
 	readonly errors: ValidateIssue[];
 

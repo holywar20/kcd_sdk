@@ -2,16 +2,11 @@ import { ConstellationError, type ConstellationValidation } from './Validation';
 import type { ConNode, BranchNode, BooleanBranchNode, SerializedConstellation } from './types';
 
 /**
- * A Constellation — many Steps wired into one named, runnable pattern. The root primitive of the
- * workflow layer (built above the orchestrator, not a rewrite of it).
- *
- * Mirrors `Agent`: a standalone, pure-data class (no `fs`) that a fluent builder authors AND that
- * crosses the IPC bridge via `serializeForWire()` / `fromSerialized()`. The builder and the graph
- * are ONE object — you hold the instance, chain verbs onto it, and `.commit()` freezes it. An
- * invalid Constellation still freezes (its issues stay inspectable) but is NOT executable.
- *
- * `validate()` runs on the instance and is pure structural, so the renderer can check a graph live.
- * BINDING validation — does each step / contract id resolve HERE — is the Navigator's job, main-side.
+ * A Constellation — many Steps wired into one named, runnable pattern: the root primitive of the workflow layer,
+ * built above the orchestrator. A pure-data class (no `fs`) like `Agent`, crossing the IPC bridge via
+ * `serializeForWire()` / `fromSerialized()`. The builder and the graph are one object; `.commit()` freezes it,
+ * and an invalid one still freezes but is NOT executable. `validate()` is pure structural; BINDING validation
+ * (does each step or contract id resolve) is the Navigator's job, main-side.
  */
 export class Constellation {
 
@@ -63,11 +58,8 @@ export class Constellation {
 		return this;
 	}
 
-	/**
-	 * Append a Utility — a self-evaluating code node. `language` selects the runtime (vanilla JS only,
-	 * for now); `code` is the body that returns the boolean verdict; `args` are node-set (never agent-set
-	 * — the security barrier). Single exit; pair it with a `.booleanBranch()` to route on its verdict.
-	 */
+	/** Append a Utility: a self-evaluating code node whose `code` returns the boolean verdict. `args` are node-set,
+	 *  never agent-set — the security barrier. Single exit. */
 	utility( spec: { language?: 'javascript'; code: string; args?: unknown[] } ): this {
 		this._guardOpen();
 		this._cursor.push( {
@@ -80,11 +72,8 @@ export class Constellation {
 		return this;
 	}
 
-	/**
-	 * Append a Boolean Branch — routes the head on the PRIOR node's boolean verdict (decoupled from
-	 * evaluation: the upstream utility/contract produced the boolean; this only routes it). `pass` / `fail`
-	 * are sub-builders; an omitted port terminates that path (pass = success, fail = failed).
-	 */
+	/** Append a Boolean Branch: routes on the PRIOR node's boolean verdict, decoupled from evaluation. An omitted
+	 *  port terminates that path (pass = success, fail = failed). */
 	booleanBranch( ports: { pass?: ( w: Constellation ) => void; fail?: ( w: Constellation ) => void } ): this {
 		this._guardOpen();
 		const node: BooleanBranchNode = { kind: 'boolean-branch', id: this._mint( 'boolbranch' ), pass: null, fail: null };
@@ -94,11 +83,8 @@ export class Constellation {
 		return this;
 	}
 
-	/**
-	 * Append a branch that routes on a contract. `pass` / `fail` are sub-builders (`w => w.then(…)`)
-	 * authored against a fresh cursor; an omitted port stays null (= terminate that path). The
-	 * contract is stored now; routing on it lands in Phase 3.
-	 */
+	/** Append a branch that routes on a contract; an omitted port stays null and terminates that path.
+	 *  The contract is stored now; routing on it lands in Phase 3. */
 	branch( contract: string, ports: { pass?: ( w: Constellation ) => void; fail?: ( w: Constellation ) => void } ): this {
 		this._guardOpen();
 		const node: BranchNode = { kind: 'branch', id: this._mint( 'branch' ), contract, pass: null, fail: null };
@@ -126,10 +112,8 @@ export class Constellation {
 	isCommitted():  boolean { return this._committed; }
 	isExecutable(): boolean { return this._committed && this.validate().length === 0; }
 
-	/**
-	 * Structural validation — pure, runs in the renderer. An extensible rule list: as the system
-	 * grows, add rules here (orphan / seam-shape / fail-loop governor). Returns plain strings.
-	 */
+	/** Structural validation — pure, runs in the renderer, an extensible rule list: add rules here as the system
+	 *  grows (orphan / seam-shape / fail-loop governor). Returns plain strings. */
 	validate(): ConstellationValidation {
 		const errors: ConstellationValidation = [];
 		if ( !this._nodes.length ) errors.push( ConstellationError.EMPTY );

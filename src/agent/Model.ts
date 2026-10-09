@@ -7,38 +7,16 @@
  */
 export type Tier = 'local' | 'remote' | 'frontier';
 
-/**
- * Every effort stop any model in the system offers — the DECLARATION vocabulary, not a wire format.
- *
- * Five names spanning TWO unrelated dials that merely share their first three: gpt-oss / harmony's
- * `reasoning_effort` (three stops) and Claude Code's `--effort` (all five). A model declares the subset it
- * accepts (`capabilities.reasoning.effort`) and each connector maps that to its own wire form — so the
- * narrow wire union in `openai-compat.ts` stays THREE on purpose, and this type must never be substituted
- * for it. Sending `xhigh` to a llama-server that can't parse it is the exact 400 the declaration prevents.
- */
+/** Every effort stop any model offers — the DECLARATION vocabulary, not a wire format. Five names across two
+ *  unrelated dials; never substitute this for a connector's narrower wire union (openai-compat stays THREE). */
 export type ReasoningEffort = 'low' | 'medium' | 'high' | 'xhigh' | 'max';
 
-/** The five stops LEAST-first — the only statement anywhere that one effort is more than another. Needed
- *  because `ReasoningEffort` is a union of names and a union carries no order, so anything that has to say
- *  "the highest of these" has to read it off a list. */
+/** The five stops LEAST-first — the only place one effort is ranked above another. A union carries no order,
+ *  so anything asking for "the highest" must read it from this list. */
 export const REASONING_EFFORTS: readonly ReasoningEffort[] = [ 'low', 'medium', 'high', 'xhigh', 'max' ];
 
-/**
- * CLAMP A STATED EFFORT TO WHAT A MODEL ACTUALLY DECLARES — down, never up, and never to the middle.
- *
- * A stated effort can go stale without being edited: an agent set to `xhigh` whose model is then changed to
- * one that stops at `high` is now asking for a stop that model never declared. The connector would DROP it
- * ( `openai-compat.ts` forwards three names and discards anything else ), so forwarding it unchanged means
- * the turn runs at the provider's own default with nothing saying so.
- *
- * So: the requested stop if the model declares it, otherwise the highest declared stop BELOW it, otherwise
- * the lowest declared stop. The person gets the most of what they asked for that this model can give. Note
- * what is deliberately NOT here — falling back to `medium`, which would hand somebody who asked for the
- * maximum the middle and say nothing.
- *
- * A model declaring NOTHING ( absent or empty ) has no dial at all, so there is nothing to clamp against and
- * the value passes through untouched — the connector sends no effort either way.
- */
+/** Clamp a stated effort to what the model declares — down, never up, never to the middle: the stop itself,
+ *  else the highest declared below it, else the lowest. A model declaring none passes the value through. */
 export function clampReasoningEffort( want: ReasoningEffort, declared: readonly ReasoningEffort[] | undefined ): ReasoningEffort {
 	if( !declared?.length ) return want;
 	if( declared.includes( want ) ) return want;
@@ -59,159 +37,55 @@ export interface ModelDescriptor {
 	/** The wire id sent to the provider's API. */
 	modelId: string;
 	maxTokens: number;
-	/**
-	 * The FAMILY this model was minted from, when its connector serves a family rather than a single
-	 * model. Absent on every hand-authored single (a local folder model, a remote endpoint, the test
-	 * brain) — those are top-level entries and nothing groups them.
-	 *
-	 * Present means the picker shows ONE row for `label` and offers this model inside it, which is the
-	 * whole point: a connector stays one registered entry no matter how many models it can reach, and a
-	 * twenty-model dropdown never happens. It is also the hook for family-specific handling — anything
-	 * true of "Claude on the subscription" rather than of one Claude model keys off this.
-	 *
-	 * NOT a vendor field. Two connectors reaching the same vendor stay two independent families with two
-	 * separate rows; this identifies which registered CONNECTOR ENTRY produced the model, never who makes
-	 * it. Grouping across connectors was considered and rejected.
-	 */
+	/** The family this model was minted from, when its connector serves one: the picker shows one row for it.
+	 *  Identifies the CONNECTOR ENTRY, never the vendor; grouping across connectors was rejected. */
 	family?: {
 		/** The seed key — the stable id of the family, matching the first segment of every member's key. */
 		key:   string;
 		/** The family's display name; the label the collapsed picker row shows. */
 		label: string;
 	};
-	/**
-	 * How a turn on this model is actually paid for — orthogonal to `price` (which is the
-	 * per-token rate WHEN metered). `'subscription'` means the turn draws against a flat-rate
-	 * plan the user already pays for outside Starmind (e.g. a Claude Max login) — `price` is
-	 * absent/zero for these, but that must never read as "free" in the UI: it's prepaid, not
-	 * costless. Absent for every existing provider (local/remote/test have no billing model
-	 * worth naming; anthropic is the metered default) — only a subscription-backed tier
-	 * declares this.
-	 */
+	/** How a turn is paid for, orthogonal to `price`. `'subscription'` draws a flat-rate plan paid outside
+	 *  Starmind: its absent price is prepaid, and must never read as "free" in the UI. */
 	billing?: 'subscription' | 'metered';
-	/**
-	 * WHO OWNS THE CONVERSATION — the connection's own fact, declared once on a connector's seed and
-	 * read wherever a surface has to behave differently because Starmind is not the one composing.
-	 *
-	 * `'managed'` means the provider assembles the prompt, caches its reading of the conversation on
-	 * its side, and keeps the transcript; Starmind hands over a turn and receives an answer. Absent (or
-	 * `'owned'`) means the ordinary arrangement every other connector has: Starmind composes the
-	 * context and replays it whole each turn. Absent is the SAFE default — a connector that forgets to
-	 * declare is treated as ordinary, which is merely today's behaviour, where the reverse default
-	 * would break every normal model.
-	 *
-	 * NOT `tier`, and the difference is the whole reason this exists. `tier: 'frontier'` is true of the
-	 * metered Anthropic connector too, and that one composes and replays like any other — on the
-	 * interface side it has more in common with a remote endpoint than with the subscription CLI. A
-	 * membership list named after the tier groups the wrong two things, which is exactly what four
-	 * renderer files were doing before this field ( 2026-09-17 ).
-	 *
-	 * ONE PROPERTY, TWO QUESTIONS, AND THEY CO-OCCUR TODAY. Most readers are asking "is there a context
-	 * of ours to show / count / compose"; the model-swap warning is asking the narrower "does the
-	 * provider cache its reading server-side, so a swap discards it". Only `claude_code_max` answers
-	 * yes to either, so one field serves both. The day a connector owns the conversation WITHOUT
-	 * caching it, this splits — and the reader that needs the narrower fact is the one to move.
-	 */
+	/** Who owns the conversation: `'managed'` means the provider assembles, caches and keeps the transcript; absent
+	 *  or `'owned'` is the safe default. Not `tier`: the metered Anthropic connector is frontier yet still owned. */
 	conversation?: 'managed' | 'owned';
-	/**
-	 * WHICH COMPONENT DRAWS THIS MODEL'S ACCOUNT READING — a name a surface resolves against its own table,
-	 * carried here so the renderer can ask the question off the model it already holds.
-	 *
-	 * Declared by the CONNECTOR and copied onto every model it mints, because the answer is a property of
-	 * the connection rather than of the model: the same Claude model reached two ways has a plan behind it
-	 * on one tier and a bill on the other, and those are not the same panel.
-	 *
-	 * ABSENT IS THE COMMON CASE and means the space is simply empty for this model — a local model has no
-	 * account, and a provider that publishes nothing has nothing to draw. A name the drawing surface does
-	 * not recognise means the same thing: nothing renders. The SDK never resolves this; it only carries it.
-	 */
+	/** Names the component that draws this model's account reading, declared by the connector since the same model
+	 *  can sit behind two accounts. Absent, or a name the surface does not recognise, renders nothing. */
 	usagePanel?: string;
-	/**
-	 * Working tier — how heavy the model is / where it runs. Orthogonal to provider:
-	 * a 'remote' connector may front a remote-tier self-host OR a frontier endpoint,
-	 * so tier is declared, not derived. Widgets constrain their model choice by it.
-	 *
-	 * Optional only so a half-written hand-edit doesn't crash dispatch — a real
-	 * (non-test) model with no tier is a misconfiguration that warns at boot (see
-	 * the registry's load check, starmind main). The test brain is exempt: it carries no tier.
-	 */
+	/** Working tier — how heavy the model is and where it runs; declared, never derived from provider. Optional so a
+	 *  hand-edit cannot crash dispatch; a real non-test model without one warns at boot. The test brain carries none. */
 	tier?: Tier;
-	/**
-	 * What the model can take in / how big its window is. Optional and partial by
-	 * design — a folder-derived model fills what its manifest knows and the main-side
-	 * registry defaults the rest; a missing field is "unknown", never a crash. The
-	 * file-injection filter (a later slice) reads `multimodal` to refuse a non-multimodal
-	 * model a binary.
-	 */
+	/** What the model takes in and how large its window is. Optional and partial: a missing field is unknown, never
+	 *  a crash. The file-injection filter reads `multimodal` to refuse a binary to a non-multimodal model. */
 	capabilities?: {
 		multimodal?:    boolean;
 		contextLength?: number;
-		/**
-		 * Whether this model's endpoint handles a STREAMING request. Absent/true → stream ( the default: the
-		 * orchestrator hands the connector a live sink ). `false` → the connector must NOT stream ( no sink →
-		 * a plain batch POST ): some hosted OpenAI shims ( Google's Gemma endpoint ) 500 on a streaming body
-		 * a self-hosted llama-server handles fine. An opt-OUT flag, so every normal model streams untouched.
-		 */
+		/** Absent or true streams. `false` forces a plain batch POST, because some hosted OpenAI shims 500 on a
+		 *  streaming body. An opt-out, so every normal model streams untouched. */
 		streaming?:     boolean;
-		/**
-		 * Reasoning / thinking support — the ONE place three consumers read from: the connector (what it
-		 * may put on the wire), the composer controls (which reasoning controls to show), and the info chip
-		 * (which flags to report). Absent → the model exposes NO reasoning surface: controls hidden, and no
-		 * `reasoning_effort` is ever sent. This is the seam that turns implicit per-model behaviour (the
-		 * kind that let a blind `reasoning_effort` 400 Google's Gemma shim) into queryable data.
-		 */
+		/** Reasoning support, read by the connector, the composer controls and the info chip alike. Absent means no
+		 *  reasoning surface: controls hidden, and no `reasoning_effort` is ever sent. */
 		reasoning?: {
-			/**
-			 * The effort dial's levels, in order — a DECLARATION of what this model accepts, not a wire
-			 * format. Absent/empty → the model has NO effort dial: no effort value is ever sent (Google's
-			 * Gemma shim 400s on an unsupported `reasoning_effort`; a self-hosted llama-server merely
-			 * ignores it) and the composer hides the slider.
-			 *
-			 * The five levels span TWO unrelated dials that happen to share their first three names, so
-			 * read this as "which stops does this model offer" and let each connector map it to its own
-			 * wire form:
-			 *   - gpt-oss / harmony `reasoning_effort` → `['low','medium','high']` (three only; the wire
-			 *     union in `openai-compat.ts` is deliberately NOT widened past them — sending `xhigh` to a
-			 *     llama-server that can't take it is exactly the 400 this field exists to prevent).
-			 *   - Claude Code's `--effort` → all five, `low` through `max`.
-			 * A budget-based reasoner that exposes no dial at all (metered Anthropic thinking) carries none.
-			 */
+			/** The stops this model accepts, least first: a declaration, not a wire format. Absent or empty means no
+			 *  dial, so no effort is sent. The openai-compat wire union stays at three stops on purpose. */
 			effort?: ReasoningEffort[];
-			/**
-			 * How the reasoning comes back: `readable` (the words stream into the thinking box), `measured`
-			 * (a token count only, text redacted — the headless-frontier shape), or `none` (no thinking).
-			 * Drives whether the thinking box and the reasoning-mode control appear at all.
-			 */
+			/** How reasoning comes back: `readable` streams the words, `measured` gives a token count with the text
+			 *  redacted, `none` means no thinking. Drives whether the thinking box and its control appear. */
 			channel?: 'readable' | 'measured' | 'none';
 		};
 	};
-	/**
-	 * Per-MILLION-token price in USD, split input/output (providers bill the two at different rates).
-	 * Drives the run cost meter — the orchestrator multiplies the turn's real token counts by these.
-	 * Optional by design: a local/self-hosted model has no per-token cost (absent → $0), and a
-	 * hand-edited descriptor that omits it never crashes — cost simply reads zero. Frontier rates are
-	 * declared on the cloud fixtures; tune them as the published prices move.
-	 */
+	/** Per-million-token USD, input and output split. Drives the run cost meter; absent reads as zero cost, never a
+	 *  crash. Frontier rates are declared on the cloud fixtures. */
 	price?: {
 		inputPerMTok:  number;
 		outputPerMTok: number;
 	};
 }
 
-/**
- * A model's live "degree of hookup" — how usable it is RIGHT NOW, provider-shaped.
- * Universal across providers, but only a `local` model has a process we manage:
- *
- * - `local`, fully booted: `{ usable: true, phase: 'ready', managed: true, origin: 'adopted', arena, port }`
- * - `local`, still loading: `{ usable: false, phase: 'loading', managed: true, … }`
- * - `remote` / `anthropic`: `{ usable: true, phase: 'unmanaged', managed: false, origin: null, arena: null, port: null }`
- *   — a model with no server WE own (a hosted URL / the cloud API).
- *
- * `unmanaged` is honest today and leaves room: a future health surface refines it into
- * reachable / no-key / unreachable per provider WITHOUT touching the local path. The
- * context-window gauge reads `arena`; a picker reads `usable`. Plain data — crosses the
- * pull lane (the main-side ModelService joins it onto each descriptor in the roster).
- */
+/** A model's live hookup: whether a turn can land on it right now. Only a `local` model has a process we manage;
+ *  `unmanaged` is a hosted URL or cloud API with no server of ours. */
 export interface ModelStatus {
 	/** Can a turn land on this model right now (a picker's real question). */
 	usable: boolean;
@@ -227,76 +101,21 @@ export interface ModelStatus {
 	port: number | null;
 }
 
-/**
- * One display-ready model-configuration fact — a label over its already-formatted value. The list of
- * these (`ModelRosterEntry.config`) is the model's static manifest configuration surfaced read-only
- * for display (family, license, quant, engine, …): provider-shaped and sparse (a hosted model carries
- * none), pre-formatted main-side so a consumer renders it generically without knowing the fields.
- */
+/** One display-ready config fact: a label over an already-formatted value, formatted main-side so a consumer
+ *  renders it without knowing the fields. Sparse by provider. */
 export interface ModelConfigField {
 	label: string;
 	value: string;
 }
 
-/**
- * One roster row — a descriptor joined with its live status, its tier prose (`doc`, the model's
- * connector self-description), and its static config sheet (`config`), all attached main-side. The
- * single shape the picker (descriptor fields), the context-window gauge (`status`), the Models config
- * surface (`doc`), and the session deck (`config`) read from ONE pull, so the renderer never
- * hand-joins a separate registry + server-state read again.
- *
- * `visible` is whether the user wants this model OFFERED — false only for a family member they have
- * unchecked on the Models panel. It is a FLAG on a row that is still present, deliberately, rather than
- * the row being dropped main-side: the roster is also what names a model (`labelFor`), sizes the context
- * gauge, and fills the inspector, so an agent already bound to a hidden model must still find its
- * descriptor here. Hiding governs the pickers, never the binding — the surfaces that OFFER a choice
- * (the model store's `menuFor`, the renderer Registry's model catalog) are what skip an invisible row.
- */
+/** One roster row: a descriptor joined with its live status, `doc` and `config`, read in one pull. `visible` is a
+ *  flag, not a drop: hiding governs the pickers, never the binding, so a bound hidden model must still resolve. */
 export type ModelRosterEntry = ModelDescriptor & { status: ModelStatus; doc: string; config: ModelConfigField[]; visible: boolean };
 
-/**
- * The fallback model key — the ONE model every resolution path terminates on, and the only model key
- * allowed to be hard-wired anywhere. `Agent.create` / `fromSerialized` default to it when none is set,
- * and the constellation's navigator / evaluator / artifact steps fall back to it when no operational
- * model threads through.
- *
- * It is the built-in TEST BRAIN, deliberately: a scripted generator with no external dependency, which
- * always exists and always answers. Model availability is contingent on things outside our control — a
- * local runtime installed, a remote host reachable, a credential present — so the terminal step of every
- * fallback chain has to be something that cannot be absent. That lets a user exercise a project's
- * machinery before configuring any real brain, and keeps a malformed snapshot or an unstaffed node from
- * dead-ending a run.
- *
- * It was previously `local.gemma`, which defeated the purpose: it names a specific local model that most
- * installs will not have, so the "safe" fallback could itself fail to resolve.
- *
- * A bare key STRING, not a model source — the live descriptor list lives in the main-side
- * `ModelRegistry` (inline defaults + folder scan); this only names the default to resolve against it,
- * and that roster keys its Test Brain entry off this constant so the two cannot disagree.
- */
+/** The one model key every resolution path terminates on, and the only one allowed to be hard-wired: the built-in
+ *  test brain, always present, so no fallback chain can dead-end. The main-side roster keys its Test Brain entry off it. */
 export const DEFAULT_MODEL_KEY = 'test.lorem';
 
-/**
- * THE RESERVED ACCOUNTLESS ACCOUNT ID — the other half of a model binding, and the `DEFAULT_MODEL_KEY` of
- * the account axis: the ONE account id every resolution path terminates on.
- *
- * `provider` on a descriptor means which vendor and which connector implementation; WHICH ACCOUNT PAYS is
- * a third thing, and it rides the binding beside the model key ( see `SerializedAgent.account` ). A
- * binding ALWAYS names an account, so a connector that needs none — Local, Laguna, the test brain — and
- * an agent that never dispatches at all both name THIS, which holds no credential and no profile.
- *
- * "NO ACCOUNT BY CATEGORY" IS NOT "ACCOUNT MISSING", and neither is a null. That is the whole reason this
- * constant exists rather than a nullable field: a null binding forces a branch in every reader, and the
- * reader that forgets it sends on nobody's subscription.
- *
- * Short, fixed, and not a uuid, because it is a CATEGORY rather than an instance — there is exactly one of
- * it, forever, and a generated id would suggest otherwise. It is reserved in the strong sense: no stored
- * account may claim it, so an id read off a binding resolves unambiguously to either the category or one
- * real sign-in.
- *
- * A bare id STRING, not an account record. The account ROSTER is main-side ( the `model_accounts` table and
- * `@shared/ModelAccount`, which re-exports this constant rather than restating the literal — a default
- * spelled in two places is two defaults that can disagree ). This only names the floor to resolve against
- * it, which is `DEFAULT_MODEL_KEY`'s arrangement exactly.
- */
+/** The reserved id for connectors that need no account (Local, Laguna, the test brain): a category, never a null,
+ *  since a null binding forces a branch every reader may forget. No stored account may claim it. */
 export const ACCOUNTLESS_ACCOUNT_ID = 'accountless';

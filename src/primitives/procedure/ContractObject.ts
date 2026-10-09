@@ -33,20 +33,8 @@ export class ContractObject extends KCDPrimitive {
 
 	getRole() { return 'do' as const; }
 
-	/**
-	 * The trigger — what a session matches a request against to decide this contract applies. The sibling
-	 * of `HabitObject.getWhy`, and the line a compiled context carries for this contract.
-	 *
-	 * THE OPENING STATEMENT AND THE ROWS, NOT THE WHOLE SECTION. A contract's *When* is authored as prose
-	 * and runs to several paragraphs; what a session needs in order to decide is the sentence that names
-	 * the trigger, plus the conditions enumerated under it. Everything after that first sentence is the
-	 * contract elaborating on itself, which the session gets when it fetches the contract whole — and it
-	 * is told to do exactly that before acting.
-	 *
-	 * The rows are the half this cannot drop. `readSection` collects every `<li>` into `items` and leaves
-	 * `text` without them, so returning `text` alone took a sentence ending in a colon and welded the
-	 * paragraph AFTER the list onto it: a trigger that promised its conditions and then named none.
-	 */
+	/** The trigger a session matches against: *When*'s opening sentence and rows, not the whole section.
+	 *  The rows are required: `readSection` moves every `<li>` out of `text`, so `text` alone drops them. */
 	getWhen(): string {
 		const when = KcdContext.habitSections( this.body )[ 'when' ];
 		if ( !when ) return '';

@@ -1,20 +1,9 @@
 /**
- * KcdExcise — remove a link ( and its structural record ) from an HTML source string, span-precise.
- *
- * The formatting-preserving surgeon behind a delete cascade. Given a `matches( href )` predicate it
- * finds every `<a>` whose href matches and edits ONLY that node's exact source span — every other byte,
- * and all the hand-authored alignment, is left untouched. It leans on the source offsets HtmlTree now
- * records during its normal lex ( `start`/`end` ) rather than re-growing a second HTML matcher in raw
- * text, and it never does a full re-serialize ( which would normalize the whole file ).
- *
- * Two removal modes, decided by the link's structural role:
- *   • slot-field link ( carries data-kcd-field, sits inside a data-kcd-slot ) → the WHOLE record row is
- *     removed. A reference / habit / nav-index row is meaningless once its target is gone — "pull the
- *     offending record".
- *   • bare prose `<a>` → unwrapped to its own inner text ( the sentence survives; the dead link does not ).
- *
- * All cuts are non-overlapping by construction ( data-kcd-slots do not nest; an `<a>` inside a removed
- * slot is not also unwrapped ), so they apply back-to-front in one pass with no offset bookkeeping.
+ * KcdExcise — remove a link ( and its structural record ) from an HTML source, span-precise.
+ * Edits only the matched node's exact source span, using HtmlTree's offsets rather than a second raw-text
+ * matcher, and never re-serializes, so all other bytes and hand-authored alignment survive. Slot-field
+ * links remove the whole record row, since it is meaningless once its target is gone; bare prose links
+ * unwrap to their inner text. Cuts never overlap ( slots do not nest ), so they apply back-to-front.
  */
 
 import { HtmlTree } from './HtmlTree';
@@ -24,7 +13,6 @@ interface Cut { start: number; end: number; text: string; }
 
 export const KcdExcise = new class KcdExcise {
 
-	/** Remove every link matching `matches( href )` from an HTML source string. */
 	html( source: string, matches: ( href: string ) => boolean ): string {
 		const root    = HtmlTree.parse( source );
 		const slots   = new Set<HtmlEl>();
@@ -49,8 +37,6 @@ export const KcdExcise = new class KcdExcise {
 
 	// ── internals ──────────────────────────────────────────────────────────────
 
-	/** Depth-first walk carrying the nearest enclosing data-kcd-slot; buckets each matching `<a>` into a
-	 *  whole-slot removal ( it is a slot field ) or an unwrap ( a bare prose link ). */
 	scan(
 		el: HtmlEl,
 		slot: HtmlEl | undefined,

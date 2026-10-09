@@ -1,19 +1,8 @@
 /**
- * KcdParse — HTML → object-model, the permanent runtime front end ( parser-family row 1 ).
- *
- * Supplants the markdown `parseBody` ( `## `-split ), `splitFrontmatter` ( YAML ), and the lens
- * dredge-table parse. It targets the FROZEN STRUCTURAL SEAM — it emits exactly today's
- * `SerializedArtifact` ( type · frontmatter keys · section names · links ), so the md and HTML forms
- * of one logical artifact produce a structurally-equivalent object model. Parity is structural, not
- * byte-identical: section bodies are stored as inner HTML ( the substrate-coupled half, free to
- * change ); only names / links / policy are asserted equal.
- *
- * THE LAW ( protocol §1.5, ruled "aggressively protect the codebase from malformed values" ):
- * validate-FIRST, file-level, all-or-nothing. A non-conforming document yields NO object model —
- * `parse()` throws, `tryParse()` returns null. There is no partial parse. This retires the
- * per-subclass `validateFrontmatter` / `validateStructure` throw-chain in favour of the one shared
- * binary validator; a document that reaches the object model has already conformed.
- *
+ * KcdParse — HTML → object model, the runtime front end ( parser-family row 1 ).
+ * Targets the frozen structural seam: its `SerializedArtifact` shape is the contract, and parity is
+ * structural, not byte-identical — section bodies are inner HTML, only names, links and policy are asserted.
+ * THE LAW ( protocol §1.5 ): validate-FIRST, file-level, all-or-nothing; a non-conforming document yields no object model.
  * It reads ONLY the addressing contract via KcdAddress — never element order, class, or scraped text.
  */
 
@@ -25,16 +14,13 @@ import { classifyHref } from '../../primitives/framework/KCDPrimitive';
 import { KCDValidationError } from '../../primitives/errors';
 import type { AddressEntry, ArtifactType, LinkEntry, PolicyEntry, SerializedArtifact, SlotMode } from '../../primitives/types';
 
-/** Section name → the dredge ROLE a bare ( unstamped ) slot infers — the fallback mirror of the canonical
- *  slot-kind law ( `data-kcd-slot="<kind>"`, protocol §3 ). The explicit attribute always wins; this only
- *  fires for a hand-authored slot that carries no stamp. `domains`/`domain` fold into `reference`. */
+/** Section name → the dredge ROLE a bare, unstamped slot infers; the explicit `data-kcd-slot` always wins.
+ *  `domains` and `domain` fold into `reference`. */
 const SLOT_ROLE: Record<string, string> = {
 	references: 'reference', domains: 'reference', domain: 'reference',
 	habits: 'habit', contracts: 'contract', tools: 'tool', rules: 'rule'
 };
 
-/** A slot's kind BY POSITION, when it carries no explicit `data-kcd-slot` value: its block's role, or
- *  `link` ( the row carries an href ) / `table-data` ( no href ) for a non-role block. */
 function inferSlotKind( section: string | undefined, where: string ): string {
 	return ( section && SLOT_ROLE[ section ] ) || ( where ? 'link' : 'table-data' );
 }
@@ -64,12 +50,8 @@ export interface ParsedParam {
 	section?: string;
 }
 
-/**
- * The parse-time superset. The frozen `SerializedArtifact` fields are what crosses the bridge; the
- * extras ( `policy` / `params` / `slots` ) are computed here ONCE so the object layer ( LensObject )
- * consumes structured rows instead of re-parsing a body. They are the deletion of the single biggest
- * md fragility — "parse a markdown table for dredge policy."
- */
+/** The frozen `SerializedArtifact` fields cross the bridge; `policy`, `params` and `slots` are computed once
+ *  here so LensObject reads structured rows instead of re-parsing the body. */
 export interface ParsedArtifact extends SerializedArtifact {
 	policy: PolicyEntry[];
 	params: ParsedParam[];
@@ -81,14 +63,12 @@ export interface ParsedArtifact extends SerializedArtifact {
 export const KcdParse = new class KcdParse {
 
 	/** Strict: a conforming document → its object model; a malformed one THROWS. The protected door.
-	 *  `docRoot` is required and travels straight through to the validator — see the note there on why
-	 *  it cannot have a default. */
+	 *  `docRoot` is required and cannot default — see KcdValidate on why. */
 	parse( html: string, path: string, docRoot: string ): ParsedArtifact {
 		const report = KcdValidate.validate( html, { path, docRoot } );
 		if ( !report.ok ) {
-			// The message names the FIRST error and says how many there are; `errors` carries all of
-			// them. Both, deliberately: a sentence can only ever hold one finding, and a caller that
-			// rebuilt its report from the sentence alone silently collapsed N errors into 1.
+			// Message and `errors` both, deliberately: a sentence holds one finding, and a caller rebuilding
+			// its report from the sentence alone collapses N errors into 1.
 			const first = report.errors[ 0 ];
 			throw new KCDValidationError(
 				`KCD document failed validation ( ${ report.errors.length } error(s) ): ${ first.code } @ ${ first.where } — ${ first.msg }`,
@@ -132,12 +112,8 @@ export const KcdParse = new class KcdParse {
 	}
 
 	// ── Tools ( a lens's MCP tool composition — the `tool`-kind slots ) ──
-	// A tool is NOT a path artifact: its slot names the tool by its `group.tool` identity ( the `what` cell,
-	// kept verbatim — the key the agent and the wire file it under ) and carries a mode, no
-	// `where`, so it never enters `policy` ( which skips where-less rows ). Keyed on the explicit slot KIND
-	// now ( `data-kcd-slot="tool"` ), decoupled from the section NAME — the migration's whole point. Bare
-	// tool slots still resolve via `inferSlotKind` ( tools-section → tool ). A row without a `what` or with
-	// mode `off` contributes nothing.
+	// A tool is not a path artifact: keyed by the verbatim `group.tool` `what` the agent and the wire use,
+	// and where-less, so it never enters `policy`. A row with no `what` or mode `off` is dropped.
 	toolModes( slots: ParsedSlot[] ): Record<string, SlotMode> {
 		const out: Record<string, SlotMode> = {};
 		for ( const s of slots ) {
@@ -148,9 +124,8 @@ export const KcdParse = new class KcdParse {
 	}
 
 	// ── Frontmatter ( <dl data-kcd-frontmatter> → Record, replacing YAML ) ─────────
-	// Coerced by declared type so downstream reads match the old js-yaml result ( number stays
-	// number, list stays string[] ). Empty optional fields are skipped — an empty <dd> must not mint
-	// a key the markdown never carried ( protects key-set parity ).
+	// Coerced by declared type; empty optional fields are skipped, so an empty <dd> never mints a key
+	// ( protects key-set parity ).
 	frontmatter( article: HtmlEl ): Record<string, unknown> {
 		const dl = HtmlTree.first( article, el => KcdAddress.isFrontmatter( el ) );
 		const out: Record<string, unknown> = {};
@@ -180,8 +155,7 @@ export const KcdParse = new class KcdParse {
 	}
 
 	// ── Policy ( every region — one dredge idiom for reference, habit, contract, anything routable ) ──
-	// In the md world this was LensObject parsing the `## Know` markdown table, know-only. A Do-region
-	// habit/contract slot now feeds the SAME policy list — `mode` alone decides what rides ( off /
+	// A habit or contract slot feeds the same policy list: `mode` alone decides what rides ( off /
 	// on-routing-row / load-full-text ), so no artifact type needs its own carve-out downstream.
 	policy( slots: ParsedSlot[] ): PolicyEntry[] {
 		const out: PolicyEntry[] = [];
@@ -224,9 +198,8 @@ export const KcdParse = new class KcdParse {
 			where,
 			why:        cells.why   ?? '',
 			kind:       HtmlTree.get( slot, 'data-kcd-slot' ) || inferSlotKind( section, where ),
-			// Absent ⇒ `on`, the documented default. An unrecognised mode lands there too, but only
-			// ever on a path that SKIPPED validation — `bad-mode` is a hard error and a failing
-			// document yields no object model, so `parse()` cannot deliver one here.
+			// Absent ⇒ `on`. An unrecognised mode lands there only on a path that skipped validation, which
+			// `parse()` never does: `bad-mode` is a hard error.
 			mode:       KcdAddress.readMode( rawMode ) ?? 'on',
 			habitClass: HtmlTree.get( slot, 'data-kcd-habit-class' ),
 			region,
@@ -245,7 +218,6 @@ export const KcdParse = new class KcdParse {
 		};
 	}
 
-	/** A row's addressable cells as a { fieldName → value } bag — the row reader both slots/params share. */
 	cells( row: HtmlEl ): Record<string, string> {
 		const out: Record<string, string> = {};
 		for ( const f of HtmlTree.collect( row, el => KcdAddress.isField( el ) ) ) {

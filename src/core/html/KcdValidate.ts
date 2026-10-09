@@ -1,16 +1,10 @@
 /**
- * KcdValidate — the binary, file-level, all-or-nothing enforcement of the KCD Document Protocol.
- *
- * Ported from the dev-utilities reference validator ( `_Claude/dev-utilities/kcd-validate.js` ) and
- * re-based onto the shared substrate: its node reader IS `HtmlTree`, and its `data-kcd-*` grammar —
- * the field-type validators and the closed sets — now lives in `KcdAddress`. This file keeps only
- * VALIDATION POLICY: which frontmatter fields are required, and the structural rules. One vocabulary,
+ * KcdValidate — the binary, all-or-nothing enforcement of the KCD Document Protocol. Policy only: which
+ * frontmatter fields are required, and the structural rules. The grammar lives in KcdAddress. One vocabulary,
  * two heads ( this and `KcdParse` ).
  *
- * It is BINARY: a file conforms or it does not. ANY non-conformance ⇒ the WHOLE file is invalid and
- * must be discarded ( never partially parsed ). A document is not `active` until it validates — that
- * is what keeps malformed data out of the system. TEMPLATES are exempt ( scaffolds carry
- * placeholders; template-aware validation is a deferred follow-up ).
+ * ANY non-conformance ⇒ the WHOLE file is invalid and discarded, never partially parsed. A document is
+ * not `active` until it validates. TEMPLATES are exempt: scaffolds carry placeholders.
  */
 
 import { HtmlTree } from './HtmlTree';
@@ -32,10 +26,8 @@ interface FieldSpec {
 	oneOf?:           string[];
 	pattern?:         RegExp;
 	emptyOkForType?:  string;
-	/** For a `list` field: the type EVERY chip must validate as. Absent = chips are free text
-	 *  ( `tags`, `domain` ). Present = each chip is checked exactly as a scalar field of that type
-	 *  would be, so a list does not become a hole in the validator. `lens` uses it: each entry names a
-	 *  real lens, and an unhyphenated one ( `lens_crafter` ) is the same defect in a chip as in a slug. */
+	/** The type EVERY chip of a `list` field must validate as; absent = free-text chips ( `tags`, `domain` ).
+	 *  So a list cannot become a hole in the validator — `lens` uses it, and `lens_crafter` fails as a chip. */
 	itemType?:        string;
 }
 
@@ -51,9 +43,8 @@ export const KcdValidate = new class KcdValidate {
 		description:      { required: true,  type: 'text', nonEmpty: true, maxLen: 1024 },
 		type:             { required: true,  type: 'enum' },
 		status:           { required: true,  type: 'enum', oneOf: KcdAddress.STATUSES, emptyOkForType: 'template' },
-		// The document's stable identity ( plan agents-own-behaviour, task "Lens and habit ids live in their
-		// frontmatter" ). Carried BY THE FILE so a move behind the app's back keeps it; the doc index reads it
-		// rather than minting one of its own. Optional until the lens/habit hard cut makes it required there.
+		// The stable identity, carried BY THE FILE so a move keeps it; the doc index reads it rather than
+		// minting one. Optional until the lens/habit hard cut makes it required there.
 		id:               { type: 'text', pattern: this.ID_RE },
 		'schema-version': { type: 'text' },
 		author:           { type: 'text', pattern: this.AUTHOR_RE },
@@ -69,37 +60,16 @@ export const KcdValidate = new class KcdValidate {
 		scope:            { type: 'enum', pattern: this.SCOPE_RE },
 		'habit-class':    { type: 'slug' },
 		// lens is a LIST, in invocation order — the lenses a session was wearing when it authored this.
-		// Singular was a lie the corpus kept telling: real work is cross-lens, which is why 18 plans had
-		// resorted to a fake lens named "cross" that named nothing and resolved to nothing. A list says
-		// the true thing ( which lenses, and which led ) and the `cross` placeholder retires with it.
-		// itemType keeps each entry under the same slug rules the scalar form enforced.
 		lens:             { type: 'list', itemType: 'slug' },
-		// todo / completed are ADDRESSES, not paths ( protocol §1.1 ). A lens declares WHERE its log
-		// lives; it does not assert that one has been written. Most lenses name a log file that does
-		// not exist yet, and that is a legal state rather than a defect.
+		// todo / completed are ADDRESSES, not paths ( protocol §1.1 ): a lens declares WHERE its log lives,
+		// and a vacant address is a legal state, not a defect.
 		todo:             { type: 'address' },
 		completed:        { type: 'address' }
 	};
 
 	/**
-	 * Validate one artifact.
-	 * @param input  an HTML string, a real DOM element/Document, or an already-normalized HtmlEl root.
-	 */
-	/**
-	 * `docRoot` IS REQUIRED, and that is the whole design decision.
-	 *
-	 * It could have been optional with a `_Claude` default, and it was — implicitly, inside
-	 * `isEphemeralHref`. That silent default made the ephemeral-link law wrong in BOTH directions in
-	 * any vault named otherwise: a real link into scratch space went unreported, while a stale
-	 * `_Claude/…` href was reported for the wrong reason. It reached writes too, because `save_doc`
-	 * validates. A default here cannot be right, because the answer depends entirely on a fact only
-	 * the caller has.
-	 *
-	 * So the caller states it. A caller with a vault passes its `docRoot`; a caller validating
-	 * in-memory HTML that belongs to no vault passes `VaultLayout.DEFAULT_DOC_ROOT` — which is not
-	 * more typing for its own sake, it is the difference between a choice and an accident. The whole
-	 * class of bug this fixes looks identical to working code right up until someone names a folder
-	 * something else.
+	 * `docRoot` is required with no default: the ephemeral-link law depends on a vault fact only the caller
+	 * holds. In-memory HTML that belongs to no vault passes `VaultLayout.DEFAULT_DOC_ROOT` explicitly.
 	 */
 	validate( input: string | HtmlEl | any, opts: { path?: string; docRoot: string } ): ValidateReport {
 		const root: HtmlEl =
@@ -154,7 +124,6 @@ export const KcdValidate = new class KcdValidate {
 			if ( !spec ) { err( 'unknown-field', `field:${ key }`, `frontmatter field "${ key }" is not in the locked set` ); continue; }
 			seen[ key ] = true;
 
-			// list fields are structural ( chips ); everything else is a scalar value
 			if ( spec.type === 'list' ) { this.checkList( field, key, spec, err ); if ( key === 'name' ) name = HtmlTree.textOf( field ).trim(); continue; }
 
 			const { value } = KcdAddress.fieldValue( field, declared ?? spec.type );
@@ -219,8 +188,7 @@ export const KcdValidate = new class KcdValidate {
 				if ( a.startsWith( 'data-kcd' ) && !KcdAddress.KNOWN_ATTRS.includes( a ) )
 					err( 'unknown-attr', a, `"${ a }" is not in the closed attribute set` );
 
-			// region — RETIRED on every type ( plan agents-own-behaviour, 2026-09-22 ). Know / Care / Do is no
-			// longer written into documents; a lens is flat sections.
+			// region — RETIRED on every type; a lens is flat sections.
 			if ( KcdAddress.isRegion( el ) ) {
 				const v = HtmlTree.get( el, 'data-kcd-region' )!;
 				err( 'region-retired', `region:${ v }`, `Know / Care / Do regions are retired — write flat sections ( a lens is { ${ KcdAddress.LENS_SECTIONS.join( ' | ' ) } } )` );
@@ -237,28 +205,20 @@ export const KcdValidate = new class KcdValidate {
 
 			// slot — kind required; collect habit-class; flag rows that carry no addressable field; mode constrained
 			if ( KcdAddress.isSlot( el ) ) {
-				// a slot's KIND is load-bearing now ( protocol §3 — the parser keys dredge role off it, not off
-				// section position ). A bare `data-kcd-slot` is invalid, full stop: without a kind the row's
-				// role is ambiguous and only survives by inference, which future kind-trusting code will misread.
+				// A slot's KIND is load-bearing ( protocol §3 ): the parser keys dredge role off it, not section
+				// position, so a bare `data-kcd-slot` is invalid — its role would only survive by inference.
 				const kind = HtmlTree.get( el, 'data-kcd-slot' );
 				if ( !kind )
 					err( 'unkinded-slot', 'slot', `slot carries no kind — data-kcd-slot must name one of { ${ KcdAddress.SLOT_KINDS.join( ' | ' ) } }` );
 				else if ( !KcdAddress.SLOT_KINDS.includes( kind ) )
 					err( 'bad-slot-kind', `slot:${ kind }`, `slot kind "${ kind }" not in { ${ KcdAddress.SLOT_KINDS.join( ' | ' ) } }` );
-				// A tool is the agent's, never a document's: no type encodes permissions. A lens carried tool
-				// slots until 2026-09-22; every other type always named its tools in prose.
+				// A tool is the agent's, never a document's: no type encodes permissions.
 				if ( kind === 'tool' )
 					err( 'tool-slot-retired', 'slot:tool', `tool slots are retired — an agent's tools live on its record, and a ${ rootType } names the tools it reaches for in prose` );
 				const hc = HtmlTree.get( el, 'data-kcd-habit-class' );
 				if ( hc ) habitClasses[ hc ] = ( habitClasses[ hc ] ?? 0 ) + 1;
-				// A ROW THE READER CANNOT READ, in the two ways that happens. Carrying no field at all was
-				// always caught; carrying only fields NOBODY READS was not, and that is how a `rule` cell came
-				// to be legal to write and impossible to project — seventy-eight authored rules invisible to
-				// every agent, on pages that rendered correctly and validated clean.
-				//
-				// The test is `ROW_FIELDS`, the same list `KcdContext.readSlot` reads by, so the two cannot
-				// drift apart again: a name added to the reader is admitted here in the same edit, and a name
-				// never added is refused at authoring time instead of vanishing at projection time.
+				// A row must carry a field the reader reads: ROW_FIELDS is the list `KcdContext.readSlot` reads by,
+				// and the two must stay in step — a row of unread fields renders for a human and projects nothing.
 				const fields = HtmlTree.collect( el, d => KcdAddress.isField( d ) );
 				const named  = fields.map( d => HtmlTree.get( d, 'data-kcd-field' ) ?? '' );
 				if ( fields.length === 0 )
@@ -267,22 +227,15 @@ export const KcdValidate = new class KcdValidate {
 					err( 'unread-slot', `slot:${ kind }`, `slot row carries only fields the reader never reads ( ${ named.filter( Boolean ).join( ', ' ) } ) — it renders for a human and projects NOTHING to an agent. A row is read from { ${ KcdAddress.ROW_FIELDS.join( ' | ' ) } }` );
 				const mode = HtmlTree.get( el, 'data-kcd-mode' );
 				if ( mode && KcdAddress.readMode( mode ) === null ) {
-					// `suggested` is named because it is the ONE wrong value a real vault is likely to hold:
-					// it was this attribute's third state until 2026-09-16, and a vault deployed into another
-					// project may never have been swept. Without the hint the symptom is a discarded document
-					// — the whole file, so usually the auto-loaded floor lens — and no clue which word to fix.
+					// `suggested` is named because a vault may still hold it as a retired value; without the hint the
+					// whole file is discarded and nothing says which word to fix.
 					const hint = mode === 'suggested' ? ' — `suggested` became `load` on 2026-09-16; this document predates the sweep' : '';
 					err( 'bad-mode', `mode:${ mode }`, `mode must be one of { ${ KcdAddress.MODES.join( ' | ' ) } }${ hint }` );
 				}
 			}
 
-			// SEED mode — the same attribute, an entirely different closed set, and until now unchecked.
-			// The check above lives inside the slot branch, so a `data-kcd-mode` on a `<script
-			// data-kcd-seed>` was never graded against anything: `parseSeedsFrom` casts the raw string to the
-			// union and defaults a miss to `prepend`, so `create-onlyy` validated clean and then silently
-			// prepended into a file it was supposed to leave alone. Graded separately rather than by
-			// widening MODES — a slot mode on a seed, or a seed mode on a slot, is just as wrong as a typo,
-			// and one merged set would call both legal.
+			// SEED mode is a different closed set, graded here rather than by widening MODES: a slot mode on a seed
+			// is as wrong as a typo, and one merged set would call both legal.
 			if ( HtmlTree.has( el, 'data-kcd-seed' ) ) {
 				const seedMode = HtmlTree.get( el, 'data-kcd-mode' );
 				if ( seedMode && !KcdAddress.SEED_MODES.includes( seedMode ) )
@@ -320,19 +273,8 @@ export const KcdValidate = new class KcdValidate {
 
 	// ── Lens pass — philosophy + references, an optional personality, and nothing that behaves ─────
 	/**
-	 * A lens is information ( plan agents-own-behaviour ). Its top-level sections are exactly the closed
-	 * `LENS_SECTIONS` — PHILOSOPHY required — and it carries no behaviour: no habit, tool or contract rows,
-	 * and no `base` to inherit from, because nothing inherits. A lens in the old Know / Care / Do shape
-	 * fails here whole — the migration is a hard cut, and a half-read lens is a different agent.
-	 *
-	 * PERSONALITY IS NO LONGER REQUIRED ( Bryan, 2026-09-26 ). It was, back when the first lens in a stack
-	 * supplied the agent's persona; personality is authored on the AGENT now and nothing here reads the
-	 * section. Requiring prose that nothing consumes is how a document type acquires ceremony, and the
-	 * ruling was plain: there is no reason to prevent compilation over it.
-	 *
-	 * It stays LEGAL rather than banned, which is the half that matters for the vault as it stands: every
-	 * lens written before today carries one, and turning those into validation errors would be a vault-wide
-	 * edit bought for nothing. They simply go unread, and drain out as lenses are touched.
+	 * A lens is information: its top-level sections are exactly LENS_SECTIONS with PHILOSOPHY required, and it
+	 * carries no habit, tool, contract or `base`. PERSONALITY is legal but unrequired, and nothing reads it.
 	 */
 	checkLens( article: HtmlEl, err: Emit ): void {
 		const top = HtmlTree.collect( article, el => KcdAddress.isSection( el ) && !this.insideSection( article, el ) );
@@ -340,7 +282,7 @@ export const KcdValidate = new class KcdValidate {
 		for ( const v of names )
 			if ( v && !KcdAddress.LENS_SECTIONS.includes( v ) )
 				err( 'bad-lens-section', `section:${ v }`, `a lens section is one of { ${ KcdAddress.LENS_SECTIONS.join( ' | ' ) } } — "${ v }" is not ( behaviour belongs to the agent; code areas are references )` );
-		// PHILOSOPHY ALONE. `personality` came out of this pair on 2026-09-26 — see the note above.
+		// PHILOSOPHY ALONE — personality is not checked here.
 		if ( !names.includes( 'philosophy' ) )
 			err( 'lens-no-philosophy', 'section:philosophy', 'a lens must carry a `philosophy` section' );
 
@@ -371,36 +313,12 @@ export const KcdValidate = new class KcdValidate {
 
 	// ── Body pass — a document must SAY something ──────────────────────────────────
 	/**
-	 * Frontmatter is metadata ABOUT a document, not the document. A file carrying a well-formed
-	 * `<dl data-kcd-frontmatter>` and NOTHING else is a correctly-addressed empty box: every field
-	 * rule passes, `KcdParse` reads it clean, and it lands on disk saying nothing at all. Found live
-	 * 2026-08-04 on a `reference`.
-	 *
-	 * This is its own rule, not a shape-table row, because the shape table cannot reach it. Required-
-	 * section tiers catch an empty document for the CLOSED types ( `plan`, `lens` ), but every OPEN
-	 * type declares no required sections BY DESIGN — and `reference`, the largest population in the
-	 * vault, is one of them. The question here is not "which sections" but "any body at all", which
-	 * binds every type uniformly and belongs outside the per-type table.
-	 *
-	 * ERROR, not warning, deliberately. `save_doc` refuses on errors only ( warnings ride along in the
-	 * result ), and the whole defect is that an empty artifact LANDS — a warning would leave the hole
-	 * exactly where it was.
-	 *
-	 * RULED: a document carrying only an `<h1>` PASSES. The rule asks whether the document has a body,
-	 * not whether the body is any good. Every stricter line — word counts, a minimum section count,
-	 * "real prose" — grades authorship rather than conformance, and gets subjective immediately. A
-	 * title-only stub is a THIN document, which is a review problem; an empty one is a BROKEN document,
-	 * which is a validator problem. The line is drawn there on purpose.
-	 *
-	 * TEMPLATES need no exemption: `validate()` returns above on `rootType === 'template'`, before any
-	 * structural pass runs, so a scaffold never reaches this method. Checked on the merits too — a
-	 * template scaffold carries an h1 plus its target type's section skeleton, so none would fail even
-	 * without the blanket exemption.
+	 * Frontmatter is metadata, not the document: nothing outside it is an ERROR, not a warning, because save_doc
+	 * refuses on errors only. Any body at all passes — a title-only stub is a review problem, not a validator one.
 	 */
 	checkBody( article: HtmlEl, err: Emit ): void {
-		// Frontmatter subtree, not just the <dl> itself — otherwise the block's own <dt>/<dd> cells
-		// count as body and every empty document passes. `walk` visits DESCENDANTS only, so the article
-		// itself is never mistaken for its own content ( `collect` would include it and always match ).
+		// The frontmatter subtree, not just its <dl>, or the block's own <dt>/<dd> cells count as body.
+		// `walk` visits descendants only, so the article never matches itself.
 		const frontmatter = new Set<HtmlNode>();
 		for ( const fm of HtmlTree.collect( article, el => KcdAddress.isFrontmatter( el ) ) ) {
 			frontmatter.add( fm );
@@ -415,13 +333,8 @@ export const KcdValidate = new class KcdValidate {
 	}
 
 	// ── Habit pass — the four-field contract ( see _habit_template ) ────────────────
-	// `why` is REQUIRED ( the trigger; a habit with no why can't fire — renamed from `when`,
-	// Bryan 2026-07-13, so the field matches the canonical What|Where|Why convention: it's the
-	// same prose a lens's own Why cell can defer to via `mode:habit` ). `action` + `explanation` are
-	// the dense-form body — warned-on when absent rather than hard-required, so a `don't`-style habit
-	// ( rules, no action ) and an in-progress migration both still validate. `rules` is optional. EXTRA
-	// sections ( format / example / homes / … ) are allowed — they ride only on a full on-demand read,
-	// never in the dense projection, so the four-field shape doesn't forbid a habit from carrying more.
+	// `why` is REQUIRED — a habit with no trigger cannot fire. `action` and `explanation` only warn when absent,
+	// so rules-only habits still validate. Extra sections are allowed: they ride the full read, never the dense form.
 	checkHabit( article: HtmlEl, err: Emit, warn: Emit ): void {
 		const names = new Set(
 			HtmlTree.collect( article, el => KcdAddress.isSection( el ) )
@@ -439,30 +352,11 @@ export const KcdValidate = new class KcdValidate {
 	}
 	
 	/**
-	 * The projection pass — content authored into a habit that the dense form silently drops.
-	 *
-	 * `KcdContext.projectHabit` is the ONLY renderer of a habit ( both the preview and the wire route
-	 * through it ), and it reads exactly four sections. Extra sections are legal and deliberate — they
-	 * are the on-demand-read tier — so their mere presence is never an error. What IS an error is
-	 * content that LOOKS projected and is not, because nothing downstream reports the loss: the habit
-	 * still fires, still reads complete on disk, and the agent simply never receives the dropped part.
-	 * Two shapes of that, both found in the deployed corpus 2026-08-18:
-	 *
-	 *  1. RULES THAT ARE NOT A LIST. `projectHabit` takes `rules` from `readSection().items`, which
-	 *     collects `<li>` only — a faux-table collapses whole into `text` and is discarded. An author
-	 *     following the house table idiom therefore writes rules that reach no one. ERROR: total,
-	 *     silent loss of a section the four-field contract says is projected.
-	 *
-	 *  2. A PROJECTED FIELD THAT DEFERS OFFSTAGE. When `action` says "see the Output/Format sections
-	 *     below", the pointer survives projection and its target does not, so the agent is handed an
-	 *     instruction to consult something it cannot see. WARNING rather than error: the naming may be
-	 *     incidental ( a section called `header` and the English word "header" ), and the fix is an
-	 *     editorial judgement — inline the content, or drop the pointer — not a mechanical rewrite.
+	 * The projection pass: `projectHabit` reads rules only from `<li>`, so rules outside a list are an ERROR
+	 * (silently lost). A projected field naming an offstage section is a WARNING, since the naming may be incidental.
 	 */
-	// The four narrative fields plus the params section, whose ROWS ride as data ( `paramBlocks` ).
-	// Params joined this set on 2026-08-18, when the compiler was taught to inject them — before that a
-	// habit could point at its own whitelist and the pointer was dead. Keep this in step with
-	// `KcdContext.PARAM_SECTIONS`: a section that projects must never be reported as dropped.
+	// The four narrative fields plus `public-habit-params`, whose rows ride as data ( `paramBlocks` ). Keep in
+	// step with `KcdContext.PARAM_SECTIONS`: a section that projects must never be reported as dropped.
 	PROJECTED_SECTIONS = new Set( [ 'why', 'action', 'explanation', 'rules', 'public-habit-params' ] );
 	
 	checkHabitProjection( article: HtmlEl, names: Set<string>, err: Emit, warn: Emit ): void {
@@ -496,21 +390,12 @@ export const KcdValidate = new class KcdValidate {
 	// ── Helpers ───────────────────────────────────────────────────────────────────
 	// ── Addressing pass ( protocol §1.1 ) ─────────────────────────────────────────
 	/**
-	 * The link-versus-address law, enforced on the body.
-	 *
-	 * A link ASSERTS that a document is there. An address does not — it names a location that may be
-	 * occupied now, later, or never. Two rules follow, and only one of them is about occupancy:
-	 *
-	 *  1. An address must be WELL-FORMED. Its occupancy is never checked here or anywhere else;
-	 *     vacancy is a legal state and reporting it would recreate the noise the primitive removes.
-	 *  2. A link may never point into ephemeral space. Those directories are not installed into a
-	 *     user's vault at all, so the assertion a link makes is false by construction — regardless of
-	 *     whether the target happens to exist on the authoring machine.
+	 * The link-versus-address law: an address must be WELL-FORMED but its occupancy is never checked, since vacancy
+	 * is legal. A link may never point into ephemeral space, which is not installed into a user's vault.
 	 */
 	checkAddressing( article: HtmlEl, err: Emit, docRoot: string, selfPath?: string ): void {
-		// The ban binds LIBRARY artifacts only. A document that itself lives in ephemeral space never
-		// ships either, so its links to its own neighbourhood assert nothing false. Without the path we
-		// cannot tell, and the safe default is to check — an unknown document is treated as shippable.
+		// The ban binds library artifacts only; a document that itself lives in ephemeral space never ships.
+		// With no path the safe default is to check: an unknown document is treated as shippable.
 		const selfEphemeral = selfPath !== undefined && VaultLayout.isEphemeralHref( selfPath, docRoot );
 		for ( const el of HtmlTree.collect( article, d => KcdAddress.isAddress( d ) ) ) {
 			const value = KcdAddress.addressOf( el );
@@ -536,9 +421,8 @@ export const KcdValidate = new class KcdValidate {
 			if ( value === '' ) { err( 'empty-tag', `field:${ key }`, 'empty chip in a list field' ); continue; }
 			if ( !spec.itemType ) continue;   // free-text chips ( tags, domain )
 
-			// A typed list gets the SAME checks the scalar form would get — the two rules below are the
-			// ones lifted from the scalar path verbatim, so making a field a list can never quietly
-			// relax it. The chip's own text is the value ( a chip is never a link ).
+			// A typed list gets the same checks as the scalar form, so making a field a list cannot quietly relax it.
+			// A chip is never a link: its own text is the value.
 			if ( !KcdAddress.validates( spec.itemType, value ) )
 				err( 'bad-value', `field:${ key }`, `"${ value }" is not a valid ${ spec.itemType }` );
 			if ( spec.itemType === 'slug' ) {

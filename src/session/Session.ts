@@ -1,15 +1,7 @@
 /**
- * Session — a spawned RUN of an agent, an identity distinct from the agent itself.
- *
- * The model shift this encodes: an Agent is the reusable identity + recipe (who + how
- * configured); a Session is one live conversation spawned FROM an agent. Many sessions
- * can share one agent, and a session can be deleted, renamed, and tagged without touching
- * the agent it came from. The turns of a conversation belong to the SESSION, not the agent.
- *
- * Deliberately LIGHT — pure data, no lens graph, no compose(). A session is metadata +
- * identity; its turn history lives as DB rows (CompletedTurn) fetched on demand, never
- * held on the object (exactly as Agent does not carry its own turns). It crosses the IPC
- * bridge whole via serialize / fromSerialized, the same trinity as Agent.
+ * Session — a spawned RUN of an agent. An Agent is the reusable configuration; a Session is one live
+ * conversation spawned FROM it, and the turns belong to the session, not the agent.
+ * Deliberately light: pure data, no lens graph. Turn history is DB rows fetched on demand, never held here.
  */
 
 import { Transcript, type Turn, type TurnEntry, type WireMessage, type WireOptions, type TranscriptTurn, type CompactionPolicy, type ReasoningPolicy, type ToolsPolicy, type ChatPolicy, type LimitsPolicy, type SessionPolicies, type SessionCompaction, type Grant, isGrant, grantSubject, grantKind, grantLevel, frameToolResultStub, frameFork, KEEP_TOOL_RESULT_TURNS } from './TurnEntry';
@@ -18,39 +10,16 @@ import type { Agent } from '../agent/Agent';
 import type { SlotRow } from '../core/html/KcdContext';
 
 /**
- * A session's LIFECYCLE state — is this conversation live or filed away? Persisted, user-driven,
- * changes rarely. Deliberately kept separate from `TurnStatus` below: "is this archived?" and "is this
- * working right now?" are different questions on different clocks, and folding them into one field
- * would make every read ambiguous.
- *
- * PLAN-BINDING, AND NOT A ROSTER ACT ( Bryan, 2026-09-20 ). The Plan Studio is the only writer: its
- * `+ New session` spawns the replacement and archives the incumbent, which is how one plan keeps one
- * conversation. A person tidying an agent's roster still has only delete, and that is the answer — a
- * conversation put down is retired in prose, by whoever judges it done, not by a second act on the
- * roster. Ceremony can be added later if prose stops being enough; do not add it speculatively.
+ * A session's LIFECYCLE state, live or filed away. Kept apart from `TurnStatus`: 'archived' and 'working' are
+ * different clocks, and one field would make every read ambiguous. The Plan Studio is the only writer; a roster
+ * tidy is delete, never retirement.
  */
 export type SessionStatus = 'active' | 'archived';
 
 /**
- * A session's RUN state — is a turn in flight right now?
- *
- * This is the home the flag was moved TO ( 2026-07-21 ). It used to be `Agent.status`, which was wrong
- * on two counts. Conceptually: an agent is a CONFIGURATION — an identity, a lens stack, a tool
- * composition — and configuration does not run. A turn runs, and a turn happens inside a session, so
- * the session is the narrowest thing that can honestly answer "are you busy?". Practically: because
- * many sessions can share one agent, two concurrent runs clobbered the single shared flag — whichever
- * finished first flipped it to idle while the other was still going. Per-session, that case is correct
- * by construction.
- *
- * NOT PERSISTED, deliberately — it is never written to the session row ( see SessionService._toRow ).
- * Run state has no meaning across a restart: the turn it described is dead, and persisting it would let
- * a crash mid-turn resurrect a session permanently stuck on 'thinking' with no turn to ever clear it.
- * Every session therefore hydrates 'idle', which is always true at load.
- *
- * It DOES cross the wire ( it is on SerializedSession ), because its whole point is being visible to
- * surfaces that did not fire the turn. It does not replace the Session store's local `pending`: that is
- * optimistic UI, flipped the instant the user hits send so the spinner is immediate. `pending` is local
- * optimism for the sender; `turnStatus` is authoritative state for everyone else.
+ * A session is what RUNS: an agent is configuration and does not, and two concurrent runs on one shared agent
+ * clobbered a single flag. Never persisted, so a crash mid-turn cannot resurrect a session stuck on 'thinking'.
+ * Wire-visible, and not the local `pending` optimism: `pending` is the sender's spinner; this is authoritative.
  */
 export type TurnStatus = 'idle' | 'thinking';
 
@@ -64,20 +33,11 @@ export interface SerializedSession {
 	/** The workspace this session ran in ( `projects.id` ). Denormalized from its agent rather than
 	 *  derived through it, so a DRAFT session — which has no agent — still carries one. */
 	projectId: string;
-	/** The agent this session was spawned from — its identity source. EMPTY STRING ('') = a DRAFT
-	 *  session not yet bound to an agent (spawned agentless from the roster's "+ session"); it's inert
-	 *  until an agent is assigned. Never null on the wire — the sentinel is '', so the DB's NOT NULL
-	 *  agent_id column stays satisfied without a nullable-column migration. */
+	/** Its identity source. '' = a DRAFT session not yet bound to an agent. Never null on the wire, so the NOT NULL
+	 *  column stays satisfied without a nullable-column migration. */
 	agentId: string;
-	/** The PLAN this session was opened to write; 0 for none — the idiom a task already uses for the plan
-	 *  it is a step of. Written once, at birth, and never rewritten: like the `brief` below it says what
-	 *  this conversation was opened FOR, which is not a thing that can change later. A fork does not
-	 *  inherit it, because a fork is not the plan's session.
-	 *
-	 *  The key it forms is the PAIR ( agentId, planId ), not the plan alone: a plan written with two
-	 *  different agents is two conversations and neither is wrong. Within one pair exactly one session is
-	 *  'active' and every other is 'archived' — that is what the Plan Studio means by one plan, one
-	 *  session, and `status` is the flag it turns. */
+	/** The plan this session was opened to write; 0 for none. Written once at birth, never inherited by a fork.
+	 *  The key is the PAIR (agentId, planId): within one pair exactly one session is 'active', the rest 'archived'. */
 	planId: number;
 	/** Renamable display title, independent of the agent's name. Null → derive one (agent + stamp). */
 	title: string | null;
@@ -89,9 +49,7 @@ export interface SerializedSession {
 	createdAt: number;
 	/** Epoch ms of the last turn (or last touch) — the recency sort for a session switcher. */
 	lastActive: number;
-	/** Epoch ms of when the person last SAW this session's newest output, or null for never seen — see
-	 *  `Session.readAt`. Absent on a wire or row written before the marker existed, which reads as the
-	 *  same never-seen null. */
+	/** Epoch ms the person last saw this session's newest output; null = never seen. Absent reads the same. */
 	readAt?: number | null;
 	status: SessionStatus;
 	/** This session's chat-surface text zoom. Null → the render side's default (1). Scoped to
@@ -99,34 +57,19 @@ export interface SerializedSession {
 	zoom: number | null;
 	/** This session's chat-surface font family. Null → the render side's default ('sans'). */
 	fontFamily: FontFamilyKey | null;
-	/** Every POLICY acting on this session's context, by name — what rides the next request and whether
-	 *  the transcript compacts itself. PERSISTED ( unlike the transcript itself ): these are session
-	 *  CONFIGURATION the user sets deliberately, so reopening a session restores the policies it was left
-	 *  on. Absent on an older wire/row, as is the legacy bare-policy shape — both hydrate through
-	 *  `Session.policiesFrom`, which is the one place the old shape is understood. */
+	/** The policies acting on this session's context. PERSISTED, unlike the transcript: reopening restores them.
+	 *  `Session.policiesFrom` is the one place the legacy bare-policy shape is understood. */
 	policies?: SessionPolicies;
-	/** WHY this session was opened, as the surface that opened it said it — see `SessionBrief`. PERSISTED,
-	 *  because compilation must not depend on whether the app has restarted since. Absent for an ordinary
-	 *  chat, which is opened for no stated reason. */
+	/** Why this session was opened — see `SessionBrief`. PERSISTED, so compilation survives a restart. */
 	brief?: SessionBrief | null;
-	/** Is a turn in flight right now — see `TurnStatus`. Rides the wire so every surface can see it;
-	 *  never written to the session row. Absent → 'idle', which is always true on arrival. */
+	/** Is a turn in flight right now — see `TurnStatus`. Never written to the row. Absent reads as 'idle'. */
 	turnStatus?: TurnStatus;
 }
 
 /**
- * WHY A SESSION WAS OPENED, as the surface that opened it would say it — a named template and the values that
- * fill it. Rendered into the frame layer, which rides above the agent's own compile — by the host, at every
- * compile, so the tools it names are the ones the run's manifest names.
- *
- * A FLAG AND A BAG, not finished prose ( Bryan, 2026-09-16 ). The wording belongs to the app and is authored in
- * code beside the rest of what Starmind says about itself; the surface supplies only the facts. A renderer that
- * could send the text itself would be a second author of the system prompt.
- *
- * IT PERSISTS, because compilation must not depend on whether the app has been restarted since the session was
- * opened. It is written ONCE, when the session is opened, and never refreshed: it is what was true at the
- * beginning, which is what the system half is for. A brief that re-resolved every turn would move the stable
- * prefix under the model on every edit, and would spam a plan at an agent that has tools to re-read it.
+ * A named template and its values, rendered into the frame layer. The surface supplies facts only: the wording
+ * is authored in app code, because a renderer that sent its own text would be a second author of the system prompt.
+ * Written once at open and never refreshed, so the stable prefix does not move under the model on every edit.
  */
 export interface SessionBrief {
 	/** Which authored template to fill. Unknown names render nothing rather than failing a turn. */
@@ -151,9 +94,7 @@ export interface SessionOptions {
 	status?: SessionStatus;
 	zoom?: number | null;
 	fontFamily?: FontFamilyKey | null;
-	/** PARTIAL, and the type says so because `policiesFrom` has always behaved that way: every absent entry
-	 *  is filled from the defaults. An opener that cares about one policy — a house seat setting `chat` or
-	 *  `tools` off — should not have to restate the other four to say it. */
+	/** PARTIAL: every absent entry is filled from the defaults, so an opener need only name the policy it cares about. */
 	policies?: Partial<SessionPolicies>;
 	/** Why this session was opened — see `SessionBrief`. Absent for an ordinary chat. */
 	brief?: SessionBrief | null;
@@ -169,8 +110,7 @@ const DEFAULT_POLICIES: SessionPolicies = {
 	// ON unless the opener says otherwise: nearly every session IS a chat surface, and a default that
 	// stripped the roster would silently un-teach every agent the forms the renderer honours.
 	chat:       { enabled: true },
-	// Generous for real agentic work and decisively finite. A turn that genuinely needs more rounds than
-	// this is a job for a governor across several turns, not one turn that will not end.
+	// Finite on purpose: a turn that needs more rounds is a job for a governor across turns.
 	limits:     { maxRounds: 24 },
 };
 
@@ -211,56 +151,24 @@ export class Session {
 	 *  crash mid-turn can never leave a session stuck 'thinking'. */
 	turnStatus: TurnStatus = 'idle';
 
-	/** The session's DYNAMIC context — the typed, ordered transcript of turns ( user / assistant /
-	 *  tool-call / tool-result / injected-file, plus display-only thinking ). NON-PERSISTED object state,
-	 *  the mirror of agent.bindEnv: never in SerializedSession, rebuilt on arrival via bindTranscript().
-	 *  Its home of record is the DB `entries` rows ( hydrated on load — see bindTranscript ). Empty until
-	 *  bound, so it is never null. */
+	/** The typed, ordered transcript of turns. NON-PERSISTED: rebuilt on arrival via bindTranscript(); the home of
+	 *  record is the DB `entries` rows. */
 	transcript: Transcript = Transcript.empty();
 
-	/** The COMPACTIONS acting on this session — the summaries that stand in for the turns they cover. The
-	 *  same species as `transcript`: NON-PERSISTED object state, never in SerializedSession, rebuilt on
-	 *  arrival via bindCompactions(). Its home of record is the `session_compactions` table. Empty until
-	 *  bound, so the projection below is a no-op on a session that has never compacted. */
+	/** The summaries standing in for the turns they cover. NON-PERSISTED, like `transcript`; the home of record is
+	 *  the `session_compactions` table. */
 	compactions: SessionCompaction[] = [];
 
-	/** Where this session's tool results are SPILLED — the absolute path of its result log, as
-	 *  `frameToolResultStub` names it and `read_file` resolves it. The same species as `transcript` and
-	 *  `compactions`: non-persisted object state, never in SerializedSession, bound on arrival.
-	 *
-	 *  BOUND rather than derived because the log lives under the app's userData, which is an Electron fact
-	 *  with no business in a Node-free package. '' until bound, and that emptiness is the OFF switch for the
-	 *  whole reduction: a session with nowhere to point cannot honestly stub anything.
-	 *
-	 *  It is bound UNCONDITIONALLY, on every session, and what makes that safe is an invariant rather than a
-	 *  check: a stub is only ever produced for a tool-result ENTRY, and the only writer of tool-result entries
-	 *  is the loop that spills them. So a session with no results has an empty stub set and never names the
-	 *  file, while a session with results has necessarily written it. The tier that runs its own tools
-	 *  ( Claude Code ) records no results here at all, which is why it needs no exception. */
+	/** Absolute path of this session's tool-result spill log, bound on arrival. '' is the OFF switch. Bound on every
+	 *  session safely: a stub comes only from a tool-result entry, and only the spill loop writes those. */
 	resultLogPath: string = '';
 
-	/** Entries made but NOT yet carried by a turn. The same species as `transcript`: non-persisted object
-	 *  state, never in SerializedSession. They drain onto the turn the orchestrator opens, ahead of the
-	 *  user's prompt — which is what makes them persist for free ( the turn's `entries` column is written
-	 *  when it ends ) and keeps a Turn atomic: a prompt plus everything that answered it. Between sends
-	 *  there IS no turn to hold them, which is the whole reason this list exists.
-	 *
-	 *  `TurnEntry[]` RATHER THAN `Grant[]`, since 3.c. Grants were the first thing a person could do to a
-	 *  conversation between turns and for a while the only one, so the list was named and typed for them.
-	 *  A policy change is the second, and it is not a grant — it hands over nothing. Widening the one list
-	 *  beat adding a second one that would mean the identical thing ( "waiting for the next turn" ) and
-	 *  drift from it; the grant-shaped readers below narrow with `isGrant`, which is the guard the
-	 *  transcript-side loop beside them already uses for exactly this reason. */
+	/** Entries made but not yet carried by a turn. NON-PERSISTED. They drain onto the next turn ahead of the prompt,
+	 *  which keeps a Turn atomic. `TurnEntry[]`, not `Grant[]`: a policy change is queued here too and is not a grant. */
 	pendingEntries: TurnEntry[] = [];
 
-	/** The caller's own frame — the layer that rides ABOVE the agent's compile: a room's, a constellation
-	 *  node's identity, an evaluator's standard. Empty for a chat. RUNTIME ONLY: set by whoever spawns the
-	 *  session, never serialized, never a row column.
-	 *
-	 *  A main-side spawner assigns it directly. A SURFACE cannot — nothing of the renderer's crosses into a
-	 *  string the app speaks in its own voice — so a surface sends a `brief` instead, and main renders that
-	 *  beside this field at every compile. Two ways into one layer, and the persisted half is the brief rather
-	 *  than the prose. */
+	/** The caller's own frame, riding ABOVE the agent's compile. RUNTIME ONLY, never serialized. A surface cannot set
+	 *  it: it sends a `brief`, and main renders that beside this field. */
 	frame: string = '';
 
 	/** WHY this session was opened, kept so its frame can be rendered at every compile, a restart included.
@@ -268,76 +176,25 @@ export class Session {
 	brief: SessionBrief | null = null;
 
 	/**
-	 * WHAT THIS SESSION WAS LAST TOLD ITS PROJECT'S CONFIGURATION WAS — a short digest, or NULL for a session
-	 * that has never compiled.
-	 *
-	 * The marker half of the configuration announcement. A project-configuration change is never pushed at a
-	 * running session: `Environment.compile` digests what it has just resolved and compares that stamp against
-	 * this field, so a session DISCOVERS the change at its own next turn boundary. Nothing is in flight, so
-	 * nothing can be missed by a session that happened to be mid-turn.
-	 *
-	 * RUNTIME ONLY, exactly as `frame` is: never serialized, never a row column. A restart recompiles every
-	 * layer from disk anyway, and persisting it would buy a migration for a one-sentence courtesy.
-	 *
-	 * NULL IS A REAL STATE and it announces NOTHING, which is the same ruling `readAt` makes for its own null
-	 * in the other direction. A session that has never compiled is about to be told the current configuration
-	 * in full, so nothing has moved relative to what it was told — establishing the baseline silently and
-	 * announcing nothing are the same act. The failure direction is a notice that does not appear, never one
-	 * that appears wrongly.
+	 * The digest of the project configuration this session was last told. Never pushed: a session discovers a change at
+	 * its own next turn. NULL = never compiled, and announces nothing, since the baseline is set silently. RUNTIME ONLY, like `frame`.
 	 */
 	lastConfigStamp: string | null = null;
 
 	/**
-	 * THE PROJECT'S NOTICE AS THIS SESSION WAS TOLD IT — captured once, at this session's first compile, and
-	 * held unchanged for its life. NULL means nothing has been captured yet; `''` means the project had no
-	 * notice when this session started, which is a captured answer and not an absent one.
-	 *
-	 * ── CAPTURED RATHER THAN READ, AND THAT IS THE FEATURE ──
-	 * TASK-466; Bryan, 2026-10-04: *"an agent that isn't spawned doesn't need to see it."* A session picks up
-	 * whatever the notice said at the moment it started and is never updated afterwards — a person editing
-	 * the notice changes what the NEXT session is told and nothing about the ones already running. Reading it
-	 * live on every compile would be the opposite behaviour, and it would do it silently.
-	 *
-	 * It also keeps the system prefix STABLE. The block rides the cached prefix, so a value re-read each turn
-	 * would move that prefix under the model whenever somebody typed in the field — the cost `TaskBrief`
-	 * names for re-stating anything per turn. One capture answers both requirements at once.
-	 *
-	 * RUNTIME ONLY, exactly as `lastConfigStamp` above is: never serialized, never a row column. A restart
-	 * ends the session's run, and the next one captures afresh from the record, which is correct by
-	 * definition — persisting it would buy a migration for a value whose whole meaning is "at spawn".
-	 *
-	 * WRITTEN BY `Environment._projectNotice` AND NOWHERE ELSE, and never by an agent: there is no tool that
-	 * reaches the notice at all, in either direction.
+	 * The project notice as this session was told it, captured once at its first compile and frozen for its life. NULL =
+	 * not yet captured; '' = captured as no notice. Frozen so an edit reaches the NEXT session, not running ones: it also
+	 * keeps the cached prefix stable. RUNTIME ONLY; written by `Environment._projectNotice` and nowhere else.
 	 */
 	projectNotice: string | null = null;
 
 	/**
-	 * WHEN THE PERSON LAST SAW THIS SESSION'S NEWEST OUTPUT — epoch ms, or NULL for never seen.
-	 *
-	 * The one fact an attention model needs. Whether a session is UNREAD is this marker against its newest
-	 * turn, computed by whatever surface is asking; nothing derived from it is stored, because a stored
-	 * derivation goes stale the moment the next turn lands.
-	 *
-	 * NULL IS A REAL STATE and never collapses into read-long-ago: a session nobody has ever looked at is
-	 * not a session read before its first turn. So it is nullable rather than 0, and a fresh session is born
-	 * on null — including a FORK, which is a new conversation nobody has read.
-	 *
-	 * WHEN A CALLER IS EXPECTED TO MARK IT. The ruling is that a session is read when its conversation is
-	 * ON SCREEN AND THE WINDOW HAS FOCUS — so a surface calls `markRead` when both become true, and again
-	 * whenever a turn lands while both are still true. An open BACKGROUND tab is not read, and neither is a
-	 * visible tab while the app itself is in the background. Marking on mount alone would make every session
-	 * the person has ever opened read as caught-up forever, which is worse than having no marker at all.
-	 *
-	 * Assigned rather than constructed, as `brief` above is: it is a fact about how the session has been
-	 * ATTENDED TO, not part of what the session is.
+	 * When the person last saw this session's newest output, epoch ms. NULL is a real state, never read-long-ago: a fork is
+	 * born null. Marked only while on screen AND focused; marking on mount would make every opened session read caught-up forever.
 	 */
 	readAt: number | null = null;
 
-	/** WHO THIS SESSION RUNS AS — bound, not held. A RESOLVER rather than an Agent, deliberately: one Agent
-	 *  serves many sessions and is rebuilt on reload or reassign, so a held instance goes stale while a
-	 *  resolver is answered fresh at every call. Bound at the seam that makes the session ( the store binds
-	 *  the live registry; a test binds its own ), which is why nothing has to push an agent down a call
-	 *  stack to run a turn. Runtime only: never serialized, never a row column. */
+	/** WHO THIS SESSION RUNS AS, bound not held. A resolver, not an Agent: an Agent is rebuilt on reload, so a held one goes stale. */
 	private _resolveAgent: ( () => Agent | null ) | null = null;
 
 	private constructor(
@@ -372,10 +229,8 @@ export class Session {
 
 	// ── Static entry points ──────────────────────────────────────────────────
 
-	/** Spawn a fresh session. `agentId` may be omitted / '' for a DRAFT (agentless) session — it's inert
-	 *  until reassign() binds it to an agent. */
-	/** How much conversation a fork from a lane carries. Five COMPLETE turns is enough for the work in hand to
-	 *  make sense and short enough that a fork is genuinely cheaper than the session it came from. */
+	/** Spawn a fresh session. `agentId` omitted or '' makes a DRAFT, inert until reassign(). */
+	/** Turns a fork from a lane carries: five complete turns, enough for the work in hand and cheaper than its source. */
 	static readonly FORK_KEEP_TURNS = 5;
 
 	static create( opts: SessionOptions ): Session {
@@ -426,20 +281,13 @@ export class Session {
 	}
 
 	/**
-	 * Hydrate a policy bag from anything a wire / row might hold — the ONE place the legacy shape is
-	 * understood, so every other reader can assume the container.
-	 *
-	 * Two inputs land here: the container itself, and nothing at all. A BARE legacy shape ( `{ kind: … }` )
-	 * used to become the `retention` entry; that policy is gone ( 2026-09-16 ), so the shape is now simply
-	 * unreadable and falls to defaults like any other. Deliberately forgiving in the same spirit as the
-	 * service-side parse: an unreadable policy must never make a session's history unreachable, and every
-	 * default is inert.
+	 * Hydrates a policy bag from any wire or row: the ONE reader of the legacy shape. An unreadable policy falls to
+	 * inert defaults, never to unreachable history.
 	 */
 	static policiesFrom( raw: unknown ): SessionPolicies {
 		const v = ( raw ?? null ) as Record<string, unknown> | null;
 		if ( !v || typeof v !== 'object' ) return { ...DEFAULT_POLICIES };
-		// A stored `retention` entry ( or the bare legacy `{ kind: … }` that predates the bag ) is simply
-		// ignored from here: the key is dropped on the next write and nothing reads it.
+		// A stored `retention` entry is retired (2026-09-16) and dropped on the next write.
 		return {
 			compaction: ( v[ 'compaction' ] as CompactionPolicy ) ?? { ...DEFAULT_POLICIES.compaction },
 			reasoning:  ( v[ 'reasoning' ]  as ReasoningPolicy  ) ?? { ...DEFAULT_POLICIES.reasoning  },
@@ -451,37 +299,12 @@ export class Session {
 
 	/** The bridge wire form, the save form, the reconstruction source — one function, many purposes. */
 	/**
-	 * FORK THIS SESSION FROM ITS LANE — a sibling, re-authored as though somebody had opened it fresh. Called
-	 * from the lane side by convention, and distinct from the chat surface's forks, which copy.
+	 * FORK FROM ITS LANE: a sibling re-authored as though opened fresh, not a compaction. Nothing is cached yet,
+	 * so the child is WRITTEN correctly rather than patched: no compaction records, no summaries, no compacted turns.
 	 *
-	 * NOT A COMPACTION, and the distinction is the whole design. A compaction is constrained: it rewrites a
-	 * prefix that is already cached, which is why the grant hoist waits for one ( that is the moment the
-	 * cache miss is already paid for ) and why its artefacts are scars a reader has to interpret. A child
-	 * session has NO cache yet. Nothing has been sent, so nothing is pinned, and the conversation can simply
-	 * be WRITTEN CORRECTLY instead of patched. So there are no compaction records here, no summaries, and no
-	 * compacted turns — the child is not a session that has been through something, it is a new one.
-	 *
-	 * NO TEXT IS TOUCHED. Nothing is compressed, paraphrased, or handed to an agent to tidy. The only
-	 * editorial act is choosing how much history to carry, and that is a count of turns, not a judgement
-	 * about them.
-	 *
-	 * THE AUTHORIZATION IS RE-STATED, ONCE. A live session spreads its grants across the history as the
-	 * events that produced them — injected at turn 3, re-injected at turn 7, revoked at turn 9 — and reading
-	 * that story back is how the child would learn the same fact several times and the wrong one last. So
-	 * the grant ENTRIES are stripped out of the copied turns and the current set is seeded whole onto
-	 * `pendingEntries`, where the next turn drains it. A revoked grant is simply not carried: the
-	 * re-authoring is where that pending revocation executes, exactly as a compaction is elsewhere, and by
-	 * the same rule — not-promoting IS the execution.
-	 *
-	 * THE AGENT IS REORIENTED, and that is all it is told. It arrives from a lane's conversation into one with
-	 * a person, and nothing else in its context says the job changed.
-	 *
-	 * THE PASSPORT IS NOT THIS METHOD'S BUSINESS. One is issued per run from session state at send time, so
-	 * a correctly-stated child gets a correct passport — and the manifest, which `Environment` rebuilds from
-	 * that passport every turn, follows from it. Nothing here needs to issue either.
-	 *
-	 * The caller places what comes back — row, turns, current pointer. This makes the object and keeps no
-	 * opinion about where it lives.
+	 * Text is never compressed; only the count of turns carried is chosen. Grant entries are stripped from the copied
+	 * turns and the current set seeded once onto `pendingEntries`, so the authorization is restated rather than replayed.
+	 * The caller places what comes back.
 	 */
 	forkFromLane( opts: { keepTurns?: number; title?: string | null } = {} ): Session {
 		const child = Session.create( {
@@ -503,27 +326,19 @@ export class Session {
 		child.transcript = new Transcript( whole.slice( -keep ).map( ( t ) => ( {
 			...t,
 			entries: t.entries.filter( ( e ) => !isGrant( e ) ),
-			// Born included and unmarked. `compacted` is derived from compaction records and the child has
-			// none; stating it here says the same thing the absence would, and says it where it is read.
+			// Born included and unmarked: a child has no compaction records to derive `compacted` from.
 			include:   true,
 			compacted: false,
 		} ) ) );
 
-		// THE REORIENTATION IS TEXT IN THE CONVERSATION, not state on the session. It rides the child's first
-		// send ahead of the grants and is history from then on, so it survives a reload by being part of what
-		// was said — nothing has to remember that this session is a fork.
+		// The reorientation is text in the conversation, not session state, so it survives a reload as history.
 		child.pendingEntries = [ { at: Date.now(), kind: 'user', text: frameFork() }, ...this._currentGrants() ];
 		return child;
 	}
 
 	/**
-	 * Every grant this session currently holds, as ENTRIES and as of now — the last word about each
-	 * subject, with revoked ones dropped.
-	 *
-	 * Deliberately flat where `grants()` / `attachments()` / `hoistedGrants()` are tiered. Those three part
-	 * company over whether COMPACTION has taken an entry off the deck, which is a fact about this session's
-	 * history; a child being authored fresh has no history for it to be a fact about, so the three tiers
-	 * collapse back into the one truth they are all views of.
+	 * Every grant held, as entries and as of now: the last word per subject, revoked ones dropped. Flat, where
+	 * `grants()` and its tiers are not, because a child being authored fresh has no compaction history.
 	 */
 	private _currentGrants(): TurnEntry[] {
 		const out = new Map<string, Grant>();
@@ -552,9 +367,7 @@ export class Session {
 			tags:       [ ...this.tags ],
 			createdAt:  this.createdAt,
 			lastActive: this.lastActive,
-			// ALWAYS written, null included. A marker main keeps and the renderer cannot see is the whole
-			// feature missing, and the surface that derives unread has to be able to tell never-seen from
-			// a field that simply did not ride.
+			// Always written, null included: a marker the renderer cannot see is the whole feature missing.
 			readAt:     this.readAt,
 			status:     this.status,
 			zoom:          this.zoom,
@@ -603,12 +416,8 @@ export class Session {
 	}
 
 	/**
-	 * SAY THE PERSON HAS SEEN THIS SESSION AS IT STANDS — see `readAt` for the full ruling and for when a
-	 * caller is expected to call this. In short: the conversation is on screen AND the window has focus.
-	 *
-	 * It only ever moves FORWARD. A stamp older than the one already held is dropped rather than written,
-	 * because two surfaces can both be entitled to mark the same session and the later sighting is the true
-	 * one; an out-of-order call must not un-read a conversation somebody is looking at.
+	 * Records that the person has seen this session as it stands. Only moves forward: an out-of-order call must not
+	 * un-read a conversation somebody is looking at.
 	 */
 	markRead( at: number ): void {
 		if ( this.readAt !== null && at <= this.readAt ) return;
@@ -633,23 +442,17 @@ export class Session {
 		return turn;
 	}
 
-	/** Rebuild the transcript wholesale from a turn list — the flush-and-fill mirror of agent.bindEnv().
-	 *  Aggressive rebuild is cheap and always correct; the source is the DB `entries` rows on load, or the
-	 *  live turn list the renderer projects. Non-persisted: it is never written by serializeForWire. */
+	/** Rebuild the transcript wholesale from a turn list. Non-persisted: serializeForWire never writes it. */
 	bindTranscript( turns: Turn[] ): void {
 		this.transcript = new Transcript( turns );
 	}
 
-	/** Rebuild the compaction list wholesale — the flush-and-fill twin of bindTranscript(). Bound from the
-	 *  same load as the transcript, and rebound whenever a pass writes a new one, so the very next send is
-	 *  narrowed by it rather than waiting for a reload. Oldest→newest; the projection re-sorts defensively
-	 *  rather than trusting the caller's order. */
+	/** Rebuild the compaction list wholesale, rebound whenever a pass writes one, so the next send is narrowed at once. */
 	bindCompactions( compactions: SessionCompaction[] ): void {
 		this.compactions = compactions;
 	}
 
-	/** Bind the result log's path — the only main-only fact the reduction needs. Bound once at registration
-	 *  rather than per-read, so the readers that consult it cannot be handed different paths. */
+	/** Bind the result log path once at registration, so every reader sees the same path. */
 	bindResultLog( path: string ): void {
 		this.resultLogPath = path;
 	}
@@ -665,40 +468,17 @@ export class Session {
 		return this._resolveAgent?.() ?? null;
 	}
 
-	/** Set ONE named policy, leaving its siblings alone. Pure configuration: no policy touches the
-	 *  transcript, so nothing is ever lost by changing one. The caller persists the whole bag ( DB
-	 *  update_session_policy ).
-	 *
-	 *  Named rather than whole-bag ( `setPolicies( bag )` ) because every real caller is a single control
-	 *  changing a single lever — a whole-bag setter would make each of them read, spread, and write back
-	 *  the others, which is exactly how one control silently reverts another. */
+	/** Set ONE named policy, leaving its siblings alone. No policy touches the transcript. Named, not whole-bag: a
+	 *  whole-bag setter lets one control silently revert another. */
 	setPolicy<K extends keyof SessionPolicies>( name: K, policy: SessionPolicies[ K ] ): void {
 		this.policies = { ...this.policies, [ name ]: policy };
 	}
 
-	/** Flip the run state around a turn. Deliberately has NO persistence counterpart — the caller
-	 *  broadcasts it and nothing writes it ( see `TurnStatus` ). Bracket every turn idle → thinking →
-	 *  idle from a `finally`, so a failure can't strand a session lit. */
+	/** Flip the run state. Never persisted. Bracket every turn from a `finally`, so a failure cannot strand a session lit. */
 	setTurnStatus( status: TurnStatus ): void { this.turnStatus = status; }
 
-	/** The transcript as it will actually RIDE — `windowed()` first ( which turns survive, read off each
-	 *  turn's own `include` flag ), compaction second ( the summary put in front of what survived ).
-	 *
-	 *  The order no longer carries the weight it used to. Compaction ran last to stop a narrow retention
-	 *  window from smuggling a covered turn back in — impossible now, and doubly so since that window was
-	 *  removed: a covered turn was marked `include: false` once by `compactThrough()` and `windowed()` has
-	 *  already dropped it before `compacted()` is reached. The sequence reads naturally, it is not a rule
-	 *  holding a bug shut.
-	 *
-	 *  Private and SHARED, because wireMessages() and estimateTokens() are the two readers that must never
-	 *  disagree about what rides — the moment they compose the policies separately, the gauge starts lying
-	 *  about the send. A third policy composes here and both readers get it for free. `resultStubs()` is a
-	 *  third reader now, and it asks the same question of the same projection for the same reason.
-	 *
-	 *  Neither step edits the transcript: both build a new one, and the itinerary still shows every turn
-	 *  that ever happened. Nothing either step drops comes back now that the turn window is gone: a failed
-	 *  turn and a compacted one are both out of the wire for good. They stay in the account of what
-	 *  happened; they are simply no longer context. */
+	/** The transcript as it RIDES: `windowed()` first, then `compacted()`. Private and SHARED, because wireMessages(),
+	 *  estimateTokens() and resultStubs() must never disagree about what rides, or the gauge lies about the send. */
 	private _projected(): Transcript {
 		return this.transcript
 			.windowed()
@@ -707,58 +487,25 @@ export class Session {
 
 	// ── THREE READERS OVER ONE TRANSCRIPT ────────────────────────────────────────────────────────────
 	//
-	// `attachments()`, `grants()` and `hoistedGrants()` all walk the same grant entries and all read like
-	// "the injected things". They are not redundant, and collapsing any two of them breaks something
-	// quietly rather than loudly. Each answers a genuinely different question:
-	//
-	//   attachments()   — what is on the DECK?           live entries + pending. What the gutter draws.
-	//   grants()        — what is AUTHORIZED?            live + pending + hoisted. What a gate asks.
-	//   hoistedGrants() — what must reach the MANIFEST?  compacted, unrevoked, and not also live.
-	//
-	// They part company on the two axes that matter: whether COMPACTION removes an entry, and whether a
-	// REVOCATION does. Compaction takes an entry off the deck but not out of the authorization — a
-	// permission does not expire because its turn got summarised. A revocation is pending on both until
-	// the compaction that executes it, so a revoked grant still shows and still authorizes until then.
-	//
-	// `hoistedGrants()` is a SUBSET of `grants()` and disjoint from `attachments()` by construction: it
-	// exists for exactly the entries the deck has stopped showing. That is what makes the hoist a MOVE
-	// between tiers rather than a copy.
-	//
-	// Merge them and either the gutter starts drawing compacted files, or a permission silently expires at
-	// a compaction the user never asked for and cannot see.
+	// `attachments()` is the deck, `grants()` is what is authorized, `hoistedGrants()` is what must reach the manifest.
+	// Compaction takes an entry off the deck but never out of the authorization: merge them and a permission silently
+	// expires at a compaction nobody asked for.
 
 	/**
-	 * Every attachment this session carries — those already on a turn plus anything attached since the
-	 * last send. ONE reader, so the gutter and the compactor cannot disagree about a file the user
-	 * attached thirty seconds ago and has not sent yet.
-	 *
-	 * Reads the whole transcript rather than `_projected()`, and the difference is deliberate: a file the
-	 * RETENTION window narrowed past is still attached, because that policy can be widened back and a chip
-	 * flickering in and out with the window is unusable. A COMPACTED turn's files are gone from the list —
-	 * `Transcript.attachments()` draws that line, and draws it once.
+	 * Every attachment carried, on a turn or pending. ONE reader, so the gutter and the compactor agree. Reads the whole
+	 * transcript, not `_projected()`: a file a retention window narrowed past is still attached.
 	 */
 	attachments(): Grant[] {
 		return [ ...this.transcript.attachments(), ...this.pendingEntries.filter( isGrant ) ];
 	}
 
 	/**
-	 * What this session is AUTHORIZED to reach — the answer a gate asks for, deduped by subject.
-	 *
-	 * Reads the whole transcript rather than the deck, and the difference is the whole point: the deck
-	 * hides a compacted turn's entries because they stopped being CONTEXT, while a permission granted an
-	 * hour ago is still a permission. A grant ends when the user revokes it and at no other moment.
-	 *
-	 * Returns `GrantRef`, which says what is permitted and never how the permission arose. Today every one
-	 * comes from an injection; a second producer adds to this list without anything downstream noticing,
-	 * which is the property that makes it usable as an authorization surface rather than a view of the
-	 * gutter.
+	 * What this session is AUTHORIZED to reach, deduped by subject. A grant ends only when the user revokes it, never by
+	 * compaction. Returns `GrantRef`: what is permitted, never how it arose.
 	 */
 	grants(): GrantRef[] {
 		const out = new Map<string, GrantRef>();
-		// LIVE grants — every uncompacted entry, revoked or not. A revocation is PENDING, exactly as the
-		// context half of it is: the user is managing what the agent is looking at, not slamming a security
-		// door, and nobody revokes a file to ban it from a session within the same turn. Honouring it
-		// instantly would buy a re-prefill for a distinction no one asked for.
+		// Live grants, revoked or not: a revocation stays pending until the compaction that executes it.
 		for ( const turn of this.transcript.allTurns() ) {
 			if ( turn.compacted ) continue;
 			for ( const entry of turn.entries ) {
@@ -770,9 +517,7 @@ export class Session {
 			if ( !isGrant( entry ) ) continue;
 			out.set( grantSubject( entry ), _ref( entry ) );
 		}
-		// …plus everything already CANONIZED. A compacted grant left the transcript but not the session: that
-		// is what promotion means, and an authorization that evaporated the moment its turn was summarised
-		// would make compaction silently revoke things nobody revoked.
+		// …plus canonized grants: compaction moves a grant out of the transcript, never out of the authorization.
 		for ( const g of this.hoistedGrants() ) out.set( g.subject, g );
 		return [ ...out.values() ];
 	}
@@ -808,18 +553,8 @@ export class Session {
 	}
 
 	/**
-	 * The grants that must be CANONIZED into the manifest — those whose turns have been compacted, and
-	 * whose transcript line therefore no longer rides.
-	 *
-	 * The hoist is a MOVE between tiers, never a copy: while a grant's turn still rides, its reference line
-	 * is already in context and a manifest row beside it would state the same fact twice. Promotion waits
-	 * for compaction for the reason every deferred mutation does — that is the one moment the prefix is
-	 * being rewritten anyway, so the cache miss is already paid for.
-	 *
-	 * COMPACTION IS ALSO WHERE A REVOCATION LANDS, and the two rules turn out to be one rule read from both
-	 * ends: a grant that survives compaction is canonized, and a grant marked removed simply is not. So the
-	 * pass that rewrites the prefix settles every pending decision at once, and nothing needs a second
-	 * mechanism to execute a revocation — not-promoting IS the execution.
+	 * The grants to CANONIZE into the manifest: those whose turns are compacted. A MOVE between tiers, never a copy,
+	 * since a live reference line already states the fact. A removed grant is simply not promoted.
 	 */
 	hoistedGrants(): GrantRef[] {
 		const live = new Set<string>();
@@ -829,9 +564,7 @@ export class Session {
 				if ( !isGrant( entry ) ) continue;
 				const subject = grantSubject( entry );
 				if ( !turn.compacted ) { live.add( subject ); continue; }
-				// Revoked AND compacted: the pending revocation EXECUTES here, by the grant simply not being
-				// promoted. Nothing else has to run — not-promoting is the execution, which is why one pass
-				// settles both deferred decisions.
+				// Revoked and compacted: not promoting it is the revocation executing.
 				if ( entry.removed ) { out.delete( subject ); continue; }
 				out.set( subject, _ref( entry ) );
 			}
@@ -843,64 +576,30 @@ export class Session {
 	}
 
 	/**
-	 * The attachments that would RIDE — the WINDOW's, not the whole transcript's.
-	 *
-	 * The other half of the pair above, and the distinction is the same one `_projected()` draws: that one
-	 * answers "what is attached" for the gutter, this one answers "what rides". A file on a compacted turn
-	 * is still attached and must not ride again — the summary stands in for it, and re-sending it would pay
-	 * for that history twice.
-	 *
-	 * Exists because a NON-REPLAYING tier needs it. Every other caller gets attachments for free inside
-	 * `wireMessages()`, which projects the whole window; the harness tier is exempt from replaying that
-	 * window and so must ask for this one part of it by name. It reads `_projected()` rather than composing
-	 * the policies itself, for the reason that method exists at all: two readers that compose them
-	 * separately start disagreeing about what rides the moment either policy changes.
-	 *
-	 * REMOVED entries come back, exactly as `attachments()` returns them — a removed file keeps riding as a
-	 * pointer until its turn is compacted, and filtering here would be a second copy of a rule that lives at
-	 * the projection.
+	 * The attachments that RIDE: the window's, not the whole transcript's. A file on a compacted turn is attached but must
+	 * not ride again, or its history is paid for twice. A non-replaying tier needs this by name.
 	 */
 	projectedAttachments(): Grant[] {
 		return this._projected().attachments();
 	}
 
-	/** The DYNAMIC half of the wire — the projected transcript as neutral messages a connector maps to its
-	 *  provider format ( thinking excluded ). Joins agent.wireSystem() ( the stable half ) at send: the
-	 *  whole request is { system: agent.wireSystem(), messages: session.wireMessages() }. Every policy is
-	 *  applied HERE, at the projection — the transcript itself is never edited.
-	 *
-	 *  `opts` passes through to the transcript, with the result-log LINE MAP filled in on the way ( see
-	 *  `_resultLines` ). The caller supplies what only it can know — the model's `multimodal` declaration,
-	 *  the log's path — and the Session supplies what only it can. */
+	/** The dynamic half of the wire: the projected transcript as neutral messages, thinking excluded. Every policy is
+	 *  applied here, at the projection; the transcript itself is never edited. */
 	wireMessages( opts?: WireOptions ): WireMessage[] {
 		return this._projected().wireMessages( this._wireOpts( opts ) );
 	}
 
 	/**
-	 * ONE TURN, projected exactly as the whole window is — the twin of `wireMessages()`.
-	 *
-	 * TWO PROJECTIONS OF ONE TRANSCRIPT, never two formats. A tier that reconstructs history every round
-	 * wants the window; a tier that keeps its OWN history wants only what is new, and asking that one to
-	 * replay stacks duplicates inside its own cached prefix — measured, not theorised. Both go through
-	 * `Transcript.wireMessages`, so an entry kind added there reaches both by construction and neither can
-	 * grow its own idea of what an attachment or an image looks like.
-	 *
-	 * NOT windowed: `windowed()` decides what to REPLAY, and this projects a turn that is happening
-	 * now. Compaction is likewise not applied — there is nothing to summarise in a single turn.
+	 * One turn, projected as the window is: two projections of one transcript, never two formats. A tier that keeps its own
+	 * history must not replay the window, or it stacks duplicates in its cached prefix. Not windowed or compacted.
 	 */
 	wireTurn( turn: Turn, opts?: WireOptions ): WireMessage[] {
 		return new Transcript( [ turn ] ).wireMessages( this._wireOpts( opts ) );
 	}
 
 	/**
-	 * EVERYTHING BEFORE this turn — the windowed conversation as it stood when the turn opened.
-	 *
-	 * The third of the three, and it exists because the turn is opened BEFORE the request is built: a
-	 * caller asking "what was already said" would otherwise be handed the thing it is about to say. Used
-	 * to seed a transport that keeps its own history and has just lost it ( a re-seed after compaction ),
-	 * where sending the live turn twice is exactly the failure.
-	 *
-	 * Empty on a session whose only turn is this one, which is the common case and the correct answer.
+	 * Everything BEFORE this turn, as it stood when the turn opened. Used to re-seed a transport that lost its history;
+	 * sending the live turn twice is the failure this exists to avoid.
 	 */
 	wireBefore( turn: Turn, opts?: WireOptions ): WireMessage[] {
 		const before = this._projected().allTurns().filter( ( t ) => t !== turn );
@@ -908,17 +607,9 @@ export class Session {
 	}
 
 	/**
-	 * `toolUseId` → its 1-based line in this session's result log.
-	 *
-	 * Read off the WHOLE transcript, and that is the crux of the whole mechanism rather than an
-	 * implementation detail. `wireMessages()` runs on `_projected()`, which has already dropped everything a
-	 * compaction covered — but the LOG still holds those results, because the writer spills what the
-	 * transcript holds and never what the window kept. Counting in the projection would number every line
-	 * short by however many results a compaction had replaced, and every stub would point at the wrong one.
-	 *
-	 * A COUNT, not a lookup. The writer walks the same turns in the same order, so the file and the pointer
-	 * agree by construction — nothing coordinates them and no id-to-line map is persisted anywhere. What
-	 * that buys is also what it costs: change the write order and every stub already sent is wrong.
+	 * `toolUseId` → its 1-based line in the result log. Counted over the WHOLE transcript, because the log keeps what
+	 * compaction covered. A count, not a stored map: the writer walks the same turns in the same order, so changing the
+	 * write order makes every stub already sent wrong.
 	 */
 	private _resultLines(): Map<string, number> {
 		const lines = new Map<string, number>();
@@ -932,16 +623,8 @@ export class Session {
 	}
 
 	/**
-	 * The caller's options with this session's REDUCTION folded in — the keep-window, the log path, and the
-	 * line map. Private and shared by every reader, for the same reason `_projected()` is: they must not be
-	 * able to disagree.
-	 *
-	 * Composed HERE rather than passed in, and that is the change. It used to be built at the send, which left
-	 * the itinerary — which arrives through a pull channel and never touches a send — with no way to ask the
-	 * same question without restating the answer. One producer, every reader.
-	 *
-	 * No log path, no reduction. That is absence, not failure: a session nothing has spilled for has no file
-	 * to point at, and a stub naming one that does not exist is worse than the result it replaced.
+	 * The caller's options with this session's reduction folded in, composed here so every reader agrees. No log path
+	 * means no reduction: a stub naming a file that does not exist is worse than the result it replaced.
 	 */
 	private _wireOpts( opts?: WireOptions ): WireOptions | undefined {
 		if ( !this.resultLogPath ) return opts;
@@ -952,27 +635,8 @@ export class Session {
 	}
 
 	/**
-	 * The POINTER TEXT for tool results that will not ride whole, keyed by `tool_use_id` — the itinerary's
-	 * copy of what the wire is about to do, and the Model station's source for the same sentence.
-	 *
-	 * The two halves count over DIFFERENT turn sets and both are right: WHICH results stub is a question about
-	 * the projection ( the last N that ride ), while WHICH LINE each sits on is a question about all of
-	 * history ( the log holds what compaction dropped ). This is the only object holding both, which is why
-	 * the itinerary is handed an answer instead of the inputs to compute one.
-	 *
-	 * The stub TEXT, not a flag — so the marker a user reads and the text the model receives are the same
-	 * string, produced once. A boolean would have left the display to re-frame it, and the wording is the
-	 * whole point of the stub.
-	 *
-	 * WITH NO ARGUMENT it answers for the results the projection's own AGE rule already stubs, which is the
-	 * itinerary's question. WITH ONE it answers for exactly the ids asked about, which is what a caller
-	 * holding a SECOND rule needs: the Model station decides by size which results ride as pointers and asks
-	 * here for the text, rather than framing a sentence of its own and becoming a second author of it. Either
-	 * way the two facts a stub is made of — the log path and the line — are read from the one object that
-	 * holds both, and that is the whole reason this is a method here rather than a helper anywhere else.
-	 *
-	 * NO LOG, NO STUBS, whatever was asked for. A session nothing has spilled for has no file to point at,
-	 * and a pointer naming one that does not exist is worse than the result it replaced.
+	 * The pointer text for tool results that will not ride whole, keyed by `tool_use_id`. Stub text, not a flag, so the
+	 * marker a user reads and the text the model receives are one string. With no log, there are no stubs.
 	 */
 	resultStubs( ids?: Iterable<string> ): Map<string, string> {
 		const out       = new Map<string, string>();
@@ -985,41 +649,20 @@ export class Session {
 		return out;
 	}
 
-	/** The inspector itinerary — one BLOCK per turn, each carrying the entries that happened inside it
-	 *  ( thinking included ). DELIBERATELY UNWINDOWED: the Turns folder is the account of what actually
-	 *  happened, and a narrow policy must not make history look like it vanished. ( Marking which turns
-	 *  are in-window is a display concern for the folder itself. ) The System folder reads
-	 *  agent.wireSystem().
-	 *
-	 *  Rows carry the STUB the wire is about to send in their place — a reduction nobody can see is
-	 *  indistinguishable from a bug. A row on a COMPACTED turn carries none, which is correct rather than an
-	 *  omission: it does not ride at all, so calling it stubbed would claim it does. */
+	/** The inspector itinerary: one block per turn, unwindowed so history never looks like it vanished. Rows carry the
+	 *  stub the wire is about to send; a compacted row carries none, because it does not ride. */
 	transcriptTurns(): TranscriptTurn[] {
 		return this.transcript.turnRows( this.resultStubs() );
 	}
 
-	/** The session's own context cost — the wire weight of the PROJECTED transcript ( self-priced per
-	 *  entry ), so it prices what will actually ride rather than everything ever said: a compacted session
-	 *  is priced on its summary, which is the whole reason a user compacts one. Reads the same _projected()
-	 *  the wire does, so the number cannot drift from the send. The whole-context estimate folds this onto
-	 *  agent.estimateTokens(); a caller sums the two halves.
-	 *
-	 *  Takes the same options the wire does, through the same `_wireOpts` — a gauge that prices an
-	 *  unreduced transcript while the wire sends a reduced one is the exact drift both readers exist to
-	 *  prevent. A caller that passes nothing prices the transcript whole, which is still honest: that is
-	 *  what an unreduced send costs. */
+	/** The session's own context cost: the wire weight of the projected transcript, priced on what will actually ride.
+	 *  Takes the same options as the wire through `_wireOpts`, so the gauge and the send cannot drift. */
 	estimateTokens( opts?: WireOptions ): number {
 		return this._projected().estimateTokens( this._wireOpts( opts ) );
 	}
 
 	/**
-	 * A display title even when none was set. An untitled session is a session whose first prompt has not
-	 * been named yet — either it has not taken a turn, or the house agent's naming pass is still thinking —
-	 * so the placeholder says exactly that and nothing more.
-	 *
-	 * It used to be a creation timestamp, back when a titleless session was a permanent state. It isn't
-	 * one any more: a title arrives on its own within a turn, and a stamp would have read like a real name
-	 * that just happened to be useless.
+	 * A display title even when none was set. The placeholder says the first prompt has not been named yet, and nothing more.
 	 */
 	displayTitle(): string {
 		if ( this.title ) return this.title;
@@ -1028,14 +671,8 @@ export class Session {
 }
 
 /**
- * One transcript entry read as an AUTHORIZATION — the three facts a gate needs, by the three rules that
- * own them.
- *
- * A free function rather than three inline object literals because there are THREE producers above ( live
- * grants, pending attachments, canonized grants ) and a field added to `GrantRef` has to reach all of
- * them. When `level` was added, two of the three were the ones that mattered and the third was the one
- * that would have shipped a grant without a depth — silently, since an absent field parses as the
- * conservative rung and simply under-grants where a person expected write.
+ * One transcript entry read as an authorization. A field added to `GrantRef` must reach all three producers, or it is
+ * silently dropped.
  */
 function _ref( entry: Grant ): GrantRef {
 	return { kind: grantKind( entry ), subject: grantSubject( entry ), level: grantLevel( entry ) };

@@ -1,23 +1,12 @@
 /**
- * InstallManifest — what a fresh vault needs from the kit's bundled substrate, and where it lands.
- *
- * "Canonical is not deployed": the framework library's master copy lives in the substrate the host
- * app ships, never inside a project's own vault. A vault used to carry its own
- * `kcd/` mirror of that master — this table is what replaced it. `VaultDeploy` walks these rows to
- * fill a new vault; `VaultUtilities.reset` walks them the other direction, to find one deployed
- * path's canonical counterpart in the bundle.
- *
- * Directory-level, same idiom as `VaultLayout`: a handful of declared rows, not one per file, so the
- * table doesn't drift out of step with what the bundle actually contains. `bundleSource` and
- * `vaultHome` are independent — the bundle's own internal shape does not have to mirror the vault's.
- *
- * Node-free by design, like `VaultLayout` — pure data, so both the deploy step ( Node ) and anything
- * that only needs to reason about the shape ( renderer, docs generator ) can read the same table.
+ * InstallManifest — what a fresh vault needs from the kit's bundled substrate. "Canonical is not deployed":
+ * the framework master lives in the host app's substrate, never in a project's vault. `VaultDeploy` walks these
+ * rows to fill a new vault; `VaultUtilities.reset` walks them backwards to find a deployed path's canonical copy.
+ * Rows are directory-level on purpose, and `bundleSource` and `vaultHome` are independent. Node-free: pure data.
  */
 
-/** One row: a piece of the bundle, and the vault-relative home it fills. `required` rows are the
- *  framework's own floor — a vault missing one cannot function as a KCD project. `optional` rows are
- *  filled when present in the bundle but their absence is not a defect. */
+/** One row: a bundle piece and the vault-relative home it fills. `required` rows are the framework's floor;
+ *  `optional` rows fill when present, and their absence is not a defect. */
 export interface ManifestEntry {
 	/** Path relative to the substrate root. */
 	bundleSource: string
@@ -95,11 +84,6 @@ export class InstallManifest {
 		return MANIFEST
 	}
 
-	/**
-	 * `entryFor` STOOD HERE AND WAS DELETED on 2026-10-05 ( TASK-730 ). Its only caller in the whole
-	 * tree was `VaultUtilities.reset`, which went the same day; `VaultLayout.entryFor` is a DIFFERENT
-	 * function on a different table and is live. If you need a path-to-row lookup again, note that
-	 * `VaultDeploy` reads this table by walking `all()` rather than by asking it about one path.
-	 */
+	/** No path lookup here — `VaultLayout.entryFor` is a different function on another table, and is live. */
 
 }

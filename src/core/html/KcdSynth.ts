@@ -1,27 +1,9 @@
 /**
  * KcdSynth — content in, conforming body HTML out ( parser-family, the synthesis direction ).
- *
- * `KcdEmit` rebuilds the frontmatter block and passes the body THROUGH, which means every authoring
- * path so far has had to hand-write the body's markup: sections, regions, faux-tables, slot rows,
- * heading levels, and the `data-kcd-*` grammar holding them together. That is a lot of structure to
- * get right by hand, and getting it wrong is silent — a mistyped section name does not fail, it just
- * lands somewhere the compiler never looks.
- *
- * This module removes that work. An author supplies CONTENT — a map of section name to prose, and
- * rows for the sections that carry rows — and the markup is derived from `KcdShapes`. Section order
- * comes from the table, not from the input; heading depth comes from nesting, not from the caller;
- * a `phase-2` finds its way inside `phases` because the shape says `phases` nests `phase-*`.
- *
- * THE DIVISION OF LABOUR. This module owns SHAPE — what goes where, in what order, wrapped in what.
- * It does not own conformance: it can be handed content that omits a required section and will emit
- * a document missing it. That is deliberate. `KcdValidate` is the gate and stays the only gate, so
- * there is exactly one place a malformed artifact is stopped, and synthesis cannot become a second
- * half-enforcing authority that disagrees with the first.
- *
- * PROSE PASSES THROUGH WHEN IT IS ALREADY MARKUP. A section body that starts with a block tag is
- * trusted as authored HTML; anything else is treated as plain text and escaped, with blank lines
- * becoming paragraphs and `- ` lines becoming a list. The test is deliberately crude and the
- * fallback is deliberately the safe one: unrecognized input gets escaped rather than injected.
+ * An author supplies content ( section name → prose, plus slot rows ); the markup is derived from `KcdShapes`:
+ * section order from the table, heading depth from nesting, a `phase-2` placed inside `phases` by its parent's `nests` glob.
+ * This owns SHAPE, not conformance: `KcdValidate` stays the only gate, so synthesis cannot become a second authority.
+ * Prose is escaped unless it already opens with a block tag, so unrecognized input is never injected.
  */
 
 import { HtmlTree } from './HtmlTree';
@@ -64,9 +46,7 @@ export interface SynthInput {
 /** What synthesis produced, plus what it could not place. */
 export interface SynthResult {
 	body: string;
-	/** Section names the type's shape does not declare and that matched no `nests` glob. They are
-	 *  still EMITTED ( an open type legitimately carries them ); this list exists so a caller can
-	 *  warn when the type is closed. */
+	/** Names the shape neither declares nor nests. Still EMITTED, since an open type legitimately carries them; a caller may warn on a closed type. */
 	undeclared: string[];
 }
 
@@ -77,20 +57,8 @@ const BLOCK_START = /^\s*<(p|div|ul|ol|section|table|pre|blockquote|h[1-6]|dl|fi
 const AUTHORED_HEADING = /^\s*<h[1-6]\b/i;
 
 /**
- * HTML comment syntax an agent tried to author in prose. STRIPPED, not escaped.
- *
- * RULING ( Bryan, 2026-08-17 ): comments are a HUMAN channel. An agent should neither read them nor
- * write them — it has the document body for anything it needs to say, and a side channel an agent
- * can write but a reader does not expect is a contamination surface, which is the opposite of what
- * these documents are for.
- *
- * Stripping also settles a disagreement between the two input paths. A comment inside an authored
- * `body` is dropped by `HtmlTree.parse` before it can reach disk; the same comment typed into
- * `content` prose was ESCAPED and rendered a literal `<!-- … -->` onto the page. Same intent, two
- * outcomes, and the visible one is the wrong one. Both paths now yield nothing.
- *
- * NOT a security control — an authored body is handled by the parser, not here. This is about what a
- * document ends up SAYING.
+ * Comment syntax in prose is STRIPPED, not escaped: comments are a human channel that agents neither read nor write,
+ * and an authored body drops them at parse, so both input paths yield nothing. Not a security control.
  */
 const COMMENT_SYNTAX = /<!--[\s\S]*?-->/g;
 
@@ -133,9 +101,7 @@ export const KcdSynth = new class KcdSynth {
 			}
 		}
 
-		// Sections the shape never declared ride at the end, in the order the author gave them —
-		// an open type ( plan, contract, reference ) uses these for real content, so dropping them
-		// would discard exactly the material the author cared most about.
+		// Undeclared sections ride at the end, in the author's order: an open type uses them for real content, so they are never dropped.
 		for ( const name of undeclared )
 			parts.push( this.sectionEl( name, this.bodyFor( name, provided, slotsBy, undefined ), 2 ) );
 
@@ -157,17 +123,7 @@ export const KcdSynth = new class KcdSynth {
 		return names.filter( n => !declared.has( n ) && !KcdShapes.isNestedChild( type, n ) );
 	}
 
-	/**
-	 * The nested children a parent section claims, in NUMERIC order — `phase-1`, `phase-2`, `phase-10`.
-	 *
-	 * Deliberately not the order the author supplied. Numbered siblings carry their sequence in their
-	 * own names, so emitting `phase-2` above `phase-1` because the caller happened to list it first
-	 * produces a document that is wrong in a way nothing downstream can detect. The premise of this
-	 * whole module is that ordering is the code's job; a caller who supplies phases out of order is
-	 * exactly the case it exists to absorb. Lexicographic sorting would put `phase-10` before
-	 * `phase-2`, so the comparison is natural: split each name into digit and non-digit runs and
-	 * compare numbers as numbers.
-	 */
+	/** Nested children in NUMERIC order ( `phase-2` before `phase-10` ), never the caller's order. */
 	childrenOf( parent: SectionSpec, provided: Record<string, string> ): string[] {
 		if ( !parent.nests ) return [];
 		return Object.keys( provided )
@@ -195,12 +151,7 @@ export const KcdSynth = new class KcdSynth {
 		return 0;
 	}
 
-	/**
-	 * Every section name the author actually supplied — prose keys AND the sections addressed by slot
-	 * rows. A slot-bearing section ( a lens's `habits` ) is supplied as ROWS and never appears in
-	 * `sections`, so auditing the prose keys alone reports it absent when it is right there. This is
-	 * the list any conformance check should be handed.
-	 */
+	/** Every supplied section, prose and slot-addressed alike. Slot-bearing sections arrive as rows, not `sections`, so auditing prose keys alone misreports them absent. */
 	suppliedSections( input: SynthInput ): string[] {
 		const names = Object.keys( input.sections ?? {} );
 		for ( const s of input.slots ?? [] )
@@ -209,20 +160,8 @@ export const KcdSynth = new class KcdSynth {
 	}
 
 	/**
-	 * Advisories about the PROSE itself — markup an author meant to be interpreted and which prose
-	 * emission renders as literal characters.
-	 *
-	 * Distinct from `KcdShapes.audit`, which asks whether the right SECTIONS are present. This asks
-	 * whether what is inside them will read the way the author intended. Both are advisory: synthesis
-	 * owns shape, `KcdValidate` is the only gate, and neither may become a second half-enforcing
-	 * authority.
-	 *
-	 * WHY ADVISE RATHER THAN CONVERT. Interpreting `**bold**` would mint a markdown dialect this
-	 * project then owns and has to keep in step with its own escaping rules forever — for a corpus
-	 * whose documents are HTML by deliberate choice. The cheap honest move is to tell the author, at
-	 * the one moment they still hold the content, that what they wrote is not what will render.
-	 *
-	 * A section that is already authored HTML is skipped: an author writing markup means it.
+	 * Advisories on markup in prose that will render literally. Advice, not conversion: interpreting `**bold**` would mint
+	 * a markdown dialect to maintain. Sections that are already authored HTML are skipped.
 	 */
 	proseWarnings( input: SynthInput ): string[] {
 		const out: string[] = [];
@@ -238,11 +177,7 @@ export const KcdSynth = new class KcdSynth {
 
 	// ── Rendering ─────────────────────────────────────────────────────────────────
 
-	/**
-	 * One declared section, or `''` when the author supplied nothing for it. Absence is silent here:
-	 * emitting an empty section would trip the validator's own `empty-section` rule, and omitting a
-	 * section the author skipped is exactly what the required-tier check is for.
-	 */
+	/** One declared section, or `''` when the author supplied nothing: an empty section would trip `empty-section`, and the required-tier check owns absence. */
 	renderSection( spec: SectionSpec, provided: Record<string, string>, slotsBy: Record<string, SynthSlots>, depth: number ): string {
 		const children = this.childrenOf( spec, provided );
 		const body     = this.bodyFor( spec.name, provided, slotsBy, spec.slot );
@@ -264,12 +199,7 @@ export const KcdSynth = new class KcdSynth {
 		return text ? this.proseToHtml( text ) : '';
 	}
 
-	/**
-	 * `<section data-kcd-section>` with its heading. Depth drives the heading level only.
-	 *
-	 * An author whose HTML already opens with a heading has titled the section, so no second one is added —
-	 * `Phase 1` above `<h3>Phase 1 — Publish</h3>` says the same thing twice ( ruling: Bryan, 2026-09-15 ).
-	 */
+	/** `<section data-kcd-section>` with its heading; depth sets the heading level only. Authored HTML that opens with a heading gets no second one. */
 	sectionEl( name: string, inner: string, depth: number ): string {
 		const level   = Math.min( Math.max( depth, 2 ), 6 );
 		const heading = AUTHORED_HEADING.test( inner )
@@ -314,11 +244,7 @@ export const KcdSynth = new class KcdSynth {
 
 	// ── Text ──────────────────────────────────────────────────────────────────────
 
-	/**
-	 * Plain text → block HTML; already-authored HTML → itself. Blank lines separate paragraphs and a
-	 * run of `- ` lines becomes a list. Anything not recognized as markup is ESCAPED — the safe
-	 * direction, so a stray `<` in prose can never open a tag.
-	 */
+	/** Plain text → paragraphs and `- ` lists; authored HTML passes through. Anything unrecognized is ESCAPED, so a stray `<` cannot open a tag. */
 	proseToHtml( text: string ): string {
 		// Comments come off BEFORE the markup test, so a block that merely opens with one is still
 		// recognized as authored HTML rather than escaped wholesale.

@@ -5,13 +5,9 @@ import { KcdAddress } from '../../core/html/KcdAddress';
 import type { SerializedArtifact } from '../types';
 
 /**
- * A bug report as the task board's own fields — every key is a `Task` property name, spelled exactly.
- * Plain strings, because the SDK cannot import the task board's types; the names are the contract.
- *
- * Three gaps against the board, carried for the rationalizing pass rather than dropped: `verifiedBy`
- * has no Task twin ( the board knows who CLOSES, not who signed ); `approval` has no word for a
- * verifier other than the repairer; and `needs-human` is a state here but an ask raised against the
- * task there.
+ * The task board's fields, keyed by Task property name, as plain strings: the SDK cannot import the board's types.
+ * Three gaps are carried for the rationalizing pass: `verifiedBy` has no Task twin, `approval` has no word for a
+ * verifier other than the repairer, and `needs-human` is a state here but an ask there.
  */
 export interface BugReportTaskFields {
 	name:          string;
@@ -40,10 +36,8 @@ export const BUG_REPORT_BODY_FIELDS = [
 ] as const;
 
 /**
- * A filed defect and the proof of its repair. A record, read not executed — role `know`, the default.
- *
- * Its own class so the mapping onto the task board lives on the object: `taskFields()` is a read by
- * field name, never an interpretation of prose, which is what keeps a board import mechanical.
+ * A filed defect and the proof of its repair: a record, read not executed. `taskFields()` reads by field name and
+ * never interprets prose, which is what keeps a board import mechanical.
  */
 export class BugReportObject extends KCDPrimitive {
 

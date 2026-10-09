@@ -2,100 +2,55 @@ import { ACCESS_LEVELS, INJECTED_KINDS, type AccessLevel, type InjectedKind, typ
 import { parseAccessList, type AccessEntry } from '../core/AccessPolicy';
 
 /**
- * Authorization — what the HOST asserts about one turn's capability exceptions, and how both ends of the
- * wire read it back.
+ * What the host asserts about one turn's capability exceptions, and how both ends read it back.
  *
- * There are TWO LANES and they do not share a carrier. Starmind's own dispatch calls a server it spawned,
- * so it can attach the assertion to the call itself; Claude Code spawns its own copies of these servers,
- * so nothing of ours is on that call and the only channel into that process is the environment its parent
- * was given. Each writer below NAMES the lane it serves, because the one thing a reader of this file must
- * not get wrong is which road they are on — a fact carried on one lane and forgotten on the other is a
- * capability that works in the app and silently does nothing under the harness.
+ * Two lanes share no carrier: in-process rides `_meta` on the `tools/call`; harness rides the child's environment,
+ * and publishToChild writes every variable in one call. Each writer names its lane, because a fact carried on one
+ * and forgotten on the other works in the app and does nothing under the harness. `_meta` sits beside `arguments`,
+ * which the model writes, so an authorization inside `arguments` would let the agent authorize itself.
  *
- *   assertOnCall   — the in-process lane. Rides `_meta` on the `tools/call` itself.
- *   publishToChild — the harness lane. Rides the child's environment, read once at boot. Emits EVERY
- *                    variable in one call, so a fact cannot be published on one and forgotten on another.
- *
- * `_meta` is JSON-RPC's reserved out-of-band field, carried BESIDE `arguments` rather than inside it.
- * That position is the whole point, and the only reason any of this is trustworthy. `arguments` is what
- * the MODEL writes; `_meta` is what the CLIENT writes. A model asking to read a file it was never handed
- * has no channel through which to claim it WAS handed it — the field is not in the tool's inputSchema, was
- * never shown to it, and is attached after its tool_use block has already been parsed. Put an
- * authorization inside `arguments` and the agent authorizes itself.
- *
- * THE GRANT ON THE WIRE IS THE PERMISSION. There is nothing else: no session id, no server-side table, no
- * lookup. A server receiving a grant honours it for exactly that subject on exactly that call, and a
- * server receiving none has no exception to apply. That is deliberate and load-bearing — it keeps the
- * override SHORT-TERM and VISIBLE by construction ( it is re-asserted, in full, on every single call ),
- * and it leaves no state anywhere for a second layer of permission logic to grow in later. Revoking is
- * then not an operation at all: the grant simply stops being sent.
- *
- * Both ends of the wire read this one file, so the client's assertion and the server's reading of it
- * cannot drift apart.
+ * The grant on the wire is the permission, with no other state: re-asserted on every call, revoked by not sending it.
+ * Both ends read this one file, so they cannot drift.
  */
 /**
- * The variables the HARNESS lane's carrier rides on — the turn's EXCEPTIONS and the FLOOR they except from.
- *
- * Exported so the host that WRITES them and the server that READS them name them once — a string literal
- * duplicated across a process boundary is a silent no-grant the first time one side is edited.
- *
- * TWO VARIABLES RATHER THAN A WIDER PAYLOAD, and the reason is version skew. The child is vendored into the
- * host's plugin directory and promoted on its own schedule, so a newer host meeting an older bundle is an
- * ordinary Tuesday. Widening the grant payload to carry the floor as well would hand an older child an
- * object where it expects an array — it would count the whole thing as one dropped entry and assert nothing.
- * Separate variables skew safely in both directions: an older child ignores the floor and reads its slice
- * exactly as it does today, and a newer child under an older host finds the variable absent and does the
- * same. Neither skew is worse than the state before either existed.
+ * Exported so the writer and reader name them once: a literal duplicated across a process boundary is a silent
+ * no-grant the first time one side is edited. Two variables, not one payload: an older child handed an object
+ * where it expects an array counts it as one dropped entry and asserts nothing.
  */
 export const GRANT_ENV  = 'STARMIND_GRANTS';
 export const ACCESS_ENV = 'STARMIND_ACCESS';
 
 /**
- * What the host publishes to one per-turn harness child: the turn's grants, and the configured floor those
- * grants are exceptions to.
- *
- * One shape rather than two parameters because they are published together or not at all — a caller that
- * hands over the exceptions and forgets the baseline has produced an agent whose permissions are whatever
- * some other lane last wrote. Plain data at a seam, not a class: nothing here has behaviour, and the two
- * writers that turn it into environment variables live below.
+ * What the host publishes to one per-turn harness child: the turn's grants and the floor they except from.
+ * One shape, because they are published together or not at all: exceptions without their floor leave the
+ * agent's permissions to whatever another lane last wrote.
  */
 export interface HarnessAuthorization {
 	grants: readonly GrantRef[];
 	access: readonly AccessEntry[];
 	/**
-	 * The WORKSPACE both of the above are scoped to. Empty when no project backs the turn.
+	 * The WORKSPACE both of the above are scoped to; empty when no project backs the turn. It is the TURN's project,
+	 * not the active one, and the two diverge when a person switches project mid-run.
 	 *
-	 * It belongs in this envelope for the same reason the other two share one: grants are exceptions to a
-	 * floor, and a floor is a property of a project — so a reader holding two of the three has to go and
-	 * find the third, and will find it by asking whichever project happens to be ACTIVE. That is a different
-	 * question from which project this TURN belongs to, and the two answers diverge the moment a person
-	 * switches project while an agent is running.
-	 *
-	 * Not published to the child ( it resolves paths, not ids, and is pointed at its workspace by the host ).
-	 * It is here for the in-process readers that gate a routed call on the asking turn's reach.
+	 * Not published to the child, which resolves paths and is pointed at its workspace by the host.
 	 */
 	projectId: string;
 }
 
 /**
- * How a published floor arrived — four states, four names, because behaviour and diagnosis want different
- * cuts of the same answer and collapsing them is how a fallback becomes invisible.
+ * How a published floor arrived. Four names, because behaviour and diagnosis want different cuts of one answer,
+ * and collapsing them hides a fallback.
  *
- *   absent     — no variable. An older host, or a lane that publishes nothing. Fall back to configuration.
- *   unexpanded — the literal `${…}` reference arrived. The harness failed to expand it, which is a transport
- *                failure rather than a statement about access, so it behaves as absent and is named so a
- *                trace can tell the two apart. This has happened before on the grant carrier.
- *   published  — a floor was published; it IS the floor, including when it is empty.
- *   unreadable — a floor was published and could not be parsed. Grants nothing, because a floor we cannot
- *                read is not one we may quietly substitute a different floor for.
+ *   absent     — no variable: fall back to configuration.
+ *   unexpanded — the literal `${…}` arrived: a transport failure, so it behaves as absent but is named apart.
+ *   published  — a floor; it IS the floor, including when empty.
+ *   unreadable — published but unparseable: grants nothing, and no other floor is substituted.
  */
 export type FloorState = 'absent' | 'unexpanded' | 'published' | 'unreadable';
 
 /**
- * WHO a call is on behalf of. Attribution only — never read to decide a verdict.
- *
- * It rides the in-process lane beside the grants, and so reaches a spawned server exactly as `projectId`
- * does. Unlike `projectId` it carries a string a PERSON wrote, which is the cost of having one writer.
+ * WHO a call is on behalf of. Attribution only, never read to decide a verdict. Unlike `projectId`, it carries
+ * a string a person wrote, which is the cost of having one writer.
  */
 export interface AskerRef {
 	agentId:   string | null;
@@ -104,48 +59,31 @@ export interface AskerRef {
 }
 
 /**
- * The gate's answer for ONE step of a composite call — a batch — by position.
- *
- * `null` is a step the gate did not judge, and it is never a pass. A name that is no sibling's is judged
- * too: Starmind's gate answers it in the same words as a sibling the run was never offered, because a tool
- * that tells the two apart tells an agent which of its guesses are real. A composite reached with no
- * verdicts at all refuses every step: the only way to a list here is through the gate, so its absence
- * means the call went round it.
+ * The gate's answer for ONE step of a composite call, by position. `null` is a step the gate did not judge, and it
+ * is never a pass. A name that is no sibling's is answered in the same words as a sibling never offered, because a
+ * tool that tells them apart tells an agent which guesses are real. A composite with no verdicts at all refuses
+ * every step, because the call went round the gate.
  */
 export type StepVerdict = { ok: true } | { ok: false; refusal: string } | null;
 
 export const Authorization = {
 
 	/**
-	 * THE IN-PROCESS LANE — the `_meta` payload for one outgoing `tools/call`, or null when there is
-	 * nothing to say, so a bare call goes out byte-identical to one sent before any of this existed.
+	 * The in-process lane's `_meta` payload for one outgoing `tools/call`, or null when there is nothing to say, so a
+	 * bare call stays byte-identical to one sent before any of this existed.
 	 *
-	 * Takes the PROJECT as well as the grants, and its sibling does not. That asymmetry is a ruling rather
-	 * than an omission: see `projectId` below for why a project may be named to an in-process reader and
-	 * must not be named to a spawned one.
+	 * It takes the PROJECT and its sibling does not: a project may be named to an in-process reader, never to a harness
+	 * child. It carries the floor too, because a grant is an exception, and a reader holding one without its floor would
+	 * find the other by asking whichever project is ACTIVE.
 	 *
-	 * IT CARRIES THE FLOOR TOO, which is what makes this the same writer as `forSpawn` rather than half of
-	 * one. A grant is an exception and a floor is what it is an exception TO, so a reader holding one
-	 * without the other has to go and find the missing half — and will find it by asking whichever project
-	 * happens to be ACTIVE. The two lanes were already required not to drift on the grant; carrying the
-	 * pair on both is how that stops being a thing to remember.
+	 * `access`: absent and `[]` are opposite instructions. Absent says use the server's own configuration; empty says
+	 * reach nothing. Only the caller knows which it means, and collapsing them restores the configuration where a host
+	 * meant to deny, so the choice is made at the call site.
 	 *
-	 * `access` IS OPTIONAL AND `[]` IS NOT THE SAME AS OMITTING IT. Absent says this lane publishes no
-	 * floor and a receiving server should use its own configuration; empty says this caller reaches
-	 * nothing. Those are opposite instructions, and only the CALLER knows which it means — so the choice is
-	 * made at the call site and never inferred here. Collapsing them would silently restore whatever a
-	 * server's own configuration held at the moment a host meant to deny.
+	 * `steps` rides here because `_meta` is client-written: a model cannot hand its own batch a verdict.
 	 *
-	 * `steps` rides here for the reason grants do: `_meta` is client-written, so a model cannot hand its own
-	 * batch a verdict. Absent on every call that is not a composite.
-	 *
-	 * `browseAll` IS THE HOLDER'S WEB RELEASE VALVE, and it rides here for the reason the floor does: the
-	 * callee gates a URL and cannot resolve a passport, so what crosses is the ANSWER rather than a key.
-	 * EMITTED ONLY WHEN TRUE, because absent and false are the same statement for this field and a call
-	 * that carries nothing stays byte-identical to one sent before the field existed — the same asymmetry
-	 * `access` deliberately does NOT have, since there an empty floor and no floor are opposite
-	 * instructions. It is a SINGLE BIT about the asking holder, strictly less than the `access` list this
-	 * envelope already carries to the same servers.
+	 * `browseAll` is emitted only when true, since absent and false say the same. It is a single bit about the asking
+	 * holder, and it crosses as the answer rather than a key, since the callee cannot resolve a passport.
 	 */
 	assertOnCall(
 		grants:     readonly GrantRef[],
@@ -155,10 +93,8 @@ export const Authorization = {
 		steps?:     readonly StepVerdict[],
 		browseAll?: boolean
 	): Record<string, unknown> | null {
-		// IDENTITY is what makes an asker, not the trace. A block whose every identity field is null names
-		// nobody, and would be a second spelling of the absence the missing key already says. An asker
-		// counts as something to say, so an ungranted call still carries who is behind it — which is what
-		// lets a callee stop and ask a NAMED person rather than refusing flat.
+		// Identity makes an asker, not the trace: an all-null identity names nobody. An asker still counts as
+		// something to say, so an ungranted call carries who is behind it and a callee can ask a named person.
 		const named = !!( asker && ( asker.agentId || asker.agentName ) );
 		if ( grants.length === 0 && !projectId && !access && !named && !steps && !browseAll ) return null;
 		const own: Record<string, unknown> = {};
@@ -171,9 +107,8 @@ export const Authorization = {
 		return { starmind: own };
 	},
 
-	/** The receiving end of the holder's web release valve — TRUE only for a literal `true`. Absent, false,
-	 *  and anything that is not a boolean all read as off, because the secure answer and the absent answer
-	 *  are the same one. See `assertOnCall` for why nothing is emitted on the false branch. */
+	/** The receiving end of the holder's web release valve: TRUE only for a literal `true`. Absent, false and
+	 *  non-booleans all read as off, because the secure and absent answers are the same one. */
 	browseAllOnCall( meta?: Record<string, unknown> ): boolean {
 		const own = ( meta?.[ 'starmind' ] ?? {} ) as { browseAll?: unknown };
 		return own.browseAll === true;
@@ -207,19 +142,11 @@ export const Authorization = {
 	},
 
 	/**
-	 * Which project this call belongs to — a ROUTING key for an IN-PROCESS reader, and nothing else.
-	 *
-	 * Read this only where the reader shares a process with the host and can resolve the project itself.
-	 * It is deliberately NOT how a spawned server learns its workspace: that would put a lookup key on the
-	 * wire and make the receiving end trust a table it cannot see, which is exactly the thing the grant
-	 * design refuses. A spawned server is POINTED at its project by the host writing the resolved policy
-	 * into the slice it re-reads — so what crosses a process boundary is always the answer, never the key.
-	 * That is why `publishToChild` names no project: there is no reader on that lane who could use one — it
-	 * is handed the resolved FLOOR instead, which is what a project id would only have been looked up to get.
-	 *
-	 * Trustworthy for the same reason a grant is: `_meta` is the client-written half of a call and the
-	 * model has no channel to it. An empty string is "no project on this call" — a sessionless crossing
-	 * like the inspector's Run button — and reads as no configured access rather than as the default one.
+	 * Which project this call belongs to: a ROUTING key for an IN-PROCESS reader, and nothing else. A spawned server is
+	 * never told its project this way, since that would put a lookup key on the wire for the receiver to trust; the
+	 * host points it at its project by writing the resolved floor into its slice, so only answers cross.
+	 * Trusted for the reason a grant is: `_meta` is client-written. An empty string is "no project on this call" and
+	 * reads as no configured access, never as the default.
 	 */
 	projectId( meta?: Record<string, unknown> ): string {
 		const own = ( meta?.[ 'starmind' ] ?? {} ) as { projectId?: unknown };
@@ -227,29 +154,18 @@ export const Authorization = {
 	},
 
 	/**
-	 * THE HARNESS LANE — EVERY variable a per-turn child is given, in one call.
+	 * THE HARNESS LANE — EVERY variable a per-turn child is given, in one call, so a fact added to the publish cannot
+	 * land on one variable and be forgotten on the other.
 	 *
-	 * One writer for both, so a fact added to what the host publishes cannot land on one variable and be
-	 * forgotten on the other. That is not a hypothetical tidiness: the floor and the grants answer halves of
-	 * the same question, and for a long time only one of them had a carrier on this lane at all — the child
-	 * read its exceptions from the host and its baseline from a slice shared with a different lane.
+	 * BOTH ARE ALWAYS EMITTED, `[]` when there is nothing to say, unlike `assertOnCall`. The spawn config references
+	 * these variables once, before any turn's grants are known, so an undefined one is a dangling reference, not "none".
 	 *
-	 * BOTH ARE ALWAYS EMITTED, `[]` when there is nothing to say. Not symmetric with `assertOnCall`,
-	 * deliberately. `_meta` is authored at call time, so omitting it and having nothing to say are the same
-	 * statement. These variables are REFERENCED from a spawn config written once, before any turn's grants
-	 * are known ( MCPService.harnessConfig stamps `${…}` on every server ), so leaving one undefined does
-	 * not say "none" — it leaves a dangling reference and defers to whatever the harness does with one. An
-	 * empty list says none in the same shape a full one says the rest, and every turn resolves.
+	 * Bare arrays, not the `_meta` envelope: a dedicated variable has no neighbours to avoid. The types are identical
+	 * across both carriers, which is the part that must never drift.
 	 *
-	 * Bare arrays, not the `_meta` envelope. The `starmind` namespace exists because `_meta` is a protocol
-	 * field shared with other writers; a dedicated variable has no neighbours to avoid, so the wrapper would
-	 * be ceremony. The TYPES are identical across both carriers, and that is the part that must never drift —
-	 * which is why both writers are defined in this one file, beside the parses they share.
-	 *
-	 * SAFE ONLY FOR A PER-TURN CHILD. Env is fixed for a process's life, so a long-lived server handed these
-	 * would freeze its permissions at spawn and carry them across every session it went on to serve. The
-	 * harness child is killed with each `claude` invocation, which is what makes the carrier honest;
-	 * Starmind's own long-lived servers are pointed through their slice instead and never see these.
+	 * SAFE ONLY FOR A PER-TURN CHILD. Env is fixed for a process's life, so a long-lived server would freeze its
+	 * permissions at spawn. The harness child dies with each `claude` invocation; Starmind's own servers are pointed
+	 * through their slice and never see these.
 	 */
 	publishToChild( auth: HarnessAuthorization ): Record<string, string> {
 		return {
@@ -259,18 +175,12 @@ export const Authorization = {
 	},
 
 	/**
-	 * THE RECEIVING END of the published floor — what a spawned child should treat as its configured access.
+	 * The receiving end of the published floor, for a spawned child. `entries` is null only when nothing was published,
+	 * and the caller falls back to its own configuration. A published EMPTY floor is `[]` and grants nothing: reading it
+	 * as "nothing published" would silently restore whatever the slice held. Those are opposite outcomes.
 	 *
-	 * `entries` is null when nothing was published, and the caller falls back to its own configuration. It
-	 * is the list when a floor WAS published, including when that list is empty — a published empty floor
-	 * grants nothing, and reading it as "nothing was published" would silently restore whatever the slice
-	 * happened to hold. Those are opposite outcomes and they must not share a value.
-	 *
-	 * An unexpanded `${…}` reference reads as ABSENT rather than as garbage. It means the harness did not
-	 * expand the variable, which is a transport failure and not a statement about access — the child is no
-	 * worse off falling back than it was before this carrier existed, and denying every path over a failed
-	 * string substitution would take file access down for a reason nobody could see. `state` is what makes
-	 * that decision auditable instead of silent.
+	 * An unexpanded `${…}` reads as ABSENT. It is a transport failure, not a statement about access, and denying every
+	 * path over a failed substitution would take file access down for a reason nobody can see. `state` keeps that auditable.
 	 */
 	readFloor( raw: string | undefined ): { entries: AccessEntry[] | null; state: FloorState } {
 		if ( !raw )                   return { entries: null, state: 'absent' };
@@ -286,29 +196,15 @@ export const Authorization = {
 	},
 
 	/**
-	 * THE RECEIVING END on the WIRE lane — the same contract `readFloor` gives the environment lane, so a
-	 * server asks one and then the other and reads one answer either way.
+	 * The wire lane's contract, the same as `readFloor`'s: the four states and the null-versus-empty meaning.
+	 * `unexpanded` is never returned here, since no string substitution happens on a wire envelope. The type is shared
+	 * because the readers are, and faking the state to look symmetrical would invent a diagnosis.
 	 *
-	 * SAME FOUR STATES, and the same null-versus-empty meaning: `entries` is null only when nothing was
-	 * published, and a published EMPTY floor grants nothing rather than meaning fall back. That is the one
-	 * distinction this whole field exists to preserve — see `assertOnCall`.
+	 * `unreadable` means something different on this lane. The envelope came from our own gate, so an unreadable floor
+	 * is a Starmind defect rather than a transport failure to tolerate. It still fails closed, and a caller that only
+	 * notes it has mistaken a bug for weather.
 	 *
-	 * `unexpanded` IS UNREACHABLE HERE and is deliberately never returned. It describes a harness failing
-	 * to substitute a `${…}` reference into a string, and there is no string substitution on a wire
-	 * envelope. The state type is shared because the READERS are shared; not every lane produces every
-	 * state, and faking one to look symmetrical would be inventing a diagnosis nobody can act on.
-	 *
-	 * `unreadable` MEANS SOMETHING DIFFERENT ON THIS LANE, and callers must treat it accordingly. On the
-	 * environment lane a floor that will not parse is a transport failure — a harness mis-expanded a
-	 * variable — which is a degraded condition to tolerate and report quietly. HERE the envelope was
-	 * authored by our own gate, in this process or one hop away, and handed straight to a server we also
-	 * wrote. There is no third party to blame and no retry that helps: an unreadable floor on this lane is
-	 * a DEFECT in Starmind. It still fails closed, because a floor we cannot read is not one we may
-	 * substitute a different floor for — but a caller that merely notes it has mistaken a bug for weather.
-	 *
-	 * Silent by construction, like every other parse in this file, and for the reason stated on
-	 * `parseGrantsCounted`: the spawned child has no logger this layer could reach. `state` is what the
-	 * host shouts with.
+	 * Silent, like every parse in this file, because the spawned child has no logger; `state` is what the host reports.
 	 */
 	floorOnCall( meta?: Record<string, unknown> ): { entries: AccessEntry[] | null; state: FloorState } {
 		const own = ( meta?.[ 'starmind' ] ?? {} ) as { access?: unknown };
@@ -331,43 +227,25 @@ export const Authorization = {
 	},
 
 	/**
-	 * Read a grant payload off EITHER carrier — the wire envelope or the environment variable.
+	 * Read a grant payload off EITHER carrier, the wire envelope or the environment variable. One parse for both, so the
+	 * two cannot drift. FAILS CLOSED on everything: absent, unparseable, wrong shape, unknown kind and empty subject all
+	 * yield no grant, including an unexpanded `${…}` that JSON.parse rejects.
 	 *
-	 * ONE PARSE FOR BOTH, and that is the whole reason it lives here. Until this existed the two carriers
-	 * did not merely risk drifting, they had already drifted: the environment side validated every field
-	 * strictly and dropped what it could not read, while the wire side did `as GrantRef[]` — an unchecked
-	 * cast, so a malformed assertion reached the guards as a grant-shaped object with undefined fields.
-	 * The file said the two must not drift and one of them was not being read at all.
-	 *
-	 * FAILS CLOSED ON EVERYTHING. Absent, unparseable, wrong shape, unknown kind, empty subject — all
-	 * yield no grant, because a grant that cannot be read is a grant that was not given. That also covers
-	 * an unexpanded `${…}` reference arriving literally, which JSON.parse rejects.
-	 *
-	 * A MISSING LEVEL IS A MIGRATION, NOT A DEFAULT. A payload written before depths existed meant `read`,
-	 * so that is what it resolves to — meaning-preserving in the only direction that is safe, since it can
-	 * never reach write or delete. This matters concretely rather than theoretically: the child is
-	 * vendored into the host's plugin directory and promoted on its own schedule, so a newer host talking
-	 * to an older bundle, or the reverse, is an ordinary Tuesday. Both skews under-grant; neither breaks.
-	 *
-	 * An unrecognised level is malformed and drops the whole grant, rather than being clamped to something
-	 * workable — a level we cannot read is not a level we may assume is shallow.
+	 * A MISSING LEVEL IS A MIGRATION, NOT A DEFAULT: a payload from before depths existed meant `read`, which can never
+	 * reach write or delete. Both skews between host and bundle under-grant, and neither breaks. An unrecognised level
+	 * drops the whole grant, because a level we cannot read is not one we may assume is shallow.
 	 */
 	parseGrants( raw: unknown ): GrantRef[] {
 		return Authorization.parseGrantsCounted( raw ).grants;
 	},
 
 	/**
-	 * The same parse, plus HOW MANY entries it refused — the number that makes a failure here findable.
+	 * The same parse, plus HOW MANY entries it refused. Rejections are silent by design: a throwing parser would turn one
+	 * malformed grant into a dead tool call, and the spawned child has no logger. But a grant that fails closed and says
+	 * nothing looks exactly like one never given, and those want opposite fixes, so the count goes to the HOST to report.
 	 *
-	 * Every rejection above is deliberately silent, and silence is right at this layer: a parser that threw
-	 * would turn one malformed grant into a dead tool call, and one that logged would need a logger the
-	 * spawned child does not have. But a grant that fails closed and says nothing is indistinguishable from
-	 * a grant that was never given, and those two want opposite fixes. So this reports the count and the
-	 * HOST decides what to do with it — main to its trace, the child to its own trace file.
-	 *
-	 * A non-array payload counts as ONE drop: a payload that cannot be read is a grant set that did not
-	 * arrive, and calling that zero would report "nothing was lost" about the largest possible loss. Absent
-	 * counts as zero, because absence is the ordinary case on every call that was never granted anything.
+	 * A non-array payload counts as ONE drop, since calling an unreadable set zero would report nothing lost about the
+	 * largest possible loss. Absent counts as zero: absence is the ordinary case for an ungranted call.
 	 */
 	parseGrantsCounted( raw: unknown ): { grants: GrantRef[]; dropped: number } {
 		if ( raw === undefined || raw === null ) return { grants: [], dropped: 0 };

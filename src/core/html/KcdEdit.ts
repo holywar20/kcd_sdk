@@ -2,28 +2,18 @@ import { HtmlTree, type HtmlEl, type HtmlNode } from './HtmlTree';
 import { KcdSynth } from './KcdSynth';
 
 /**
- * KcdEdit — the pure slot-mutation head of the parser family, the composition-editing twin of KcdExcise
- * ( delete surgeon ) and KcdEmit ( serializer ). It ports the lens-edit ops that used to live in the
- * renderer's Kcd store ( DOMParser-based, so renderer-only ) onto the Node-free HtmlTree, so MAIN can own
- * lens editing — the single source of truth for the in-memory draft, its compile, and its save.
- *
- * Every method is STRING IN, STRING OUT: it takes a lens BODY ( the artifact's inner content, the same
- * `body` the renderer patched ) and returns a NEW body string, or `null` when the edit found no target /
- * is a no-op — the exact `false`-aborts-the-write contract the old `_editLens` mutator callbacks carried,
- * so the caller can tell "nothing changed" from "changed" ( and skip marking the draft dirty ). Nothing
- * here touches disk or holds state; the main-side lens-edit concern decides WHEN to apply and persist.
- *
- * Re-serialization is NORMALIZED ( HtmlTree.innerHtml ) — incidental whitespace / comments in the body are
- * not byte-preserved, which matches the canonical save path ( KcdEmit ) that normalizes on write anyway;
- * parity is asserted on slot names / links / modes, never on body bytes. If byte-fidelity is ever needed,
- * the span-splice route ( KcdExcise ) is the upgrade — deliberately not taken here, per "simplicity is gold".
+ * KcdEdit — the pure slot-mutation head of the parser family. Every method is STRING IN, STRING OUT: it returns a
+ * new body, or `null` when the edit found no target or is a no-op, so a caller can tell "nothing changed" from
+ * "changed". Nothing here touches disk or holds state.
+ * Re-serialization is NORMALIZED ( HtmlTree.innerHtml ): parity is asserted on slot names, links and modes, never on
+ * body bytes. Byte-fidelity via KcdExcise's span-splice was deliberately not taken here.
  */
 export const KcdEdit = new class KcdEdit {
 
 	// ── slot addressing ─────────────────────────────────────────────────────────
 
 	/** The slot whose `where` href ends with `refPath` ( the node's absolute path ends with the slot's
-	 *  vault-relative href ), searched anywhere in `scope`. Mirrors the old `_findSlot`. */
+	 *  vault-relative href ), searched anywhere in `scope`. */
 	findSlot( scope: HtmlEl, refPath: string ): HtmlEl | null {
 		const key = refPath.replace( /\\/g, '/' );
 		return HtmlTree.first( scope, ( el ) => {
@@ -34,16 +24,14 @@ export const KcdEdit = new class KcdEdit {
 		} );
 	}
 
-	/** The `[data-kcd-table]` in `[data-kcd-section=SECTION]`, or null. `region` is a legacy argument: no
-	 *  document carries a region wrapper any more, so a section is found wherever it sits — which also means
-	 *  the Do-region ops ( habits, tools ) find nothing on a lens, and refuse. */
+	/** The `[data-kcd-table]` in `[data-kcd-section=SECTION]`, or null. `_region` is unused, so a section is found
+	 *  wherever it sits and the Do-region ops ( habits, tools ) refuse on a lens. */
 	table( root: HtmlEl, _region: string, section: string ): HtmlEl | null {
 		const sec = HtmlTree.first( root, ( el ) => HtmlTree.get( el, 'data-kcd-section' ) === section );
 		if( !sec ) return null;
 		return HtmlTree.first( sec, ( el ) => HtmlTree.has( el, 'data-kcd-table' ) );
 	}
 
-	/** A vault-root-relative href ( `_Claude/…` ) from an absolute artifact path. */
 	vaultHref( absPath: string ): string {
 		const norm = absPath.replace( /\\/g, '/' );
 		const i = norm.lastIndexOf( '/_Claude/' );
@@ -59,7 +47,6 @@ export const KcdEdit = new class KcdEdit {
 		return { type: 'text', value };
 	}
 
-	/** Remove `target` from anywhere under `root` by identity. Returns whether it was found + removed. */
 	drop( root: HtmlEl, target: HtmlEl ): boolean {
 		const i = root.kids.indexOf( target );
 		if( i >= 0 ) { root.kids.splice( i, 1 ); return true; }
@@ -67,10 +54,8 @@ export const KcdEdit = new class KcdEdit {
 		return false;
 	}
 
-	/** A fresh `<div data-kcd-slot="<kind>">` ( what · where · why ), `data-kcd-mode` gating auto-load:
-	 *  `load` = rides inline ( Included ), `on` = routing row only ( Conditional ). `kind` is the
-	 *  explicit slot role ( `reference` / `habit` — protocol §3 ), stamped so a newly-added slot carries the
-	 *  same kind the rest of the corpus does ( never a bare `data-kcd-slot`, which the validator rejects ). */
+	/** `data-kcd-mode` gates auto-load: `load` rides inline, `on` is a routing row only. The kind is always
+	 *  stamped, never bare, because the validator rejects a bare `data-kcd-slot`. */
 	buildSlot( name: string, vaultHref: string, included: boolean, kind: string, habitClass?: string ): HtmlEl {
 		const attrs: Record<string, string> = { 'data-kcd-slot': kind, 'data-kcd-mode': included ? 'load' : 'on' };
 		if( habitClass ) attrs[ 'data-kcd-habit-class' ] = habitClass;
@@ -83,7 +68,6 @@ export const KcdEdit = new class KcdEdit {
 
 	// ── reference / habit ops ─────────────────────────────────────────────────────
 
-	/** Set / clear a conditional reference's condition ( the slot's `why` text ). */
 	setCondition( body: string, refPath: string, why: string ): string | null {
 		const root = HtmlTree.parse( body );
 		const slot = this.findSlot( root, refPath );
@@ -93,8 +77,6 @@ export const KcdEdit = new class KcdEdit {
 		return HtmlTree.innerHtml( root );
 	}
 
-	/** Set a slot's `data-kcd-mode` gate: `included` ⇒ `load` ( full text inline ), else `on`
-	 *  ( a routing row ). Matched by where-href, so it serves the reference move AND the habit mode toggle. */
 	setMode( body: string, path: string, included: boolean ): string | null {
 		const root = HtmlTree.parse( body );
 		const slot = this.findSlot( root, path );
@@ -103,7 +85,6 @@ export const KcdEdit = new class KcdEdit {
 		return HtmlTree.innerHtml( root );
 	}
 
-	/** Remove a reference's whole slot from the lens. */
 	removeRef( body: string, refPath: string ): string | null {
 		const root = HtmlTree.parse( body );
 		const slot = this.findSlot( root, refPath );
@@ -111,7 +92,6 @@ export const KcdEdit = new class KcdEdit {
 		return HtmlTree.innerHtml( root );
 	}
 
-	/** Add a reference to the lens's References table ( default always-loaded ). No-op if already present. */
 	addRef( body: string, refPath: string, name: string ): string | null {
 		const root = HtmlTree.parse( body );
 		if( this.findSlot( root, refPath ) ) return null;
@@ -121,9 +101,8 @@ export const KcdEdit = new class KcdEdit {
 		return HtmlTree.innerHtml( root );
 	}
 
-	/** Choose ( or clear ) the habit for a class — the slot RADIO: every existing slot of the class is
-	 *  dropped, then the pick is appended ( `on` false just clears ). A classless habit adds/removes only
-	 *  its own slot. */
+	/** Choose ( or clear ) a habit: the slot RADIO drops every existing slot of the class, then appends the pick.
+	 *  A classless habit adds or removes only its own slot. */
 	setHabit( body: string, habitClass: string | null, habitPath: string, name: string, on: boolean ): string | null {
 		const root  = HtmlTree.parse( body );
 		const table = this.table( root, 'do', 'habits' );
@@ -140,9 +119,8 @@ export const KcdEdit = new class KcdEdit {
 
 	// ── habit ops ─────────────────────────────────────────────────────────────────
 
-	/** Rewrite a habit's Why section — the line a compiled agent that does not load the habit carries instead of
-	 *  its body. The heading stays; everything under it becomes one paragraph. Null when the habit has no Why
-	 *  section, or the text is blank: a habit's why is required, so there is nothing sound to write. */
+	/** Rewrite a habit's Why section as one paragraph under its heading. Null when the section is missing or
+	 *  the text blank: a habit's why is required, so there is nothing sound to write. */
 	setHabitWhy( body: string, why: string ): string | null {
 		const text = why.trim();
 		if( !text ) return null;
@@ -156,23 +134,8 @@ export const KcdEdit = new class KcdEdit {
 
 	// ── section prose ─────────────────────────────────────────────────────────────
 
-	/**
-	 * One section's inner markup, WITHOUT its heading — the editable buffer behind "edit lens text".
-	 * Null when the document carries no such section, which is how a caller tells "not here" from "here
-	 * and empty" ( a section that exists but holds nothing answers `''` ).
-	 *
-	 * HTML OUT, NOT PROSE, and that is the whole design of this pair. Going the other way — projecting
-	 * the markup down to plain text for editing — would mean every save round-tripped a lens through a
-	 * lossy flattening, and the loss would be silent: a table, a nested list, an `<a>` in a philosophy
-	 * paragraph would survive being READ and vanish on being WRITTEN. So the buffer is the markup, and
-	 * `setSection` passes authored markup straight back through ( `proseToHtml` only converts input that
-	 * is NOT already block HTML ). Read-then-write with no change is a no-op, which is the property that
-	 * makes an editor on this safe.
-	 *
-	 * The heading comes off because `setSection` puts it back — it is the section's name rendered, not
-	 * content, and an editor that showed it would invite someone to rename a section by retyping a word,
-	 * which is not what that would do.
-	 */
+	/** One section's inner markup without its heading: null when absent, `''` when present and empty.
+	 *  HTML OUT, NOT PROSE — a flattening round-trip would silently drop tables, lists and links on every save. */
 	sectionProse( body: string, section: string ): string | null {
 		const root = HtmlTree.parse( body );
 		const sec  = HtmlTree.first( root, ( el ) => HtmlTree.get( el, 'data-kcd-section' ) === section );
@@ -191,15 +154,11 @@ export const KcdEdit = new class KcdEdit {
 	 * failure discovered at Save, far from the keystroke that caused it. Removing a section is a different
 	 * act and does not belong on the text-editing op.
 	 *
-	 * A SECTION THE DOCUMENT DOES NOT CARRY IS CREATED, but only when the caller names a `title` for it
-	 * ( Bryan, 2026-09-26 ). It used to be a flat refusal, which is defensible for a machine caller and was
-	 * wrong for a person: a lens written before `philosophy` existed had no such section, so the editor drew
-	 * "this document carries no philosophy section" and there was no gesture anywhere in the app that could
-	 * give it one. A section you cannot create is a section older documents can never grow.
+	 * A SECTION THE DOCUMENT DOES NOT CARRY IS CREATED, but only when the caller names a `title` for it.
 	 *
 	 * The title is the caller's because only the caller knows what the heading should READ — the section id
-	 * is a slug and the heading is prose. No title means the old behaviour, so nothing that calls this to
-	 * edit an existing section can accidentally start authoring new ones.
+	 * is a slug and the heading is prose. No title means no creation, so an edit of an existing section
+	 * cannot start authoring new ones.
 	 *
 	 * WHERE IT LANDS: immediately before `references` when the document has one, else at the end of the
 	 * article. Prose before tables is the shape every artifact type here keeps, and appending blindly would
@@ -236,15 +195,8 @@ export const KcdEdit = new class KcdEdit {
 
 	// ── identity ──────────────────────────────────────────────────────────────────
 
-	/**
-	 * Write a document's frontmatter `id`, adding the row after `name` or rewriting the one it has. Null when the
-	 * document already carries exactly this id, or has no frontmatter block to write into.
-	 *
-	 * THE ONE EDIT HERE THAT TAKES THE WHOLE DOCUMENT, and the one that SPLICES rather than re-serializing. Every
-	 * other method rewrites a body the caller is about to save anyway; this one is stamped onto every lens and
-	 * habit in a vault the first time the doc index meets it, and a normalizing rewrite would turn that into a
-	 * whitespace diff across the whole library. Only the id row changes; every other byte is the file's own.
-	 */
+	/** Splices only the id row. A normalizing rewrite would turn a vault-wide stamp into a whitespace diff.
+	 *  Null when the id already matches or there is no frontmatter block. */
 	setId( html: string, id: string ): string | null {
 		const open = /<dl\b[^>]*\bdata-kcd-frontmatter\b[^>]*>/i.exec( html );
 		if( !open ) return null;
@@ -263,8 +215,8 @@ export const KcdEdit = new class KcdEdit {
 		const name = /<dd\b[^>]*\bdata-kcd-field=["']name["'][^>]*>[\s\S]*?<\/dd>/i.exec( block );
 		if( !name ) return html.slice( 0, close ) + row + html.slice( close );
 
-		// After the name row, on a line of its own at the name row's indentation — so a hand-formatted block reads
-		// as though the row had always been there. A block written on one line gets its row on one line too.
+		// After the name row, at its indentation, so a hand-formatted block reads as if the row was always there.
+		// A block written on one line gets the row on one line too.
 		const start  = open.index + name.index;
 		const end    = start + name[ 0 ].length;
 		const inline = !/\n/.test( block );
@@ -279,8 +231,6 @@ export const KcdEdit = new class KcdEdit {
 		return this.table( root, 'do', 'tools' );
 	}
 
-	/** The Tools table, minting the whole `<section data-kcd-section="tools">` ( heading + table head )
-	 *  under the Do region if the lens has none yet — the first tool docked mints it. */
 	ensureToolTable( root: HtmlEl ): HtmlEl | null {
 		const existing = this.toolTable( root );
 		if( existing ) return existing;
@@ -292,7 +242,6 @@ export const KcdEdit = new class KcdEdit {
 		return table;
 	}
 
-	/** The where-less tool slot whose `what` names `toolName`, or null. */
 	findToolSlot( table: HtmlEl, toolName: string ): HtmlEl | null {
 		return HtmlTree.first( table, ( el ) => {
 			if( !HtmlTree.has( el, 'data-kcd-slot' ) ) return false;
@@ -309,10 +258,8 @@ export const KcdEdit = new class KcdEdit {
 		] );
 	}
 
-	/** Set ( or clear ) a tool's mode on the lens's Tools table. `toolName` is the tool's `group.tool` identity,
-	 *  matched and written verbatim. `off` REMOVES the row ( a lens carries only the tools it contributes — off
-	 *  is absence ); `on`/`load` replace the row's mode, minting the section on first use. The agent's own
-	 *  tool policies still override this at compile. */
+	/** `toolName` is the `group.tool` identity, written verbatim. `off` removes the row: off is absence.
+	 *  The agent's own tool policies still override this at compile. */
 	setTool( body: string, toolName: string, mode: 'off' | 'on' | 'load' ): string | null {
 		const root = HtmlTree.parse( body );
 		if( mode === 'off' ) {

@@ -3,28 +3,10 @@ import { Glob } from './Glob';
 /**
  * Blacklist — the negative permission layer, shared by every agent-facing file reader.
  *
- * The DENY side, beside a whitelist's ALLOW side. Two readers enforce it — the spawned
- * `starmind_file` child and the in-process `starmind_files` built-in — and they are in different
- * processes, so the only way they cannot drift is for the patterns AND the matching rule to live
- * here, in one Node-free place both already depend on.
- *
- * ONE SECURITY MODEL — SUBTREE SEMANTICS: a path is denied when the path ITSELF or ANY ANCESTOR
- * directory matches a deny pattern, so a single `.ssh` pattern hides the whole subtree without a
- * second `**​/.ssh/**` entry. Patterns are globs matched by the shared `Glob` matcher, identical to
- * the whitelist and the glob tool.
- *
- * PATTERN ALONE, NEVER DISK. This answers "is this path denied?" without a stat, which is what lets
- * a reader report policy without disclosing whether the file exists. Enforcement is bifurcated by
- * the CALLER, not here: discovery tools drop denied entries silently, a direct read says
- * `out_of_scope`.
- *
- * CASE IS THE FILESYSTEM'S PROPERTY, NOT THE PATTERN'S. `.ENV` and `.env` are the same file on
- * win32 and darwin and two different files on linux, so the matching rule has to know which host it
- * is answering for. Until 2026-10-04 it did not, and every pattern here is written in lower case —
- * so `Server.KEY`, `cert.PFX`, `secrets/ID_RSA` and `.Git/config` were listed by glob, found by
- * search and read by an agent on Windows while this list said they could not be. The platform check
- * IS the correctness and not a convenience: folding unconditionally would make two genuinely
- * distinct linux files one, and folding never is the hole above. See `foldsCase`.
+ * Subtree: a path is denied when it or any ancestor directory matches, so one `.ssh` pattern hides the subtree.
+ * Pattern alone, never disk: no stat, so a reader reports policy without disclosing that a file exists.
+ * Case follows the filesystem: `.ENV` and `.env` are one file on win32/darwin, two on linux. Folding
+ * unconditionally would merge distinct linux files; folding nowhere lets `Server.KEY` through on Windows.
  */
 
 /** The default deny-list — always merged in, so protection holds with ZERO config.
@@ -56,14 +38,10 @@ export const DEFAULT_BLACKLIST: string[] = [
 	 *
 	 * WHY IT IS DENIED. An agent that can write this file can plant a card, and the human's click launders
 	 * it into arbitrary execution through a gate behaving exactly as designed. Nothing is escaped and
-	 * nothing is exploited — prompt injection reaching a text file is the whole attack. This was named and
-	 * deferred in `ShellGate`'s own comment from 2026-09-05 and is closed here.
+	 * nothing is exploited — prompt injection reaching a text file is the whole attack.
 	 *
-	 * READ IS DENIED TOO, and that is a RULING rather than a derivation ( Bryan, 2026-09-30 ): "It's more
-	 * limiting but also simpler. Complex security models get subverted and we want to be judicious about
-	 * where friction gets injected. Friction here is good — security should always get human attention."
-	 * An agent cannot read the roster, so it cannot report the shape back either — which is why the shape
-	 * is written down in the reference the refusal points at.
+	 * READ IS DENIED TOO, by ruling: friction here is deliberate. An agent that cannot read the roster
+	 * cannot report its shape back.
 	 *
 	 * HARDCODED DELIBERATELY, AND TEMPORARILY. `dev-utilities` is a CONVENTION ( CommandDeckDock computes
 	 * the deck folder as `<project root>/<project docRoot>/dev-utilities` and never reads it from config ),
@@ -71,16 +49,11 @@ export const DEFAULT_BLACKLIST: string[] = [
 	 * elsewhere and this would not cover it. THE FIX IS NOT A BETTER GLOB — it is minting a per-project
 	 * blacklist at project-creation time, which is a separate deferred job. Do not "generalize" this line.
 	 *
-	 * SCOPE IS THE ROSTER, NOT THE TREE ( Bryan, 2026-09-30 ). The scripts a card NAMES — `git-ops.js`,
-	 * `app-build.js` and their neighbours — sit in the same folder and are still agent-writable, so
-	 * poisoning an existing card's script is an open path and a known one: the card is unchanged, so the
-	 * user clicks a button they have pressed a hundred times. Ruled acceptable in exchange for keeping the
-	 * dev scripts a working surface an agent can help with. Bryan on the scope of the whole card: "We are
-	 * closing one door here — but the house has 20."
+	 * SCOPE IS THE ROSTER, NOT THE TREE. Scripts a card names, such as `git-ops.js`, sit in the same folder
+	 * and are still agent-writable: poisoning one is a known open path, ruled acceptable to keep dev scripts usable.
 	 *
-	 * NOTE WHAT IS *NOT* ON THIS LIST. `Blacklist.ts` itself, by explicit ruling: "modifications to how the
-	 * blacklist file WORKS needs to be allowed — by definition." What is protected is the DATA, never the
-	 * mechanism. That absence is a decision, not an oversight.
+	 * NOT ON THIS LIST: `Blacklist.ts` itself. What is protected is the DATA, never the mechanism; that
+	 * absence is a decision.
 	 *
 	 * The middle `**​/` matches ZERO or more directories ( see `Glob` ), so this one pattern covers both the
 	 * deck folder's own roster and every category subfolder's.
@@ -94,16 +67,8 @@ export function foldsCase( platform: string ): boolean {
 	return platform === 'win32' || platform === 'darwin';
 }
 
-/** `foldsCase` for the host this code is running on — the default `excludes` uses.
- *
- *  WHY IT IS A DEFAULT AND NOT A CALLER'S ARGUMENT. There are five call sites across two processes,
- *  and a caller that forgot the argument would silently get the WEAKER rule — which is this defect
- *  reinstalled as an ordinary omission. The safe value has to be the one you get for free.
- *
- *  AND WHY IT FOLDS WHEN IT CANNOT TELL. `@kcd/core` is Node-free, so `process` may genuinely not
- *  exist here. Reading a global behind a `typeof` guard is not a Node import, but the guard needs an
- *  answer: folding over-denies a case-variant path, and not folding discloses a secret. Only one of
- *  those two is a mistake you can afford. */
+/** `foldsCase` for the host this runs on, as `excludes`' default. It is a default so a forgotten argument
+ *  cannot silently weaken the rule, and it folds when it cannot tell: over-denying beats disclosing. */
 function hostFoldsCase(): boolean {
 	return typeof process === 'undefined' || typeof process.platform !== 'string'
 		? true
@@ -118,18 +83,12 @@ export const Blacklist = {
 		return [ ...DEFAULT_BLACKLIST, ...extra.filter( ( p ) => typeof p === 'string' && p.length > 0 ) ];
 	},
 
-	/** True when `path` is denied by `patterns` — the path or any ancestor directory matches. Pure:
-	 *  no disk, no config, no state. Separators are normalized so a Windows path matches the same
-	 *  '/'-shaped globs the vault and the glob tool use.
-	 *
-	 *  `fold` folds case on BOTH sides, and defaults to what this host's filesystem actually does.
-	 *  Pass it only to pin a platform in a test — a caller choosing it per call would be a caller
-	 *  deciding a property of the disk it is reading. */
+	/** True when `path` or any ancestor directory matches `patterns`. Pure: no disk, no config.
+	 *  `fold` defaults to this host's filesystem; pass it only to pin a platform in a test. */
 	excludes( path: string, patterns: readonly string[], fold: boolean = hostFoldsCase() ): boolean {
 		if ( patterns.length === 0 ) return false;
 
-		// Both sides, or neither: the patterns are authored in lower case today but a config may add
-		// any case at all, and folding one side would be a rule that depends on how a row was typed.
+		// Both sides or neither: folding one side would make the rule depend on how a row was typed.
 		const normalized = path.replace( /\\/g, '/' );
 		const subject    = fold ? normalized.toLowerCase() : normalized;
 		const globs      = fold ? patterns.map( ( p ) => p.toLowerCase() ) : patterns;

@@ -4,20 +4,9 @@ import { LensObject, VaultLayout, InstallManifest } from '../core'
 
 /**
  * VaultDeploy — install a KCD vault into a directory, and report on one that already exists.
- *
- * Driven by two tables: `VaultLayout` for the empty structure ( the same rows the classifier and the
- * index whitelist read, so a deployment cannot drift from them ), and `InstallManifest` for what
- * fills it — the framework content copied in from the bundle's `substrateSource`.
- *
- * TWO OPERATIONS, ONE ANSWER. `inspect()` reports what is missing and changes nothing; `apply()`
- * does the same walk and fills the gaps. They share their reasoning, so the report is never a
- * separate implementation that could disagree with what the fill actually does — the preview IS the
- * plan. This is what makes the same code serve both "create a new project" and "repair an existing
- * one": a deploy is idempotent by construction, because every step asks "is this already here?"
- * before it acts.
- *
- * Safe over existing code. A project may wrap a repository that predates KCD entirely — nothing
- * outside the doc root is touched, and nothing already present is overwritten.
+ * Driven by `VaultLayout` and `InstallManifest`. `inspect()` and `apply()` share one walk, so the
+ * report is the plan, never a second implementation that could disagree with the fill.
+ * Safe over existing code: nothing outside the doc root is touched, nothing present is overwritten.
  */
 
 /** What a single deploy step is responsible for. `dir` is an empty directory from the layout table;
@@ -25,13 +14,8 @@ import { LensObject, VaultLayout, InstallManifest } from '../core'
 export type DeployItemKind = 'dir' | 'substrate' | 'file'
 
 /**
- * Where a deploy reads from and writes to, and how hard it writes.
- *
- * `force` is the whole difference between REPAIR and RESET. Without it a deploy fills gaps and leaves
- * every existing file exactly as it is; with it, a framework file whose content has drifted from what
- * the bundle ships is written back to canonical. Nothing else changes — `force` reaches only files the
- * `InstallManifest` claims, so a document the project wrote itself is untouchable either way. That
- * boundary is the reason a reset is offerable at all: it cannot reach a person's own work.
+ * `force` is the difference between REPAIR and RESET: with it, drifted framework files are written back
+ * to canonical. It reaches only files the `InstallManifest` claims, so a project's own documents are untouchable.
  */
 export interface DeployOptions {
 	docRoot?:         string
@@ -46,26 +30,18 @@ export interface DeployItem {
 	path:    string
 	present: boolean
 	note?:   string
-	/** How many files under this step are ABSENT — the repair measurement. `present` says whether the step
-	 *  is satisfied; this says how big the gap is, as a NUMBER rather than a phrase buried in `note`. It is
-	 *  there so a reader of this report never has to parse prose to draw a count. */
+	/** How many files under this step are ABSENT — the repair measurement. `present` says only whether
+	 *  the step is satisfied. */
 	missingFiles: number
-	/** How many files under this step differ from what the bundle ships — the RESET measurement, beside
-	 *  the fill measurement above. A present row with `changed: 0` is byte-identical to canonical; a
-	 *  present row with `changed: 12` is a row somebody has edited. Always 0 for a step with no canonical
-	 *  counterpart ( a layout directory, a seeded file ), which have nothing to drift from. */
+	/** How many files under this step differ from what the bundle ships — the RESET measurement. Always 0
+	 *  for a step with no canonical counterpart, which has nothing to drift from. */
 	changed: number
 }
 
 /**
- * The full effect of a deploy — every step, whether it ran, and how much was missing. Returned by both
- * `inspect()` ( nothing happened ) and `apply()` ( it did ), distinguished by `applied`.
- *
- * EVERY COUNT HERE DESCRIBES WHAT THE WALK FOUND, not the state it left. From an inspect those are the
- * same thing. From an apply they are not: `missing: 35` on an applied report means "thirty-five steps
- * were absent and have now been filled", and a fresh `inspect()` immediately afterwards would answer 0.
- * Read an applied report as a record of work done, never as a health check — that is what `inspect` is
- * for, and asking the wrong one is how a repair comes to report itself as a failure.
+ * Returned by both `inspect()` and `apply()`, distinguished by `applied`. EVERY COUNT HERE DESCRIBES
+ * WHAT THE WALK FOUND, not the state it left: an applied report's `missing` is work done, and a fresh
+ * inspect() straight after answers 0. Read an applied report as a record, never as a health check.
  */
 export interface DeployReport {
 	root:    string
@@ -73,9 +49,8 @@ export interface DeployReport {
 	items:   DeployItem[]
 	/** How many steps were NOT already satisfied. 0 from inspect() = a complete, healthy vault. */
 	missing: number
-	/** How many FILES ( not steps ) differ from canonical across every substrate row. This is what a reset
-	 *  would overwrite, and the number the confirm has to say out loud: a vault can be complete — nothing
-	 *  missing, nothing to repair — and still carry fifty edited framework documents. */
+	/** How many FILES (not steps) differ from canonical across every substrate row — what a reset would
+	 *  overwrite. A vault can be complete and still carry fifty edited framework documents. */
 	changed: number
 	applied: boolean
 }
@@ -90,8 +65,7 @@ const TEXT_SUFFIXES = [ '.html', '.htm', '.md', '.css', '.js', '.json' ]
 
 export class VaultDeploy {
 
-	/** What this vault is missing, changing nothing. The 4.e maintenance read: point it at any
-	 *  project and it answers "is this vault whole?" without touching disk. */
+	/** What this vault is missing, changing nothing. */
 	static inspect( projectRoot: string, opts?: DeployOptions ): DeployReport {
 		return VaultDeploy._run( projectRoot, opts, false )
 	}
@@ -113,9 +87,7 @@ export class VaultDeploy {
 
 		if( write ) fs.mkdirSync( vault, { recursive: true } )
 
-		// Every directory the layout declares. `scaffold: 'copy'` rows are directories too — their
-		// CONTENTS come from the substrate step below, but the folder itself belongs here so an
-		// inspect of a vault with no substrate still names it.
+		// Folders for `scaffold: 'copy'` rows belong here too, so an inspect with no substrate still names them.
 		for( const entry of VaultLayout.all() ) {
 			const abs     = path.join( vault, entry.dir )
 			const present = fs.existsSync( abs )
@@ -133,13 +105,8 @@ export class VaultDeploy {
 	}
 
 	/**
-	 * Every `InstallManifest` row, filled from the bundle. `force: false` is what makes this a FILL
-	 * rather than a reset — an existing file is never overwritten, so a project that has been running
-	 * for months keeps whatever it has and only gains what it lacks.
-	 *
-	 * A missing bundle, or a row absent from it, is reported per-row rather than thrown: a deploy that
-	 * cannot find part of its source should say so plainly and keep filling everything else, because
-	 * one missing optional row is not a reason to leave the rest of the vault half-built.
+	 * Every `InstallManifest` row, filled from the bundle. A missing row is reported per row, never thrown,
+	 * so one absent optional row cannot leave the rest of the vault half-built.
 	 */
 	private static _manifest( vault: string, docRoot: string, source: string | undefined, write: boolean, force: boolean ): DeployItem[] {
 		const items: DeployItem[] = []
@@ -166,8 +133,7 @@ export class VaultDeploy {
 			// case ) must report as incomplete or the maintenance read would call a partial vault healthy.
 			const isDir = fs.statSync( src ).isDirectory()
 			const gaps  = isDir ? VaultDeploy._missingUnder( src, dest ) : ( fs.existsSync( dest ) ? [] : [ entry.bundleSource ] )
-			// The drift measurement, taken WHETHER OR NOT this run intends to act on it: the repair preview
-			// has to be able to say "complete, and fifty of these are edited" without being a reset itself.
+			// Measured whether or not this run acts on it, so a repair preview can report edits without being a reset.
 			const drift = isDir
 				? VaultDeploy._differingUnder( src, dest, docRoot )
 				: ( fs.existsSync( dest ) && !VaultDeploy._matches( src, dest, docRoot ) ? [ entry.bundleSource ] : [] )
@@ -200,29 +166,11 @@ export class VaultDeploy {
 	}
 
 	/**
-	 * Fill `dest` from `source`, retargeting bundled text at the vault it is actually landing in.
- *
- * PUBLIC because the vault is not the only thing an install copies out of the bundle. The bundled
- * SKILLS land in `.claude/skills/` and hardcode `_Claude/…` the same way — and those are
- * instructions an agent READS AND ACTS ON ( "read `_Claude/audits/survey/index.json`" ), so a stale
- * path there sends an agent hunting a folder that does not exist. One door for "copy a bundled tree
- * into this project, retargeted", rather than a second copy loop that would drift from this one.
-	 *
-	 * THIS REPLACED `fs.cpSync( recursive )`, and the reason is the whole point: cpSync copies BYTES,
-	 * and the bundled corpus is not byte-portable. Its 56 documents hardcode `_Claude/…` in every
-	 * internal link — 281 occurrences — so a verbatim copy into a vault named anything else installs a
-	 * library whose every link points at a folder that does not exist. Measured on a fresh
-	 * `--doc-root _kcd` install: 111 dangling-link warnings, all of them this, on day one.
-	 *
-	 * Semantics are cpSync's, preserved deliberately: never overwrite ( this FILLS, it does not reset ),
-	 * skip the excluded names, create directories as needed. The only change is that a text file is
-	 * read, retargeted and written rather than copied.
+	 * Fills `dest` from `source`, retargeting bundled text. Public: the bundled skills land outside the vault with the same `_Claude/…` paths.
+	 * Not `fs.cpSync`, because bundled links are not portable. Never overwrites: this FILLS.
 	 */
 	static fill( source: string, dest: string, docRoot: string, force = false ): void {
-		// CREATE THE DESTINATION, because `cpSync( recursive )` did and this replaced it. Dropping that
-		// broke the skills install ( ENOENT on the first file ) while the vault install kept working —
-		// the vault caller happened to mkdir the destination itself, so only one of the two callers
-		// showed it. A replacement inherits every guarantee of what it replaced, including the quiet ones.
+		// Required: the skills caller does not create its destination. Dropping this once broke it while the vault caller hid the fault.
 		fs.mkdirSync( dest, { recursive: true } )
 
 		for( const entry of fs.readdirSync( source, { withFileTypes: true } ) ) {
@@ -240,17 +188,11 @@ export class VaultDeploy {
 	}
 
 	/**
-	 * One file, filled. A KCD-text file is retargeted; anything else is copied byte-for-byte.
-	 *
-	 * THE ALLOWLIST IS DELIBERATE, and it is an allowlist rather than a blocklist because the failure
-	 * modes are not symmetrical: missing a text type costs some stale links a person can see and fix,
-	 * while rewriting a binary by decoding it as UTF-8 corrupts a file silently. The bundle is all
-	 * text today; the day it carries a font or an image, this stays correct without being revisited.
+	 * KCD text is retargeted; anything else is copied byte-for-byte. An allowlist, not a blocklist: a missed text type
+	 * costs stale links a person can fix, while decoding a binary as UTF-8 corrupts it silently.
 	 */
 	private static _fillFile( source: string, dest: string, docRoot: string, force = false ): void {
-		// Never overwrite — this FILLS. `force` is the one caller that means otherwise, and even it stops
-		// short of touching a file that already matches: rewriting identical bytes would move the mtime of
-		// every framework document in the vault, which is a lie told to anything watching the tree.
+		// Never overwrite; this FILLS. Even `force` skips a matching file, so no framework mtime moves.
 		if( fs.existsSync( dest ) && ( !force || VaultDeploy._matches( source, dest, docRoot ) ) ) return
 
 		if( !TEXT_SUFFIXES.some( ( s ) => source.toLowerCase().endsWith( s ) ) ) {
@@ -261,11 +203,8 @@ export class VaultDeploy {
 	}
 
 	/**
-	 * Is `dest` exactly what a fill would have written from `source`?
-	 *
-	 * Compared against the RETARGETED text rather than the bundle's own bytes, because that is what the
-	 * file was installed as — a vault at `_kcd` holds `_kcd/…` links, and calling those fifty documents
-	 * "edited" would make every non-default install report itself as wholly drifted on day one.
+	 * Is `dest` exactly what a fill would have written from `source`? Compared against the retargeted text,
+	 * not the bundle's bytes: a vault at `_kcd` holds `_kcd/…` links and would otherwise read as drifted.
 	 */
 	private static _matches( source: string, dest: string, docRoot: string ): boolean {
 		try {
@@ -281,8 +220,7 @@ export class VaultDeploy {
 	}
 
 	/** Every file under `source` that EXISTS under `dest` with different content, as source-relative paths.
-	 *  The measurement behind "what would a reset overwrite?" — the mirror of `_missingUnder`, and
-	 *  deliberately disjoint from it: a missing file is not a changed one. */
+	 *  Disjoint from `_missingUnder` by design: a missing file is not a changed one. */
 	private static _differingUnder( source: string, dest: string, docRoot: string ): string[] {
 		const out: string[] = []
 		const walk = ( rel: string ): void => {
@@ -318,9 +256,8 @@ export class VaultDeploy {
 		return out
 	}
 
-	/** The vault's root nav-index — the entry map a reader ( human or agent ) lands on. Written only
-	 *  when absent, and deliberately minimal: it is a starting point the project grows, not a
-	 *  generated artifact that would fight being edited. */
+	/** The vault's root nav-index. Written only when absent, and deliberately minimal — a starting point
+	 *  the project grows, not a generated artifact that would fight being edited. */
 	private static _navIndex( vault: string, docRoot: string, write: boolean ): DeployItem {
 		const rel     = VaultLayout.NAV_INDEX_FILE
 		const dest    = path.join( vault, rel )
@@ -332,15 +269,8 @@ export class VaultDeploy {
 	}
 
 	/**
-	 * The command deck's one file. The deck's location is CONVENTION, not configuration — it is always
-	 * `<docRoot>/dev-utilities/commands.json` — so the deck panel computes that path rather than asking
-	 * the user for it. That only holds if the file reliably exists, which is this step's whole job: every
-	 * deployed project gets one, and a repair on an older project fills it in.
-	 *
-	 * Seeded EMPTY. JSON carries no comments, so there is nowhere to explain the schema in the file, and a
-	 * placeholder entry would render as a launcher button that does nothing — worse than an empty deck,
-	 * which states the path it read and invites the first real command. The directory itself comes from
-	 * the layout table like every other folder.
+	 * Location is convention — always `<docRoot>/dev-utilities/commands.json`. Seeded EMPTY: a placeholder
+	 * launcher would render as a button that does nothing, which is worse than an empty deck.
 	 */
 	private static _commandDeck( vault: string, write: boolean ): DeployItem {
 		const rel     = 'dev-utilities/commands.json'
@@ -354,17 +284,8 @@ export class VaultDeploy {
 	}
 
 	/**
-	 * The entry map's HTML. Two things here are easy to get wrong and were both wrong:
-	 *
-	 * THE DOC ROOT IS A PARAMETER. It was the literal `_Claude`, so an install anywhere else emitted
-	 * fifteen links into a folder that does not exist — in the one file a reader opens first.
-	 *
-	 * AN EPHEMERAL ROW IS AN ADDRESS, NOT A LINK ( §1.1 ). `work/`, `logs/`, `audits/` and the rest
-	 * are not installed into a vault, so a LINK to one asserts something false by construction — and
-	 * the validator says so, with the very `ephemeral-link` code this generator was minting six of
-	 * into every fresh vault. The generated file could not pass the project's own validator. Rows for
-	 * those directories still appear ( the map would be a lie by omission without them ); they carry
-	 * their location as an address, which asserts nothing about occupancy.
+	 * The doc root is a parameter, never a literal, and an ephemeral directory is an address rather than a
+	 * link — a link to one fails the validator. Its row still appears, or the map would lie by omission.
 	 */
 	private static _navIndexHtml( docRoot: string ): string {
 		const rows = VaultLayout.all()

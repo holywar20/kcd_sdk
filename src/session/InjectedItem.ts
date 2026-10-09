@@ -1,16 +1,7 @@
 /**
- * InjectedItem — the composer gutter's currency: one thing a USER handed to a session.
- *
- * A file, a folder and a tool differ only in WHAT they are, never in how they behave here. Each lands
- * by a user action, lives until the user takes it back, and is revoked by removal. So they are one
- * discriminated union rather than three parallel lists a surface has to zip together, and a fourth kind
- * ( a memory, a reference, a compiled lens ) joins by adding a variant rather than a second list.
- *
- * This type RETIRED `AttachmentView`. That was the file-only shape, and its `kind` carried the
- * TranscriptEntry kind ( `'injected-file' | 'image'` ) — the second time one property name on this deck
- * stood for two things ( the first was the retired `'system' | 'inline'` position model ). The fact
- * survives as `entryKind` on the file variant, where it is unambiguous. `kind` now belongs to the union
- * and to nothing else.
+ * InjectedItem — the composer gutter's currency: one thing a USER handed to a session. A file, a folder and a tool
+ * differ only in WHAT they are, so they are one discriminated union, and a new kind joins by adding a variant.
+ * `kind` belongs to this union and nothing else; the retired AttachmentView's entry kind survives as `entryKind`.
  */
 export const INJECTED_KINDS = [ 'file', 'folder', 'tool' ] as const;
 
@@ -19,14 +10,9 @@ export type InjectedKind = typeof INJECTED_KINDS[ number ];
 /**
  * ACCESS — the ordered ladder a subject is reached at: `none` below `read` below `write` below `delete`.
  *
- * ORDERED rather than a set of flags, so the illegal states cannot be expressed. Two booleans spell four
- * combinations, one of which ( delete without write ) is nonsense the parse then has to defend against
- * forever. Ordered, every guard asks one question instead of three — what does this resolve to, and is it
- * at least what I need.
- *
- * `delete` is a CONFIGURATION level and is deliberately unreachable by any gesture. It lives in the union
- * rather than outside it so the ceiling is expressed as a clamp on what a gesture may produce, not as an
- * omission: a kind invented later cannot arrive at delete depth by simply never having been considered.
+ * ORDERED rather than flags, so the illegal states cannot be expressed and every guard asks one question. `delete` is a
+ * CONFIGURATION level, unreachable by any gesture. It sits in the union so the ceiling is a clamp on what a gesture may
+ * produce, and a kind invented later cannot reach delete by never having been considered.
  */
 export const ACCESS_LEVELS = [ 'none', 'read', 'write', 'delete' ] as const;
 
@@ -49,14 +35,7 @@ export function clampToGesture( level: AccessLevel ): AccessLevel {
 /** What every injected kind carries, whatever it is. */
 interface InjectedBase {
 	kind: InjectedKind;
-	/**
-	 * The one thing this injection is ABOUT, read according to `kind` — an absolute path for a file or a
-	 * folder, a qualified tool id for a tool. It is the deck's identity: what a tile keys on, what a
-	 * removal names, and what a gate is asked about.
-	 *
-	 * Named for the grant record rather than for the file case ( `path` ) deliberately: the view and the
-	 * record it projects use one word, so neither can drift into meaning something the other doesn't.
-	 */
+	/** What this injection is ABOUT: an absolute path (file, folder) or a qualified tool id. The deck's identity, named for the grant record so the view and the record share one word. */
 	subject: string;
 	/** What the tile writes on itself — a basename, a folder name, a tool name. */
 	name: string;
@@ -66,15 +45,9 @@ interface InjectedBase {
 	/** Not yet carried by a turn. Governs DETACHMENT: a pending item can be taken back because nothing has
 	 *  happened yet; a recorded one cannot, because the transcript is the account of what happened. */
 	pending: boolean;
-	/** Marked for removal. It still rides nothing and still shows here until a COMPACTION executes the
-	 *  intent — batched there because dropping an entry mid-transcript re-prefills everything downstream
-	 *  of it, and compaction is the one moment the prefix is being rewritten anyway. */
+	/** Marked for removal: rides nothing and shows here until a COMPACTION executes it. Batched there because dropping an entry mid-transcript re-prefills everything downstream. */
 	removed: boolean;
-	/** Whether this item's mode can be CHANGED. False only in the narrow window where the thing sits on a
-	 *  turn still in flight, whose row ids do not exist yet. Separate from `pending` because "can this be
-	 *  taken back" and "can this be tuned" have different answers; one boolean standing for both is how a
-	 *  surface ends up disabling a control that would have worked. A surface reads this to DISABLE rather
-	 *  than to offer-and-fail. */
+	/** Whether the mode can be CHANGED: false only while the item sits on a turn still in flight. Separate from `pending`, so a surface can DISABLE a control rather than offer-and-fail. */
 	editable: boolean;
 }
 
@@ -82,27 +55,20 @@ interface InjectedBase {
  *  every turn after. */
 export interface InjectedFile extends InjectedBase {
 	kind: 'file';
-	/** How deeply this subject may be reached — the level the DROP chose, clamped below `delete`.
-	 *
-	 *  NULL for a grant made before the drop zones existed, which is a real state and not a default worth
-	 *  inventing: a record that never chose is not the same fact as one that chose `none`, and folding them
-	 *  together would make old grants look like deliberate refusals. A reader treats null as "unspecified"
-	 *  and says so rather than assuming a depth. */
+	/** How deeply this subject may be reached: the level the DROP chose, clamped below `delete`. NULL is a grant made before
+	 *  drop zones existed. That is unspecified, not `none`, so a reader says so rather than assuming a depth. */
 	level: AccessLevel | null;
 	/** Which TranscriptEntry kind backs it. An image is not a text file: it frames differently and prices
 	 *  differently, and this is the only place that distinction survives on the view. */
 	entryKind: 'injected-file' | 'image';
 }
 
-/** A folder — `subject` is its absolute path. Compiles to a flat LISTING ( subdirectories included, one
- *  level ), never a recursive read. Rides that listing WHOLE on the turn it is injected and as a pointer
- *  on every turn after, like every other kind: the agent lists on demand, which is more current than a
- *  standing listing compiled at the last send and costs nothing in between. */
+/** A folder — `subject` is its absolute path. Compiles to a flat one-level LISTING, never a recursive read. The agent
+ *  lists on demand, which is more current than a listing compiled at the last send. */
 export interface InjectedFolder extends InjectedBase {
 	kind: 'folder';
-	/** How deeply this root may be reached — see InjectedFile.level. A folder carries the same ladder as a
-	 *  file: the roadmap settled that a dropped folder is a WORKING ROOT, not a read-only listing, and that
-	 *  the level comes from the zone the drop landed on rather than from anything a kind secretly means. */
+	/** How deeply this root may be reached, see InjectedFile.level. A dropped folder is a WORKING ROOT, not a read-only
+	 *  listing, and the level comes from the zone the drop landed on. */
 	level: AccessLevel | null;
 }
 
@@ -110,53 +76,33 @@ export interface InjectedFolder extends InjectedBase {
  *  because the injection IS the authorization. */
 export interface InjectedTool extends InjectedBase {
 	kind: 'tool';
-	/** Which server offers it. Carried rather than split back out of `subject`: a tool whose name holds a
-	 *  dot would mislabel itself under any parsing rule, and the producer knows both halves already. The
-	 *  tile reads this — a tool without its server is two tools from two packages looking identical. */
+	/** Which server offers it. Carried rather than split out of `subject`, since a tool name with a dot mislabels under any
+	 *  parse. A tool without its server is two tools from two packages that look identical. */
 	server: string;
 }
 
 export type InjectedItem = InjectedFile | InjectedFolder | InjectedTool;
 
 /**
- * One AUTHORIZATION — the fact that a session may reach a subject, and nothing else.
- *
- * Deliberately SOURCE-AGNOSTIC. It says what is permitted, never how the permission arose, so a gate
- * consulting it asks one question and gets one answer regardless of who granted it. Today the only
- * producer is a context injection ( the transcript entry IS the record ), but the two are different
- * facts wearing one name and they come apart the moment anything else wants to grant: a permission is
- * not positional, does not decay, and outlives the turn that created it, none of which is true of the
- * injection that happens to have produced it.
- *
- * Agnostic by OMISSION rather than by a provenance field — a type that never mentions its origin cannot
- * be narrowed to one. Add provenance when a second producer exists and something actually needs to tell
- * them apart.
+ * One AUTHORIZATION: the fact that a session may reach a subject, and nothing else. SOURCE-AGNOSTIC: it says what is
+ * permitted, never how it arose, so a gate asks one question. Today the only producer is a context injection, but a
+ * permission is not positional, does not decay, and outlives the turn that made it. Agnostic by OMISSION: add provenance
+ * when a second producer exists and something needs to tell them apart.
  */
 export interface GrantRef {
 	kind: InjectedKind;
 	subject: string;
 	/**
-	 * How deep this grant reaches ON DISK — the rung the drop landed on, clamped below `delete` where it
-	 * was created. Required, and never null: a record that never chose reports `null` on the transcript
-	 * entry, but by the time it is an AUTHORIZATION that ambiguity has to be resolved, and it resolves the
-	 * conservative way ( `read` ) in one place rather than at every gate that would otherwise have to
-	 * decide for itself.
-	 *
-	 * `none` for a TOOL grant, which is not a path grant at all. Path resolution skips non-path kinds
-	 * outright, so this value is belt to that braces — a tool's qualified id could in principle resolve as
-	 * a directory name, and two independent reasons it cannot widen a path is the right number for the
-	 * one field on this type that says how much.
+	 * How deep this grant reaches ON DISK: the rung the drop landed on, clamped below `delete`. Never null: a record that
+	 * never chose resolves to the conservative `read` here, once, rather than at every gate. `none` for a TOOL grant. Path
+	 * resolution skips non-path kinds outright, so this is a second reason, not the first.
 	 */
 	level: AccessLevel;
 }
 
 /**
- * The granted TOOL subjects ( `server.tool` ) out of a grant list — what the tool registry widens its
- * admission by, at both the advertise and the resolve moment.
- *
- * A filter rather than a second stored list: the grants ARE the record, and a derived view cannot fall
- * out of step with them the way a parallel array would. Kinds other than `tool` are simply not this
- * question — a file grant has nothing to say about which tools exist.
+ * The granted TOOL subjects ( `server.tool` ) out of a grant list, which the tool registry widens its admission by.
+ * A filter, not a second stored list: a derived view cannot fall out of step with the grants.
  */
 export function grantedTools( grants: readonly GrantRef[] ): string[] {
 	return grants.filter( ( g ) => g.kind === 'tool' ).map( ( g ) => g.subject );

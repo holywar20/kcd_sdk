@@ -24,10 +24,8 @@ export type {
 } from './types';
 
 // ── Hydrator dispatch table ──────────────────────────────────────────────────
-// Map each type to its subclass's fromSerialized so KCDPrimitive.fromSerialized( json )
-// rebuilds the right prototype (real getRole / toContextBlock). Registered here at the
-// barrel — the one module that already pulls in every subclass — rather than scattered
-// across each file. Types with no entry (unknown) fall back to a base primitive.
+// Maps each type to its subclass's fromSerialized, so KCDPrimitive.fromSerialized rebuilds the right prototype.
+// Kept here, not per file, because this barrel already imports every subclass. Types with no entry fall back to a base primitive.
 import { KCDPrimitive } from './framework/KCDPrimitive';
 import { LensObject } from './framework/LensObject';
 import { PlanObject } from './framework/PlanObject';
@@ -58,7 +56,5 @@ KCDPrimitive.registerHydrator( 'contract', ContractObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'generator', GeneratorObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'analyzer', AnalyzerObject.fromSerialized );
 KCDPrimitive.registerHydrator( 'utility', UtilityObject.fromSerialized );
-// `audit` had a hydrator here until 2026-10-03, when the type was retired whole ( Bryan ): an audit
-// produces a searchable note rather than a document. Nothing is registered in its place — an
-// unregistered type falls back to `hydrateBase`, which is what every type outside this list already does.
+// No hydrator for `audit`, a retired type: an unregistered type falls back to `hydrateBase`.
 KCDPrimitive.registerHydrator( 'bug-report', BugReportObject.fromSerialized );

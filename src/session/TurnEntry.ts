@@ -4,59 +4,16 @@ import { type AccessLevel, type InjectedKind } from './InjectedItem';
 import { type ReasoningEffort } from '../agent/Model';
 
 /**
- * TurnEntry / Turn / Transcript — the typed, sequential account of what happened in a session,
- * carried on the fat Session as the DYNAMIC half of the wire ( the Agent owns the stable half ).
+ * TurnEntry / Turn / Transcript — the typed account of a session: ordered TURNS of ordered typed ENTRIES.
+ * One union, two projections: wireMessages() for the provider, rows() for the inspector. No memory kind —
+ * a memory injection is a tool-result.
  *
- * The model: a Session holds an ordered list of TURNS; each Turn holds an ordered list of typed
- * ENTRIES ( the itinerary of everything that happened — user text, tool calls + results, injected
- * files, the assistant answer ). One typed union, TWO projections: to the WIRE ( wireMessages() →
- * neutral message blocks a connector maps to its provider format ) and to the INSPECTOR ( rows() →
- * a flat, ordered itinerary ). It is the @kcd/core promotion of the main-side TurnRecord's
- * { at, kind, payload } shape into typed variants ( that class predicted this move ).
- *
- * The variant set was the deliberate BARE MINIMUM — user, assistant, tool-call, tool-result,
- * injected-file. There is no injected-memory kind: a memory injection IS the result of a tool
- * call, so it arrives as a tool-result. `thinking` is a NEARLY display-only entry: rendered in the
- * inspector for insight into the agent's reasoning, and re-projected to the wire ONLY inside the
- * LIVE turn's tool loop, and only when the provider SIGNED it. Anthropic requires that a continued
- * tool loop replay the assistant message carrying the tool_use with its thinking blocks intact and
- * unmodified — without that, round 2 of every tool loop 400s. HISTORY still carries no scratchpad:
- * once a turn is finished, the reasoning that led to it is discardable and stops riding.
- *
- * `image` reverses "text-only" ( ratified 2026-07-20 ): context is not pure text, and an image
- * dropped into the flow was riding at a zero-token estimate, invisible and mispriced. It is the
- * reference shape for every NON-TEXT kind ( document / PDF is the next follower — prove the pattern
- * once, reuse it ): it carries its own bytes inline ( like injected-file carries its text ), so it
- * self-displays ( a data URL ) and self-prices ( by pixel area, not chars÷4 — see estimateImageTokens ).
- *
- * Node-free ( @kcd/core ): no @anthropic-ai/sdk import. wireMessages() returns the neutral WireMessage
- * shape below, mirror-shaped to the Anthropic block union so the orchestrator's map is near-pass-through
- * while the transcript itself stays provider-agnostic ( model is a commodity ).
+ * `thinking` re-projects to the wire only inside the LIVE turn's tool loop, and only when signed: Anthropic
+ * 400s a continued tool loop that drops signed thinking. Node-free (@kcd/core): no provider SDK import.
  */
 
-/**
- * HOW A TURN ENDED — the REASON, deliberately distinct from `Turn.failed`, which is the GUARD.
- *
- * Two questions, not two names for one answer. `failed` decides whether a turn rides the wire and whether
- * it may be re-included; this says WHY it ended that way. A cancelled turn is `failed: true` with
- * `terminal: 'cancelled'` — both true, neither redundant, and collapsing them would force a cancellation
- * to be reported as a failure or a second boolean to contradict the first. The guard is DERIVED from the
- * reason wherever both are written, so the two cannot disagree about one turn.
- *
- * ONE FACT, THREE NAMES, and they are the same fact in three places: `Turn.terminal` in memory,
- * `TranscriptTurn.terminal` on the way to a display, and the `outcome` COLUMN on disk — which keeps its own
- * name because `outcome` reads well on a row and renaming a column is a migration that buys nothing.
- *
- * The OPEN half of that pair, on purpose. `failed` can never grow past two states, but the reasons a turn
- * stops are open-ended: a user cancellation, a policy refusal from gate middleware, a budget ceiling. Each
- * arrives as one more member here and is carried, persisted and displayed by machinery that needs no
- * further teaching — provided every reader asks the TABLE rather than naming a member.
- *
- * THAT PROVISO IS NOW LOAD-BEARING RATHER THAN ASPIRATIONAL ( 2026-09-05 ). Both display surfaces ask this
- * table two questions and nothing else: `note` decides whether there is anything to say, and `answered`
- * decides the tone. Neither names a member, so a terminal added below draws correctly in both the day it
- * lands — and one added with an empty `note` stays deliberately silent.
- */
+/** Why a turn ended, distinct from `Turn.failed` (the guard). Readers ask this table, never name a member;
+ *  the `outcome` column keeps its name, and renaming it is a migration. */
 export const TERMINALS = {
 	answered:  { answered: true,  note: '' },
 	truncated: { answered: true,  note: 'hit the output ceiling — this reply is cut off, not finished' },
@@ -64,54 +21,18 @@ export const TERMINALS = {
 	/** The provider paused the turn and expects to be called again. Starmind does not resume yet, so what is
 	 *  in hand is a fragment — named rather than silently treated as an answer. */
 	paused:    { answered: true,  note: 'the provider paused this turn and expects to be resumed — the reply is partial' },
-	/**
-	 * THE AGENT ELECTED TO STOP — the only terminal in this table that is a DECISION rather than a report.
-	 *
-	 * Every other member describes how the STREAM ended: four are provider or wire facts, one is the house's
-	 * dispatch failing, one is a person interrupting. This one is the agent saying it cannot finish, by
-	 * calling `flag` — and it exists because a system trained hard to produce a completed task, given no
-	 * admissible way to finish, does not stop: it finds an inadmissible one. The honest exit is a near-absent
-	 * action in the weights, so the harness supplies it.
-	 *
-	 * ON THE ANSWERED ARM, and deliberately NOT `answered` itself. There is a message, the front end renders
-	 * it normally and there is no error path — so `answered: true` is simply true. But `answered` carries an
-	 * empty note, means "nothing went wrong that we noticed", and is what `asTerminal()` returns for an
-	 * unknown value precisely because it claims nothing. A flag landing there would be indistinguishable from
-	 * a clean finish — and VISIBILITY IS THE ONLY COUNTERWEIGHT this design has against the exit being
-	 * over-used. Friction on a safety exit is a bug; being seen is the control.
-	 */
+	/** The agent elected to stop by calling `flag`. On the answered arm but not `answered` itself, whose empty
+	 *  note means a clean finish: a flag must stay visible or the exit gets over-used. */
 	flagged:   { answered: true,  note: 'the agent raised a flag — it could not finish, and this is its account of how far it got' },
-	/**
-	 * THE WORK IS BLOCKED — and that is a DIFFERENT CLAIM from `flagged`, which is why it is a different
-	 * member rather than a second name for one.
-	 *
-	 * `flagged` is the AGENT saying it cannot finish. This is the agent saying the TASK cannot proceed until
-	 * a person answers something — it raised a question on the board with `halted` set, and the board holds
-	 * the work while the question stands. A person triaging a queue wants to be able to tell which of the two
-	 * they are looking at: one of them is about the worker and the other is about the job.
-	 *
-	 * IT ENDS THE TURN, NOT THE TASK. What a halted turn means for the work is the board's reading of it,
-	 * exactly as it already is. Declaring and stopping used to be two acts here and only the first was a tool
-	 * call, so an agent that declared a block and then carried on regardless was the ordinary case. This is
-	 * the terminal that closes that.
-	 */
+	/** The task is blocked on a question the agent raised with `halted` set — the job, not the worker (that is
+	 *  `flagged`). Ends the turn, not the task: the board reads what the block means for the work. */
 	halted:    { answered: true,  note: 'the agent reported the work is blocked and cannot proceed until its question is answered' },
 	failed:    { answered: false, note: 'the dispatch failed' },
 	cancelled: { answered: false, note: 'stopped before it finished' }
 } as const;
 
-/**
- * HOW A TURN ENDED — the whole vocabulary, and the only place a terminal is named.
- *
- * `answered` is the question a CALLER asks ( is there a message to show ) and stays the boolean every
- * result discriminates on. The KEY is the question a DIAGNOSIS asks, and it is the one a boolean could
- * never carry: a cut-off reply and a finished one are both messages, and reading them the same way is how
- * a truncated answer reaches a person looking complete. Not hypothetical — it is what the dispatch path
- * did until 2026-09-04.
- *
- * `note` is what a surface SAYS about a terminal that is not a clean finish. Empty means there is nothing
- * worth saying, which is the common case.
- */
+/** The whole vocabulary. `answered` is the caller's boolean; the key is the diagnosis (a cut-off reply and a
+ *  finished one are both messages). `note` is what a surface says about a non-clean finish. */
 export type TerminalKind = keyof typeof TERMINALS;
 
 /** The two halves, DERIVED from the table rather than restated beside it — so `ok` and the terminal are
@@ -119,67 +40,28 @@ export type TerminalKind = keyof typeof TERMINALS;
 export type Answered   = { [ K in TerminalKind ]: ( typeof TERMINALS )[ K ][ 'answered' ] extends true ? K : never }[ TerminalKind ];
 export type Unanswered = Exclude<TerminalKind, Answered>;
 
-/**
- * A STORED outcome read back as a terminal — the one place an unrecognized value is decided.
- *
- * The column is TEXT and nothing constrains it, so a row's `TerminalKind` type is a CLAIM rather than a
- * guarantee. Three real ways a string arrives here naming nothing: a row written before this vocabulary
- * existed, a hand-edited database, and a terminal removed from the table above while rows still carry it.
- *
- * UNKNOWN READS AS ANSWERED — the same safe direction `include` takes on a row that predates its column.
- * The reverse is worse than it looks: it would mark every unrecognized turn as a problem, and a surface
- * that cries truncation over healthy history teaches its reader to ignore it, which costs the warning
- * exactly when there is a real one to give. A terminal is a claim about a reply, so the honest default is
- * the one that claims nothing.
- */
+/** A stored outcome read back as a terminal. The column is unconstrained TEXT, so an unknown value
+ *  (legacy row, hand edit, removed member) reads as answered: flagging it teaches a reader to ignore the warning. */
 export function asTerminal( value: string | null | undefined ): TerminalKind {
 	return value && Object.hasOwn( TERMINALS, value ) ? value as TerminalKind : 'answered';
 }
 
 
-/**
- * WHAT THE `outcome` COLUMN HOLDS — the terminal, and nothing else.
- *
- * It was `'ok' | 'failed'` until 2026-09-04, which is the SAME question this table's `answered` flag
- * answers, asked in a second vocabulary. Two currencies for one fact is how a truncated reply came to be
- * persisted as a clean one: the fine-grained terminal existed on the wire and had nowhere to land, so the
- * row flattened it on the way to disk and a reload lost it.
- *
- * `ok` is now `answered` and the type is gone — a legacy row is migrated rather than tolerated, because a
- * column holding two vocabularies is a column every reader has to know the history of.
- *
- * Still NEVER enforced by storage — the column is TEXT and nothing constrains it — so a read tests the
- * table ( `TERMINALS[ o ]?.answered !== false` ) rather than equality with one member. That points an
- * unrecognized value at "this turn completed", which is what it honestly is; the reverse would mark real
- * history as broken.
- *
- * Called OUTCOME on the row, not status, because this codebase already asks two other things by that name
- * and a third would make every read ambiguous: `SessionStatus` is active/archived ( is this filed away )
- * and `TurnStatus` is idle/thinking ( is a turn running right now ). Three different clocks — filed,
- * running, ended — and this is the last of them.
- */
+/** The `outcome` column holds the terminal, and is named so because `status` already means session and turn state here.
+ *  Storage does not enforce it, so a read tests `TERMINALS[ o ]?.answered !== false`: an unknown value reads as completed. */
 
 /** The stable envelope every entry carries — a stamp for the time-ordered itinerary. Ordering within
  *  a turn is array order; `at` is the display timestamp ( and the persisted-row field Phase 4 hydrates ). */
 interface EntryBase {
 	at: number;
 	/**
-	 * TRANSIENT — the injected file's contents, and NEVER persisted. `_entryPayload` strips it exactly as
-	 * it strips `rowId`.
+	 * TRANSIENT — the injected file's contents, NEVER persisted; `_entryPayload` strips it as it strips `rowId`.
 	 *
-	 * Main reads the file and stashes it here immediately before projecting the LIVE turn; it is absent on
-	 * every entry that is not being injected right now, which is nearly all of them. It lives on the entry
-	 * for the length of one projection because @kcd/core is Node-free by charter and cannot open a file:
-	 * the SDK decides WHAT rides, main supplies the bytes, and neither has to learn the other's job.
+	 * Main stashes it just before projecting the LIVE turn; it is absent on nearly every entry. It rides only for
+	 * one projection because @kcd/core is Node-free and cannot open a file: the SDK decides WHAT rides, main supplies the bytes.
 	 *
-	 * Declared on the BASE rather than on the two attachment arms because the strip in `_entryPayload` is
-	 * a base-level concern — one rest-destructure that cannot miss an arm someone adds later.
-	 *
-	 * NOT named `body`, which it was until the `error` arm arrived carrying the app's `Failure` currency
-	 * verbatim — and `Failure.body` is an HTTP response body, a PERSISTED part of the account, the exact
-	 * opposite of a transient file read. A base field and an arm field of one name intersect, so the two
-	 * meanings did not merely confuse a reader: they made an error entry unconstructible ( `string` against
-	 * `string | null` ). The established currency keeps `body`; this private transient is the one that moved.
+	 * Declared on the BASE so the one strip in `_entryPayload` cannot miss an arm. NOT named `body`: `error` carries
+	 * the app's `Failure`, whose `body` is a PERSISTED HTTP response — a shared name intersects and makes an error entry unconstructible.
 	 */
 	contents?: string;
 	/**
@@ -219,11 +101,8 @@ interface EntryBase {
 	rowId?: number;
 }
 
-// `EntryMode` used to stand here — a three-state ( suggested · on · off ) the user set per attachment.
-// It is GONE, collapsed into the projection ( 2026-08-03 ). An attachment now stores a PATH and no body,
-// so what rides is decided by POSITION rather than by a setting: the live turn carries the file, every
-// prior turn carries a pointer to it, and a removed entry carries nothing. Injection became a verb
-// instead of a state, and the state it replaced stopped needing a name.
+// What rides is decided by POSITION, not a per-attachment setting: the live turn carries the file, prior
+// turns a pointer to it, and a removed entry nothing.
 
 /** One typed thing that happened. Discriminated on `kind`. The wire kinds ride the request every
  *  turn; `thinking` rides only inside the LIVE turn's tool loop, and only when SIGNED.
@@ -257,14 +136,8 @@ interface EntryBase {
  *  decider, which is how a branch that adds a kind quietly shortens every conversation in the database
  *  the moment you switch away from it. */
 /**
- * ONE IMAGE A TOOL RETURNED — a path, never the bytes.
- *
- * The same shape the `image` grant kind holds and for the same reason: a tool handing back a 2 MB render
- * must cost a few hundred bytes of transcript. Main spills the bytes beside the session's result log and
- * records this; `EntryBase.imageData` carries the payload for the one projection that sends it.
- *
- * `name` is what the pointer line calls it once the image stops riding, so it is written for a person and an
- * agent to read rather than derived from the path.
+ * ONE IMAGE A TOOL RETURNED — a path, never the bytes, which main spills beside the result log.
+ * `EntryBase.imageData` carries the payload for the one projection that sends it; `name` is written for a reader.
  */
 export interface ToolResultImage {
 	path:      string;
@@ -282,17 +155,9 @@ export type TurnEntry = EntryBase & (
 	| { kind: 'injected-folder'; path: string; name: string; removed?: boolean; level?: AccessLevel }
 	| { kind: 'injected-tool';   server: string; name: string; removed?: boolean }
 	/**
-	 * A PERSON CHANGED WHAT THIS RUN MAY DO, at the point in the conversation where they changed it.
-	 *
-	 * It is not a report of current state and must never become one — the capability preamble is rebuilt
-	 * from the passport on every turn, so what the agent HOLDS is never stale and saying it twice would
-	 * charge for the same fact forever. This says the one thing the preamble structurally cannot: that a
-	 * capability MOVED, and when. It is what answers "why did this work at turn 4 and get refused at
-	 * turn 9" — a question no refusal can answer, because a refusal describes now.
-	 *
-	 * `from` and `to` are the EFFECTIVE answers either side of the change rather than the stamp that
-	 * caused it. A stamp that lands on a row already reading `off` changed nothing a run can observe, and
-	 * an entry for it would be noise on the one lane that must stay worth reading.
+	 * A person changed what this run may do, at this point in the conversation. Never a report of current state
+	 * (the per-turn preamble states that); this records that a capability MOVED, and when. `from`/`to` are the
+	 * effective answers either side, and a stamp onto a row already `off` writes no entry.
 	 */
 	| { kind: 'policy-delta';  label: string; from: string; to: string }
 	| { kind: 'thinking';      text: string; signature?: string }
@@ -305,19 +170,8 @@ export type TurnEntry = EntryBase & (
  *  written three times. */
 export type Attachment = Extract<TurnEntry, { kind: 'injected-file' | 'image' }>;
 
-/**
- * Every kind a USER hands over — the grant set. An injection rides WHOLE on the turn it was made and as a
- * REFERENCE on every turn after, and that decay is decided by POSITION in the transcript: no flag to
- * clear, no timer, no policy, and no failed turn that can burn one. Read once, then a handle the agent
- * may follow at its option.
- *
- * A folder and a tool are grants on exactly those terms, which is why they are entries here rather than
- * rows in a table of their own — position already supplies decay, persistence, removal and re-injection,
- * and `turn_entries` already stores them.
- *
- * Agent-FOUND context is deliberately NOT here: an agent's own read stays a tool-result, on the same rule
- * that refused an injected-memory kind. What makes something a grant is that a person handed it over.
- */
+/** Every kind a USER hands over. An injection rides WHOLE on its own turn and as a REFERENCE after, decided by POSITION —
+ *  no flag, timer or policy; a folder and a tool ride the same way. Agent-found context is NOT here: an agent's own read stays a tool-result. */
 export type Grant = Extract<TurnEntry, { kind: 'injected-file' | 'image' | 'injected-folder' | 'injected-tool' }>;
 
 /** True for any kind a user hands over — the narrowing every grant-shaped read does. */
@@ -333,28 +187,16 @@ export function grantSubject( entry: Grant ): string {
 	return entry.kind === 'injected-tool' ? `${ entry.server }.${ entry.name }` : entry.path;
 }
 
-/** A grant entry's KIND in the deck/authorization vocabulary — the translation between the entry union's
- *  discriminant ( which names a transcript kind ) and `InjectedKind` ( which names what the thing IS ).
- *  An image is a file here: the two differ in how they RIDE, and not at all in what is permitted. */
+/** Transcript kind → `InjectedKind` (what the thing IS). An image is a file here: the two differ in how they ride,
+ *  and not at all in what is permitted. */
 export function grantKind( entry: Grant ): InjectedKind {
 	if ( entry.kind === 'injected-folder' ) return 'folder';
 	if ( entry.kind === 'injected-tool' )   return 'tool';
 	return 'file';
 }
 
-/**
- * How deep a grant entry reaches — the transcript's `level | null | absent` resolved to the one value an
- * authorization may carry.
- *
- * Beside `grantKind` and `grantSubject` on purpose: three facts read off one entry, by one rule each, in
- * one file. Every producer of a `GrantRef` calls all three, so none of them can drift from the others.
- *
- * A TOOL is `none` — it is not a path grant and has no depth to report. A path entry that never chose
- * resolves to `read`, the conservative rung and the one a grant meant before depths existed. That
- * ambiguity is settled HERE rather than at each gate: null is an honest thing for a transcript row to say
- * and a useless thing for a guard to be handed, and a guard left to decide for itself is three guards
- * deciding differently.
- */
+/** How deep a grant reaches. A tool is `none`; a path that never chose resolves to `read` — settled here, because a
+ *  guard left to decide for itself is three guards deciding differently. */
 export function grantLevel( entry: Grant ): AccessLevel {
 	if ( entry.kind === 'injected-tool' ) return 'none';
 	return entry.level ?? 'read';
@@ -371,9 +213,8 @@ const WIRE_KINDS: ReadonlySet<TurnEntry[ 'kind' ]> = new Set( [ 'user', 'assista
  * What a stored payload must CARRY to mean anything, per kind — the seam `parseEntry` validates against.
  *
  * A complete `Record` over the union on purpose: adding a kind is a COMPILE ERROR right here, which is the
- * table asking "how does this validate?" before the new kind can reach a wire. That makes it the fifth
- * place the compiler stops you, alongside `wireMessages`, `_entryText`, `_display` and `_label` — so the
- * cost of extending the currency is answering five real questions, and never a silent default.
+ * table asking "how does this validate?" before the new kind can reach a wire. That makes the exhaustive
+ * switches on the union (`wireMessages`, `_entryText`, `_display`, `_label`) answer each new kind, never a silent default.
  *
  * REQUIRED fields only. An optional field that is present and wrong is a lesser sin than a required one
  * that is missing, and checking every field exhaustively is a schema library — which @kcd/core
@@ -416,9 +257,7 @@ export interface Turn {
 	 * Default TRUE, and that default is load-bearing twice over. A turn is born included, so the turn
 	 * currently being dispatched rides by construction rather than by racing an id into a set before the
 	 * request goes out. And absence means INCLUDED, so the failure direction is "sent one turn more than
-	 * intended" rather than "silently sent nothing" — the window used to be a set of ids held on the
-	 * policy, where a set that named nothing and a set that deliberately excluded everything were the
-	 * same value.
+	 * intended" rather than "silently sent nothing".
 	 */
 	include: boolean;
 	/**
@@ -465,8 +304,7 @@ export interface Turn {
 
 
 /**
- * Whether a session compacts itself, and when. The second POLICY — and the first one an AGENT drives
- * rather than code: crossing the threshold hands the transcript to the house agent, which writes a
+ * Whether a session compacts itself, and when. A policy an AGENT drives, not code: crossing the threshold hands the transcript to the house agent, which writes a
  * structured summary that lands as a turn in turn order and narrows the window to itself.
  *
  * `enabled` is the switch ( off = the transcript is never compacted, whatever its size ). `threshold` is
@@ -481,13 +319,13 @@ export type CompactionPolicy = { enabled: boolean; threshold: number };
  *
  * A POLICY is anything that manipulates what rides the next request. It may be programmatic and
  * declarative ( `retention` — a pure rule over the turn list ) or agent-driven ( `compaction` — a house
- * agent writing a summary ). They live in one named bag rather than as loose fields so that the third
- * and fourth are additive: a new policy is an entry here plus the code that reads it, never a reshape
+ * agent writing a summary ). They live in one named bag rather than as loose fields so that a new policy is
+ * an entry here plus the code that reads it, never a reshape
  * of the session record.
  */
 /** How the model reasons on this session's turns. `effort` is the five-stop declaration vocabulary ( each
  *  connector maps it to its own wire form ). `mode` is prompt shaping only: 'show' asks for the reasoning in
- *  the reply, 'chain' leaves it in the private channel. A SESSION dial — it used to ride every send. */
+ *  the reply, 'chain' leaves it in the private channel. A SESSION dial. */
 export type ReasoningPolicy = { effort: ReasoningEffort; mode: 'chain' | 'show' };
 
 /** Whether this session's turns carry tools at all. Off binds no manifest and offers no wire tool — the
@@ -502,7 +340,7 @@ export type ToolsPolicy = { enabled: boolean };
  * the model's own stop reason — and a model that keeps asking for tools without answering runs until
  * something outside it intervenes. Nothing outside it did.
  *
- * AND THIS IS WHERE A RAIL UNIT'S THRESHOLD GOES, WHEN ONE EVER HAS TO VARY ( Bryan, 2026-09-20 ). Every
+ * AND THIS IS WHERE A RAIL UNIT'S THRESHOLD GOES, WHEN ONE EVER HAS TO VARY ( Bryan ). Every
  * unit on the rail prices itself off a constant beside its own prose — `RAFT_AFTER`, `NEAR_REPEAT`,
  * `STALL_LAPS`, `KEEP_TOOL_RESULT_TURNS` — and the question was whether they want a home or one setting
  * each. They want this one: it is already the per-session record of what bounds a turn, and the raft
@@ -520,8 +358,7 @@ export type LimitsPolicy = { maxRounds: number };
  *  rides the system prompt — the roster of forms the renderer honours, and how to write each. Off, the whole
  *  block leaves the wire.
  *
- *  WHOLE BLOCK, NEVER PER-AFFORDANCE, and that is the ruling rather than a simplification ( Bryan,
- *  2026-09-09 ): "it's a chat affordance, it represents the chat surface." The roster is one capability. A
+ *  WHOLE BLOCK, NEVER PER-AFFORDANCE, and that is the ruling rather than a simplification ( Bryan ): "it's a chat affordance, it represents the chat surface." The roster is one capability. A
  *  session either draws into that surface or it does not, and the case that wants this is a session with no
  *  surface at all — a house seat compacting a transcript is told about tables and wikilinks it will never
  *  render, on every turn.
@@ -559,10 +396,8 @@ export const MIN_COMPACTION_TURNS = 4;
  * reader would have had to restate it, and a restated constant is a constant that drifts.
  *
  * Three is small on purpose: a large default hides whether the mechanism works at all. Setting it absurdly
- * high is the one-line way to turn stubbing off. The per-session POLICY that was scoped to replace this
- * ( per-entry-reduction Phase 3 ) is declined — one number is a constant, not a table. That decline stands;
- * what changed on 2026-09-20 is only where it would land IF it ever stops being a constant — `LimitsPolicy`
- * above, with the rest of the rail, rather than a policy of its own beside it.
+ * high is the one-line way to turn stubbing off. A per-session policy was declined: one number is a constant, not a table. If it stops being one, it lands on
+ * `LimitsPolicy`, not on a policy of its own.
  */
 export const KEEP_TOOL_RESULT_TURNS = 3;
 
@@ -642,12 +477,11 @@ export interface WireMessage {
 
 /**
  * How a row PRESENTS — an icon and a colour token, carried ON the row rather than looked up by every
- * surface that draws one ( Bryan, 2026-07-28, the Godot resource pattern: attach the render-side data to
+ * surface that draws one ( Bryan's Godot resource pattern: attach the render-side data to
  * the data object, hand the UI a completed object, and every surface renders it the same ).
  *
- * Three surfaces already draw these rows — the chat's turn itinerary, the inspector's Turns folder, and
- * the reader drawer's digest — and each was about to grow its own private kind→icon/hue table. One
- * drifting copy per surface is exactly the failure this kills.
+ * The chat's turn itinerary, the inspector's Turns folder and the reader drawer all draw from this one table: a private
+ * kind→icon/hue copy per surface is the drift this kills.
  *
  * `color` is the NAME of a CSS custom property, not `var( … )`: naming the shared token is a vocabulary
  * decision the model can legitimately own, whereas emitting CSS syntax from the SDK is not. The renderer
@@ -698,7 +532,7 @@ export interface TranscriptRow {
 	 * display string is the worst possible grouping key — it is free to gain a prefix or an arrow the day
 	 * somebody improves the wording, and the grouping fails silently when it does.
 	 *
-	 * Added 2026-09-27 for the chat's tool strip, which groups a turn's calls by tool so that a repeat
+	 * A grouping key for the chat's tool strip, so that a repeat
 	 * reads as a repeat. `label` stays what it is; this is the machine-readable half beside it.
 	 */
 	name?: string;
@@ -710,11 +544,7 @@ export interface TranscriptRow {
 	/** Icon + colour token for this row — see RowDisplay. Every surface that draws a row reads this
 	 *  rather than keeping its own kind→look table. */
 	display: RowDisplay;
-	/* The `media` handle went out with its only consumer ( ReaderContent's inline <img> ). It carried bytes
-	   when the entry did; once an image stored a path, the row could only hand over a `file://` the dev
-	   server's webSecurity refuses to load, so every image row rendered broken. An image row reads as its
-	   pointer line like any other attachment now. A real thumbnail surface wants a registered protocol
-	   handler in main — it can reintroduce a typed handle in the same change that consumes one. */
+	/* No `media` handle: an image row reads as its pointer line. A thumbnail needs a registered protocol handler in main. */
 }
 
 /** One TURN as the inspector shows it — a single block carrying the entries that happened inside it.
@@ -741,11 +571,7 @@ export interface TranscriptTurn {
 	terminal: TerminalKind;
 }
 
-/* `AttachmentView` — the file-only gutter view — became the `file` variant of `InjectedItem`
-   ( ./InjectedItem.ts ). The deck holds folders and tools beside files now, so the currency is the
-   union rather than a widened file. Same projection, same reason it is a view and not the entry: a
-   tile draws a name and a weight, and handing over entries would couple every surface to the shape of
-   the union it came from. */
+/* A gutter tile draws a name and a weight, so it takes a projection rather than the entry: entries would couple every surface to the union. */
 
 /** How an injected file frames into the wire as a user message — a brief marker so the model reads it
  *  as pinned reference material, not as the user's own words. */
@@ -790,8 +616,7 @@ export type SigProjection =
  * WHY IT EARNS ITS PLACE: over half of a real `.sig` is `x` / `y` / `w` / `h` / `shape` / `color`, and an
  * edge carries seven pure-rendering fields ( `style`, `dashed`, `color`, `headFrom`, `headTo`, and both
  * anchors ) beside the four that mean anything. Handing one over un-projected ships a picture's pixel
- * coordinates to the model as if they were content. Measured on the two real documents in this vault:
- * 52% and 64% smaller, and everything removed is something the model could not have used.
+ * coordinates to the model as if they were content. Everything removed is something the model could not have used.
  *
  * NO SHARED DOCUMENT TYPE, DELIBERATELY. This reads six fields out of a file that is foreign input — hand
  * edited, possibly an older revision, possibly written by another tool. Importing the studio's `SigDoc`
@@ -799,7 +624,7 @@ export type SigProjection =
  * save six field names. The loose local shape below is the honest amount of type for a glue seam; the
  * shared currency here is the FILE FORMAT, which both sides already speak.
  *
- * Split out from `frameSig` on 2026-09-22, when the agent's own read path was wired to it. A wire message
+ * A wire message
  * and a tool result want DIFFERENT frames around the same body: one is pinned reference material a person
  * attached, the other is an answer to a call the agent made and has to say so, because the file on disk is
  * JSON and an agent that edits what it read here would be editing text it never saw. One body, two frames,
@@ -842,9 +667,8 @@ export function projectSig( text: string ): SigProjection {
 		const body = flat( n.body );
 		const type = str( n.type ) || 'node';
 		const as   = name_( str( n.id ) );
-		// A titleless node ( the `band` headers are all body, no title ) was named FROM its body above, so
-		// appending the body again printed the same sentence twice on one line. Only add it when it says
-		// something the name did not.
+		// A titleless node is named from its body, so the body is
+		// appended only when it says more than the name.
 		lines.push( `- (${ type }) ${ as }${ body && body !== as ? ` — ${ body }` : '' }` );
 	}
 	for( const e of edges ) {
@@ -880,7 +704,7 @@ export type PdfExtract =
 	| { ok: false; why: 'unopenable';    reason: string };
 
 /**
- * A PDF, FRAMED for the wire as EXTRACTED TEXT — the PDF-shaped declaration ( Bryan, 2026-10-01: "extract
+ * A PDF, FRAMED for the wire as EXTRACTED TEXT — the PDF-shaped declaration ( Bryan: "extract
  * text, pass text as if it was a prompt but with a pdf shaped declaration so the agent knows it's a pdf" ).
  *
  * WHY A FRAME AND NOT JUST THE TEXT. Extraction returns something that is not the file: no figures, no
@@ -916,8 +740,7 @@ export function framePdf( name: string, seen: PdfExtract ): string {
  * never existed, so the model will not go looking for it.
  *
  * The PATH rides, not just the name: a pointer the reader cannot follow is a dead link, and an agent
- * handed one either hallucinates the contents or stalls. The renderer's `_pointerLine` named the file and
- * not where it was.
+ * handed one either hallucinates the contents or stalls.
  *
  * Exported for the reason frameCompaction is: main projects it, the renderer prices it, and two copies of
  * this string quietly cost two different numbers.
@@ -978,27 +801,15 @@ export function frameFolder( path: string ): string {
 }
 
 /**
- * A TOOL grant's reference form — what its entry says on every turn after the one that injected it. The
- * same shape as `framePointer` and `frameFolder`, and it names the call for the reason `frameFolder` gives.
+ * A TOOL grant's reference form, on every turn after the one that injected it. It says only that the grant still
+ * stands: whether the agent may call the tool is the authorization's question, and the manifest names callable tools.
  *
- * WHAT DECAYS HERE IS THE ACCOUNT, NOT THE TOOL. The entry is the record that a person handed this tool
- * over; whether the agent may call it is the authorization's question ( `Session.grants()` ), and a grant
- * keeps it authorized for as long as the grant stands. So this line carries no schema and no description.
- * It only has to say the grant is still in force — the whole surface rode once, on the turn it was given
- * ( `frameToolSurface` ).
+ * WHAT DECAYS HERE IS THE ACCOUNT, NOT THE TOOL. The entry records that a person handed the tool over, and
+ * `Session.grants()` decides authorization. This is not the manifest/preload surface axis: that describes a capability,
+ * this describes an event.
  *
- * IT RESEMBLES THE SURFACE AXIS AND IS NOT IT. `manifest` against `preload` decides how much of a HELD tool
- * the prompt carries; this decides what the conversation's record of a GRANT says. Each has its own framing
- * because they report different things: the manifest's line describes a capability, this one an event.
- *
- * ── IT INVITES NO CALL, AND THAT IS THE FIX RATHER THAN THE OMISSION ( 2026-09-26 ) ──
- * This used to end "call it when you need it". The identity it prints is `group.tool`, which is the POLICY
- * spelling — a model calls `group__tool`, and on a harness lane something else again. The SDK cannot spell
- * the wire form ( the separator is the app's and this layer must not import it ), so the one thing this line
- * could not do is name the call. Inviting one anyway handed an agent an instruction it could only carry out
- * by guessing, and a guessed name is held on the barbed wire exactly as a real one is — so the guess is not
- * even discoverable as wrong. The manifest names every callable tool in its callable spelling and states the
- * calling rule; this says only that the grant stands, which is all its own docblock ever claimed for it.
+ * It names no call. The identity printed is the policy spelling (`group.tool`), and this layer cannot spell the wire
+ * form, so an instruction to call it would hand the agent a guessed name.
  */
 export function frameTool( server: string, name: string ): string {
 	return `[available tool — ${ server }.${ name } — granted to you and still in force]`;
@@ -1034,18 +845,18 @@ export const FOLDER_FILE_CAP = 100;
  *
  * Every folder survives the cap and only files are counted out. A directory is the thing an agent
  * navigates BY: dropping subdirectories to make room for more files would remove the part of the listing
- * that lets it go somewhere, which is the opposite of what a listing is for. The hundred LARGEST files
+ * that lets it go somewhere, which is the opposite of what a listing is for. The LARGEST files, up to the cap,
  * are kept because size is the only signal available without opening anything, and the remainder is
  * stated plainly so the agent knows the list is partial rather than believing it is complete.
  *
  * Sizes are NOT rendered per row. A listing is read to decide where to look next, and a column of byte
- * counts costs real tokens to answer a question nobody asked; size is used to CHOOSE the hundred, then
+ * counts costs real tokens to answer a question nobody asked; size is used to CHOOSE the kept files, then
  * discarded.
  */
 export function frameFolderListing( path: string, entries: { name: string; isDir: boolean; size: number }[] ): string {
 	const dirs  = entries.filter( e => e.isDir );
 	const files = entries.filter( e => !e.isDir );
-	// Sorted by size to pick the hundred, then back to the caller's own order ( alphabetical ) to read.
+	// Sorted by size to pick the kept files, then back to the caller's own order ( alphabetical ) to read.
 	const kept  = [ ...files ].sort( ( a, b ) => b.size - a.size ).slice( 0, FOLDER_FILE_CAP );
 	const keptSet = new Set( kept.map( f => f.name ) );
 	const shown = files.filter( f => keptSet.has( f.name ) );
@@ -1158,8 +969,7 @@ function oneCappedLine( text: string, cap: number ): string {
  *
  * Tool traffic is the most compressible mass in a transcript and the least worth reading whole: to a pass
  * being asked what HAPPENED, a call's arguments and a result's body are an envelope. So a round collapses
- * to one line naming the tool and its outcome — the same trade the tool ledger made when it was narrowed
- * to one row per tool with a count, arguments and adjacency dropped deliberately ( Bryan ).
+ * to one line naming the tool and its outcome.
  *
  * WHAT CANNOT BE COMPRESSED IS A FAILURE. The natural way to shrink a result is to drop its body, and for
  * an error the body IS the outcome. A compacted transcript in which a failure reads as a success teaches
@@ -1275,9 +1085,9 @@ export class Transcript {
 	 * ( `wireMessages()` / `estimateTokens()` ); the unwindowed original still answers `rows()`, because
 	 * the inspector's itinerary shows everything that happened.
 	 *
-	 * IT TAKES NO POLICY ANY MORE ( 2026-09-16 ). The user-facing turn window — `all` / `lastN` / `manual`
-	 * — was removed, so the only thing left that can clear `include` is a turn that did NOT end ok. This
-	 * is therefore the FAILED-TURN FILTER now, and it is load-bearing exactly as it was before: a failed
+	 * IT TAKES NO POLICY. The user-facing turn window (`all` / `lastN` / `manual`) is gone, and
+	 * only a turn that did NOT end ok can clear `include`. This
+	 * is the FAILED-TURN FILTER, and it is load-bearing: a failed
 	 * turn is written `include: 0`, and letting one back onto the wire replays an orphaned tool-call whose
 	 * result never arrived, which invalidates the conversation for every turn after it. Do not "simplify"
 	 * this away because the window is gone — the window was never the only thing it was doing.
@@ -1304,11 +1114,8 @@ export class Transcript {
 	compacted( compactions: SessionCompaction[] ): Transcript {
 		const newest = [ ...compactions ].sort( ( a, b ) => a.createdAt - b.createdAt ).pop();
 		if ( !newest ) return new Transcript( [ ...this.turns ] );
-		// No prefix is cut here any more. The turns a summary covers were marked `include: false` once, by
-		// compactThrough(), so `windowed()` has already dropped them before this runs — there is nothing
-		// left to re-derive and nothing to pay for twice. What used to be an id-match plus a
-		// timestamp fallback ( to stay honest when the covered turn wasn't here to cut ) is now answered by
-		// each turn carrying its own flag. This method's whole remaining job is to put the summary in front.
+		// The covered turns were marked `include: false` by compactThrough(), so windowed() has already
+		// dropped them. This method only puts the summary in front.
 		const summary: Turn = {
 			id:        `compaction-${ newest.id }`,
 			startedAt: newest.createdAt,
@@ -1363,7 +1170,7 @@ export class Transcript {
 	 * object, which the dispatch loop does and an out-of-band recorder does not — the harness lane knows a
 	 * trace id and nothing else, because its tool calls arrive over HTTP from another process.
 	 *
-	 * Added 2026-09-27 so `CapabilityRouter` can record a harness child's tool calls onto the right turn
+	 * So `CapabilityRouter` can record a harness child's tool calls onto the right turn
 	 * instead of onto whichever one happened to be last. Undefined for a trace that names no turn here, and
 	 * the caller is expected to record NOTHING rather than fall back — a tool call filed against the wrong
 	 * turn is worse than one that went unrecorded.
@@ -1385,9 +1192,7 @@ export class Transcript {
 	 * the same history twice, and the inverse would go dark with nothing on screen explaining why.
 	 *
 	 * Returns how many turns it marked. 0 means the id names no turn in this transcript ( its exchange was
-	 * deleted from the DB ) — the caller decides what that is worth. This neither guesses at a prefix nor
-	 * throws: guessing is what the old timestamp fallback did, and it existed only because the window was
-	 * re-derived on every projection instead of being recorded once, here.
+	 * deleted from the DB ) — the caller decides what that is worth. This neither guesses at a prefix nor throws.
 	 */
 	compactThrough( throughTurnId: string ): number {
 		const at = this.turns.findIndex( ( t ) => t.id === throughTurnId );
@@ -1435,9 +1240,7 @@ export class Transcript {
 	}
 
 	// ── The window flag ──
-	// `setInclude` and `resetWindow` lived here and are GONE ( 2026-09-16 ): both existed to serve the
-	// user-facing turn window, and with that removed nothing writes `include` except the orchestrator
-	// marking a turn that did not end ok. The flag is written once, at the turn's end, and never edited.
+	// `include` is written once, at the turn's end, by the orchestrator marking a turn that did not end ok.
 
 	// ── Projection: to the WIRE ────────────────────────────────────────────────
 
@@ -1637,8 +1440,7 @@ export class Transcript {
 	 * The time-ordered itinerary the Turns folder renders — one BLOCK per turn, each carrying the entries
 	 * that happened inside it ( thinking included ) with their self-priced wire weight.
 	 *
-	 * Grouped rather than flat because a turn is the unit a user reasons about and the unit the window
-	 * policy operates on. A flat entry stream reads as an undifferentiated log; blocks let the display be
+	 * Grouped rather than flat because a turn is the unit a user reasons about and the unit `windowed()` filters. A flat entry stream reads as an undifferentiated log; blocks let the display be
 	 * honest about the structure that actually exists — this is what you asked, and here is everything
 	 * that happened because of it.
 	 *
@@ -1736,10 +1538,8 @@ export class Transcript {
 		// `frameFolderListing` / `frameToolSurface` and hands over the result: the framing definition still
 		// lives here and is still tested here, which is the property that actually mattered. The alternative
 		// was a second transient field per payload shape.
-		// PRESENCE, not truthiness. `contents` is `string | undefined`, so an empty file is `''` — which is
-		// falsy, and testing it as a boolean reported a successfully-read empty file as a read FAILURE. The two
-		// states were always distinguishable in the type; the check simply was not asking the question the
-		// field answers. An empty file is a legitimate state and rides as an empty body.
+		// PRESENCE, not truthiness: `contents` is `string | undefined`, and an empty file is `''`, a legitimate read
+		// that rides as an empty body.
 		//
 		// It is not cosmetic. `write` is whole-file replace with no append, so an agent told a populated file
 		// was unreadable is one blind write away from destroying it — and this arm is exactly what would have
@@ -1865,13 +1665,12 @@ export class Transcript {
 	/**
 	 * Enforce the tool-pair invariant WITHIN one turn — every `tool_use` answered by exactly one
 	 * `tool_result` and vice versa. Returns the survivors; the caller reports what went missing by
-	 * comparing lengths, which is all any caller has needed so far.
+	 * comparing lengths.
 	 *
 	 * The invariant is the PROVIDER's, not ours: an orphaned `tool_result` is not a smaller request, it is
 	 * an invalid one. Turn atomicity does not cover this — it protects pairs against WINDOWING, where a
 	 * whole turn rides or does not, and says nothing about an entry going missing from inside a turn that
-	 * rides. Hydration does exactly that whenever a payload lands as `unreadable`, which means this has
-	 * been reachable since the transcript was first persisted.
+	 * rides. Hydration does exactly that whenever a payload lands as `unreadable`.
 	 *
 	 * Runs at the PROJECTION and nowhere else. Reconciling what is STORED would erase the trailing
 	 * tool-call of a turn that died mid-loop — which is the diagnosis, and the whole reason a failed turn
@@ -1982,11 +1781,6 @@ export class Transcript {
 		// An attachment has no body to digest — the transcript stores a HANDLE. That closes the
 		// contamination hole STRUCTURALLY rather than by rule: there is no stored body to summarise as
 		// though the conversation had read it, so a summary cannot assert knowledge it never had.
-		//
-		// `_digestFile`'s head-truncation and `_digestImage`'s description both went with the stored body,
-		// and the guard against handing a 50k file to the house agent went with them — there is no longer a
-		// path by which that could happen. Three pieces of machinery collapsed into one line, which is what
-		// it looks like when a model stops fighting its storage.
 		//
 		// `removed` digests to NOTHING, and that is the removal being EXECUTED rather than a display rule: the
 		// file does not enter the summary that replaces its turn, so it leaves the account at the same moment

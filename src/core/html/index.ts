@@ -1,11 +1,7 @@
 /**
- * @kcd/core · html — the HTML substrate parser family.
- *
- * Layered: HtmlTree ( reader + navigation ) → KcdAddress ( the data-kcd-* grammar ) → the heads:
- * KcdValidate ( binary conform check ), KcdParse ( object-model emit, in ), KcdEmit ( HTML emit,
- * out — the human audience ), and KcdContext ( AI-audience text emit — the model reads THIS, never
- * raw HTML ). All Node-free; the renderer feeds DOM via HtmlTree.fromDOM, the SDK feeds strings via
- * HtmlTree.parse.
+ * @kcd/core · html — the HTML substrate parser family: HtmlTree → KcdAddress → the heads.
+ * All Node-free: the renderer feeds DOM via `HtmlTree.fromDOM`, the SDK feeds strings via `HtmlTree.parse`.
+ * The model reads KcdContext's text, never raw HTML.
  */
 
 export { HtmlTree } from './HtmlTree';

@@ -1,47 +1,26 @@
 /**
  * manifest.ts — the server contract.
  *
- * ServerManifest is the single inventory record for one MCP server: what it is,
- * and where it stands in the Draft → Promoted → Installed lifecycle. Pure data,
- * no behavior — read across the system (MCPService spawns from it, the UI toggle
- * flips `exposed`, promotion stamps `promoted_at`). When you want to know
- * anything about a server, you ask its manifest; it holds its own rules.
- *
- * One fat record by design. The fields divide by *who writes them*, not by type:
- *
- *  - Identity  — declared by the server author (the subclass's `static manifest`).
- *  - Lifecycle — stamped by the system as the server moves through the stages.
- *                `installed`/`exposed` are always present (false until their
- *                event); the dates are simply absent until then.
+ * ServerManifest is one server's inventory record and its place in the Draft → Promoted → Installed lifecycle. Pure
+ * data that holds its own rules: ask a server's manifest, not the system. Identity is declared by the server author
+ * (`static manifest`); Lifecycle is stamped by the system, with `installed` and `exposed` always present and the dates
+ * absent until their event.
  */
 /**
- * How a server relates to a PROJECT — declared by the server itself, because only the server knows
- * whether it has a workspace at all. Not a central table: the posture belongs on the thing that has it,
- * so installing a server teaches the host how to place it and removing one takes the knowledge with it.
+ * How a server relates to a PROJECT. Declared by the server, because only it knows whether it has a workspace at all.
  *
- *   'none'      the server has no workspace. Most third-party servers ( a weather API, a search index )
- *               are this, and are singletons the host never re-points. THE DEFAULT — a server that says
- *               nothing is assumed to want nothing, which is the only safe read of silence.
- *   'cwd'       the workspace is fixed at spawn, from the process working directory, and cannot move
- *               afterwards. The host spawns it into the right project; changing project needs a respawn.
- *   'per-call'  the server re-resolves its workspace on every tool call from a channel the host writes
- *               ( its package-store slice ). The host points it at the right project immediately before
- *               each call — and therefore SERIALIZES that server's calls, since one process holding one
- *               root cannot answer two projects at once.
+ *   'none'      no workspace. THE DEFAULT: a server that says nothing is assumed to want nothing.
+ *   'cwd'       fixed at spawn from the working directory; changing project needs a respawn.
+ *   'per-call'  re-resolved on every call from a channel the host writes. The host points it at the right project before
+ *               each call, which SERIALIZES that server's calls: one root cannot answer two projects at once.
  */
 export type ServerWorkspace = 'none' | 'cwd' | 'per-call';
 
 /**
- * AN INJECTION HOOK — text this package contributes to a host's compiled context, declared here for the
- * same reason `workspace` is: the posture belongs on the thing that has it, so installing a package
- * teaches the host that it injects and removing it takes the knowledge with it.
- *
- * NO TIER, AND THAT IS THE DESIGN. Every contribution lands in the injected band, identified by its
- * package. Letting a package name its own rank would hand a prefix-cache contract to whoever installed a
- * plugin — and gets the caching backwards, since text that varies between turns belongs last.
- *
- * TWO CONTRACTS THIS TYPE CANNOT STATE, and an author meets both as silence rather than as an error: the
- * tool must return TEXT content, and the injection rides only for an agent that already holds `tool`.
+ * AN INJECTION HOOK: text this package contributes to a host's compiled context, declared here for the same reason as
+ * `workspace`. NO TIER: every contribution lands in the injected band, because letting a package name its rank would
+ * hand the prefix-cache contract to whoever installed it. Two contracts the type cannot state, and an author meets both
+ * as silence: the tool must return TEXT content, and the injection rides only for an agent that already holds `tool`.
  */
 export interface ContextContribution {
 	tool:       string;                   // an ordinary tool on this package's ordinary surface
@@ -51,40 +30,21 @@ export interface ContextContribution {
 }
 
 /**
- * The hard wall-clock ceiling on ONE tool call, in ms, for a server that names none. Claude Code's own
- * default is ~27.8 hours ( read off the binary and measured 2026-08-13 ), which is not a ceiling at all:
- * a wedged call is never cut loose and burns the entire harness turn instead, surfacing as a failure that
- * names no server and no tool.
+ * The hard wall-clock ceiling on ONE tool call, for a server that names none. A LIVENESS ceiling, not a budget: Claude
+ * Code's own default is effectively no ceiling, so a wedged call burns the whole turn. Three minutes of a bounded tool
+ * call means wedged rather than slow, and cutting it loose surfaces as "server X tool Y timed out" with the turn still
+ * live to report it. Nothing above this ceiling expires: a turn ends when it finishes, a person stops it, or the child dies.
  *
- * 180 000 is a LIVENESS ceiling, not a budget. Every installed server's measured worst case is SECONDS
- * ( a 16 158-file survey walks in ~243ms; grep is capped at 100 files ), so this is ~100x margin. What
- * picks the number is what a tool call IS: a bounded piece of machine work, and three minutes of it means
- * something is wedged rather than slow. The point of cutting it loose is that the wedge surfaces as
- * "server X tool Y timed out" — naming the server and the tool — with the turn still live to report it.
- *
- * THIS IS NOW THE OUTERMOST CLOCK ON THE WORK ITSELF ( 2026-09-23 ). It used to be sized to fire inside a
- * wall-clock cap on the whole turn; that cap is gone, because a turn is not a bounded thing and counting
- * an agent's working time against a deadline killed real work. Nothing above this ceiling expires. A turn
- * ends when it finishes, when a person stops it, or when the child dies.
- *
- * NOT the permission prompt's clock either ( `PERMISSION_ASK_TIMEOUT_MS`, ten minutes ). That one is
- * deliberately LONGER than this and measures human patience, not liveness — which is why a gated call's
- * wait is not charged against this ceiling.
+ * Not the permission prompt's clock (`PERMISSION_ASK_TIMEOUT_MS`): that one is longer and measures human patience, so a
+ * gated call's wait is not charged against this ceiling.
  */
 export const DEFAULT_TOOL_TIMEOUT_MS = 180_000;
 
 /**
- * The default ceiling on a CONTEXT INJECTION, in ms, for a contributor that names none in
- * `ContextContribution.timeoutMs`.
- *
- * A BUDGET, NOT A LIVENESS CEILING, and that is the whole reason it is a separate number. The call above
- * is one a model asked for and is waiting on, so cutting it early destroys the turn's work; this one rides
- * a turn nobody asked for, in front of the user's first token, and its failure mode is a band that does not
- * ride. Cheap to lose, expensive to wait for — the opposite trade, so the opposite number.
- *
- * 10s is far above any local answer ( a store query is milliseconds ) and far below what a person will sit
- * through before a turn starts. It bounds the CALL only: a contributor whose server has to be spawned first
- * pays that separately, upstream of the gate.
+ * The default ceiling on a CONTEXT INJECTION, for a contributor that names none in `ContextContribution.timeoutMs`.
+ * A BUDGET, not a liveness ceiling, and separate from the tool call above: this rides a turn nobody asked for, in front
+ * of the first token, and its failure is a band that does not ride. It bounds the call only: a contributor whose server
+ * must be spawned first pays that upstream of the gate.
  */
 export const DEFAULT_INJECTION_TIMEOUT_MS = 10_000;
 
@@ -97,17 +57,17 @@ export interface ServerManifest {
 	transport:    'stdio';                // SSE/HTTP reserved for the future
 	credentials:  string[];               // vault key names injected as env
 	env?:         Record<string, string>;
-	doc?:         string;                 // the server's own doc-block — its account of what it is, the recursive parent of its tools' docs
-	config?:      ServerConfigSurface;    // the server's self-declared config surface — what the app's config screen renders for it (see below)
+	doc?:         string;                 // the server's own doc-block: its account of itself, parent of its tools' docs
+	config?:      ServerConfigSurface;    // self-declared config surface the app's config screen renders (see below)
 	workspace?:   ServerWorkspace;        // how this server relates to a PROJECT — see below. Absent means 'none'.
-	contributes?: ContextContribution;    // an injection hook — text this package adds to the compiled context. See above. Absent means nothing.
+	contributes?: ContextContribution;    // injection hook: text this package adds to the compiled context. Absent means nothing.
 	timeoutMs?:   number;                 // hard ceiling on ONE tool call. Absent means DEFAULT_TOOL_TIMEOUT_MS.
 
 
 
 	// ── Lifecycle (system-stamped) ──────────────────────────────────────────────
 	installed:     boolean;               // has been installed into the active app
-	exposed:       boolean;               // is the tool surface exposed to the model's context (the user toggle — NOT a power switch)
+	exposed:       boolean;               // the user's toggle for the tool surface exposed to the model; NOT a power switch
 	promoted_at?:     string;             // ISO 8601 — set at promotion; the drift signal
 	build?:           string;             // content stamp: <promoted timestamp>+<sha8 of dist/index.js> — changes whenever the bundle does
 	installed_at?:    string;             // ISO 8601 — set at installation
@@ -116,15 +76,12 @@ export interface ServerManifest {
 }
 
 /**
- * A server's self-declared config surface — what the app's config screen renders under its package seam.
- * Mirrors the app-layer `ConfigSurface` (starmind shared/SettingType) STRUCTURALLY; kept self-contained
- * here because kcd_sdk sits below the app and cannot import its UI types. The renderer re-reads it as a
- * real ConfigSurface. Two ways to declare config, same as the app's surface:
+ * A server's self-declared config surface, rendered by the app's config screen under its package seam. Mirrors the app's
+ * `ConfigSurface` (starmind shared/SettingType) structurally, because kcd_sdk sits below the app and cannot import its UI
+ * types. Two ways to declare config:
  *
- *  - `surface` names a BESPOKE renderer component (e.g. 'semantic_browser' for a whitelist editor) — used
- *    when the config is structured (a list of records) and a flat field list can't express it.
- *  - `fields` is the FLAT typed-field path — a list of primitive tunables the generic renderer draws.
- *    (Deferred wiring: no package uses it yet; the bespoke surface covers the first case.)
+ *  - `surface` names a BESPOKE renderer component, for structured config a flat field list cannot express.
+ *  - `fields` is the FLAT typed-field path: primitive tunables the generic renderer draws.
  *
  * Absent = the package exposes documentation only.
  */

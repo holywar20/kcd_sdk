@@ -1,37 +1,16 @@
 import type { ArtifactType } from '../primitives/types'
 
 /**
- * VaultLayout — the canonical KCD directory structure, defined once, in code.
+ * VaultLayout — the canonical KCD directory structure, defined once. Classification, the index whitelist and the
+ * generated `vault-layout` reference all derive from this table, and it describes EMPTY structure only: filling a
+ * vault is `InstallManifest`'s job. Node-free, so the renderer reads the same structure as the main process.
  *
- * The layout used to be written down three times — the SDK's path classifier, the library index's
- * whitelist, and a hand-drawn deployment canvas — and the three had already drifted apart. This
- * table is the single definition all of them derive from: classification, the index whitelist, and
- * the generated `vault-layout` reference. Filling a vault's CONTENTS is `InstallManifest`'s job, not
- * this table's — a vault used to carry its own canonical mirror under a `kcd` row here, but "canonical
- * is not deployed": the framework's master copy lives in the installed package now, and this table
- * only ever describes empty structure.
- *
- * Node-free by design. It is pure data plus string math, so the renderer reads the same structure
- * the main process and the deploy step do.
- *
- * Growing the layout is one row. A directory NOT listed here classifies `unknown` and is never
- * indexed — absence is the safe default, which is what keeps the whitelist meaningful.
+ * Growing the layout is one row. A directory NOT listed classifies `unknown` and is never indexed — absence is the
+ * safe default, which is what keeps the whitelist meaningful.
  */
 
-/**
- * The two deployment layers left once the substrate moved into the package: `agent` = the
- * Know+Care+Do artifacts an agent is built FROM; `data` = everything a project produces.
- *
- * `agent` NAMES THE LAYER, NEVER THE ARTIFACT. Nothing in this folder is an agent: a lens is a
- * personality, a habit is a behaviour fragment, and an analyzer or generator is a SKILL — internal
- * names for kinds of thing we do, and at the end of the day just skills ( Bryan, 2026-09-16 ). The
- * two `purpose` strings below used to call them agents outright, which is what this note replaces;
- * it cost a todo built on the premise that the vault held a second kind of actor needing its own
- * runnable variant and a manifest-handing mechanism.
- *
- * Nothing reads `layer` — it is a grouping label for readers and for the deploy scaffold's ordering,
- * which is exactly why a wrong word in it went unchallenged.
- */
+/** `agent` is the Know+Care+Do layer, `data` what a project produces. `agent` NAMES THE LAYER, NEVER THE ARTIFACT:
+ *  nothing here is an actor. `layer` is a grouping label, not a behaviour switch. */
 export type VaultLayer = 'agent' | 'data'
 
 /** One directory of the canonical layout. */
@@ -44,60 +23,24 @@ export interface LayoutEntry {
 	layer: VaultLayer
 	/** Whether the library index descends into it. */
 	indexed: boolean
-	/** Retired content — still shipped, still linkable, but NOT graded.
-	 *
-	 *  Deliberately distinct from `indexed: false`. Ephemeral means "not installed into a vault at
-	 *  all", which is why protocol §1.1 forbids linking into it. Archival means the opposite on that
-	 *  axis: the content ships and live artifacts legitimately link to it for provenance. What it
-	 *  stops being is held to the CURRENT standard — a document retired under an older one is a
-	 *  historical record, and grading it reports a category error rather than a defect.
-	 *
-	 *  Matched by LONGEST PREFIX rather than top-level segment, so a nested bucket can be archival
-	 *  while its parent stays graded. That is the whole reason the flag exists separately. */
+	/** Retired content: still shipped and linkable for provenance, but NOT graded. Distinct from `indexed: false`,
+	 *  which means not installed and illegal to link into. LONGEST PREFIX, so a nested bucket can be archival. */
 	archival?: boolean
-	/** Machine-written state that must SURVIVE a sweep of the directory it sits in — durable content in
-	 *  otherwise disposable space.
-	 *
-	 *  A THIRD INDEPENDENT CLAIM, and it is independent of both flags above ( TASK-732, 2026-10-05 ).
-	 *  `indexed: false` says *nothing validates links into here*; durability says *this may not be
-	 *  deleted at will*. Those are different facts, and `ephemeralDirs()` derives the first from
-	 *  `indexed` while nothing anywhere derived the second — so a directory that was merely unindexed
-	 *  read as disposable to every human and agent who looked at it. The seven audit analyzers keep
-	 *  their coverage ledgers under `audits/ledgers`, declared in each analyzer as a durable
-	 *  Input/Output, and `audit-doc-truth.json` went missing between a 2026-09-22 run and the next one.
-	 *
-	 *  A DURABLE ROW IS STILL EPHEMERAL ON THE LINK AXIS, deliberately. A ledger is machine state, not a
-	 *  document: it stays unindexed, ungraded and illegal to link into ( §1.1 ). Protecting it from
-	 *  deletion must not make it citable, which is why this is a separate flag and not a flip of
-	 *  `indexed`.
-	 *
-	 *  Matched by LONGEST PREFIX, like `archival` and unlike `ephemeralDirs`'s top-segment collapse:
-	 *  the point is that a nested bucket differs from its parent. `audits/` stays disposable; only
-	 *  `audits/ledgers` does not. */
+	/** Machine state that must SURVIVE a sweep of the directory it sits in. Independent of `indexed`: a durable row is
+	 *  still unindexed and illegal to link, so protecting it from deletion must not make it citable. LONGEST PREFIX. */
 	durable?: boolean
-	/** The document types this directory ACCEPTS on a write, when that is broader than the single type
-	 *  it implies. Absent ⇒ exactly `[ type ]`, which is the common case.
-	 *
-	 *  This exists because "what is here" and "may this land here" are different questions, and a write
-	 *  guard that answers the first cannot answer the second. `utilities/` implies `utility`, which is not
-	 *  a document type at all — so without this the directory would accept no document, and the registry
-	 *  that belongs there could never be written. Collapsing the two questions into one equality check is
-	 *  what made a valid on-disk document impossible to save back. */
+	/** The document types this directory ACCEPTS on a write, when broader than the type it implies. Absent ⇒ `[ type ]`.
+	 *  "What is here" and "may this land here" are different questions; a write guard has to answer the second. */
 	accepts?: readonly ArtifactType[]
-	/** Where this directory's documents are DRAFTED before they land here — a path under ephemeral space
-	 *  where `*` matches any one folder ( one per lens ). The directory's nav-index lists what it finds
-	 *  there as ADDRESSES in a section of their own: a draft authorizes nothing, and a link into ephemeral
-	 *  space asserts an occupancy the vault cannot promise ( protocol §1.1 ). */
+	/** Where this directory's documents are DRAFTED before landing here: a path under ephemeral space, `*` = one per lens.
+	 *  A draft authorizes nothing and is listed as an ADDRESS only (protocol §1.1). */
 	drafts?: string
 	/** The one-line description the generated reference publishes. */
 	purpose: string
 }
 
-/**
- * The table. Order is presentation only — `entryFor` matches the LONGEST directory prefix, so
- * `kcd/templates` beats `kcd` regardless of where either sits here. That means adding a row can
- * never silently change how an existing one classifies.
- */
+/** Order is presentation only: `entryFor` matches the LONGEST directory prefix, so adding a row never silently
+ *  changes how an existing one classifies. */
 const LAYOUT: readonly LayoutEntry[] = [
 
 	// ── Agent layer — the Know + Care + Do artifacts an agent is composed from ──
@@ -120,9 +63,8 @@ const LAYOUT: readonly LayoutEntry[] = [
 
 	// ── Data / output layer — what a project accumulates as it runs ──
 	{
-		// No `accepts` row: every document here is a `reference`. The subfolders ARE the categories, and
-		// there is deliberately no type per category — `note` and `how-to` briefly had one and were
-		// retired for exactly that reason ( see ArtifactType ).
+		// No `accepts` row: every document here is a `reference`. The subfolders ARE the categories, so there is
+		// deliberately no type per category ( see ArtifactType ).
 		dir: 'references', type: 'reference', layer: 'data', indexed: true,
 		purpose: 'The project knowledge store, categorized by folder — the folder IS the category.'
 	},
@@ -132,9 +74,8 @@ const LAYOUT: readonly LayoutEntry[] = [
 	},
 	{
 		dir: 'utilities', type: 'utility', layer: 'data', indexed: true,
-		// `utility` is not a document type — the protocol says so outright — so a directory implying it
-		// accepts NO document at all unless this says otherwise. The registry the purpose line names is a
-		// document about utilities, which is a reference.
+		// `utility` is not a document type, so without `accepts` this directory would accept no document at all.
+		// The registry the purpose line names is a reference.
 		accepts: [ 'utility', 'reference', 'nav-index' ],
 		purpose: 'The registered tool tier — draft/ (unapproved) and deployed/ (approved), with a registry.'
 	},
@@ -143,39 +84,27 @@ const LAYOUT: readonly LayoutEntry[] = [
 		purpose: 'Promoted plans that authorize action, plus the plans_complete/ and plans_deferred/ buckets beneath.'
 	},
 	{
-		// Nested and ARCHIVAL, not ephemeral — the distinction is load-bearing. Retired plans are linked
-		// from live artifacts for provenance ( 23 of them at last count, 50 link sites in the plans
-		// nav-index alone ), so putting them in ephemeral space would make every one of those links
-		// illegal under §1.1. They ship; they are simply not graded.
+		// Nested and ARCHIVAL, not ephemeral: live artifacts link retired plans for provenance, and ephemeral space
+		// would make every one of those links illegal under §1.1. They ship; they are simply not graded.
 		dir: 'plans/plans_complete', type: 'plan', layer: 'data', indexed: true, archival: true,
 		purpose: 'Retired plans, kept as a historical record. Shipped and linkable, but never graded — the standard they were written against has moved on.'
 	},
 	{
-		// Archival for the OPPOSITE reason to plans_complete: not "the standard moved on after this was
-		// written" but "this has not been brought up to standard yet". A deferred plan is a draft in
-		// churn — many are abandoned rather than finished — so grading it reports what everyone already
-		// knows and makes a clean vault harder to reach for no gain.
-		//
-		// THE WALL IS AT THE EXIT, NOT THE ENTRANCE. A deferred plan is graded when it is promoted OUT
-		// of here, which is the moment before it authorizes anything; until then it authorizes nothing.
-		// Grading it earlier buys no safety. And the exclusion binds only the unscoped sweep — anyone
-		// who wants a verdict on a parked draft names the file and gets one.
+		// Archival for the OPPOSITE reason to plans_complete: a parked draft is in churn, not yet at standard.
+		// THE WALL IS AT THE EXIT: graded when promoted out, and only an unscoped sweep skips it while it sits.
 		dir: 'plans/plans_deferred', type: 'plan', layer: 'data', indexed: true, archival: true,
 		purpose: 'Parked drafts, kept in case they come back. Shipped and linkable, but never graded — a draft in churn is held to the standard when it is promoted out, not while it sits.'
 	},
 	{
-		// `data`, not `agent`: a partial is never composed INTO an agent. It is appended after context
-		// compilation as part of the user message, which is exactly why it sits with what a project produces
-		// rather than with what an agent is built from.
+		// `data`, not `agent`: a partial is never composed INTO an agent. It is appended after context compilation,
+		// as part of the user message.
 		dir: 'prompts', type: 'prompt-partial', layer: 'data', indexed: true,
 		purpose: 'Reusable prompt wording a human fills in — the text a task sends, kept where it can be read and edited.'
 	},
 
 	// ── Data / output layer, untyped ──
-	// Real, expected directories that hold no governed artifacts. Listed rather than omitted so a
-	// deploy knows to create them and the index knows to skip them — a directory absent from this
-	// table is genuinely unrecognized, which is a different and useful signal. Agentic work generates
-	// drift and throwaway content fast; these are where it is allowed to land.
+	// Real directories holding no governed artifacts, listed so a deploy creates them. Absence from this table
+	// means unrecognized, which is a different signal.
 	{
 		dir: 'work', type: 'unknown', layer: 'data', indexed: false,
 		purpose: 'Per-lens scratch space (AI/, human/, plans/). Cheap and discardable until something is promoted out of it.'
@@ -185,9 +114,7 @@ const LAYOUT: readonly LayoutEntry[] = [
 		purpose: 'Per-lens todo/ and agent-status/, plus raw chat capture. What happened is the action log, a table, not a file here.'
 	},
 	{
-		// `type: 'audit'` until 2026-10-03, when that type was retired ( Bryan ): an audit produces a
-		// searchable note, not a document. `unknown` puts this row beside `logs`, `audits` and `scratch` —
-		// a real directory holding no governed artifact — rather than inventing anything for it.
+		// `unknown` is deliberate: an audit produces a searchable note, not a governed document.
 		dir: 'reports', type: 'unknown', layer: 'data', indexed: false,
 		purpose: 'Being emptied. Held analyzer output under fixed, undated names until audits became searchable notes rather than documents; nothing governed lands here now.'
 	},
@@ -200,15 +127,8 @@ const LAYOUT: readonly LayoutEntry[] = [
 		purpose: 'Generator raw output and vault backups. Deliberately unindexed — backup copies here are what made the library accrue duplicate references. Disposable, EXCEPT ledgers/ beneath it.'
 	},
 	{
-		// DURABLE INSIDE DISPOSABLE SPACE, and the nesting is the point ( TASK-732, 2026-10-05 ). Seven
-		// analyzers — audit-backlog, audit-dead-code, audit-defects, audit-doc-truth,
-		// audit-renderer-defects, audit-renderer-perf, audit-tests — each declare a ledger here as a
-		// durable Input/Output, loaded in Phase 1 and updated as each unit finishes. Nothing distinguished
-		// one from scratch, and `audit-doc-truth.json` disappeared between a 2026-09-22 run and the next.
-		//
-		// `indexed: false` IS LEFT EXACTLY AS IT WAS. A ledger is machine state and must not become a link
-		// target; what changed is only that deleting it is now declared off-limits. See `durable` above
-		// for why that had to be a separate flag rather than a flip of this one.
+		// Durable inside disposable `audits/`, and the nesting is the point. `indexed: false` stays: a ledger is
+		// machine state, never a link target; `durable` only forbids deleting it.
 		dir: 'audits/ledgers', type: 'unknown', layer: 'data', indexed: false, durable: true,
 		purpose: 'Analyzer coverage ledgers — durable state the audit analyzers read and rewrite across runs. Unindexed and never a link target, like the rest of audits/, but NOT disposable: these carry what has already been audited.'
 	},
@@ -221,20 +141,15 @@ const LAYOUT: readonly LayoutEntry[] = [
 		purpose: 'The dev command deck — JSON-declared scripts run against the project, not governed artifacts.'
 	},
 	{
-		// TASK-183. Plain HTML research reports, each with its own masthead, meta panel and
-		// research.css — never authored against the KCD Document Protocol and never meant to be:
-		// no carries no <article data-kcd> root, by design. Declared here, unindexed, on the same
-		// footing as work/ and scratch/, so a vault-wide sweep stops treating this corpus as
-		// candidate KCD content and reporting every file in it as a parse failure.
+		// Plain HTML reports with no `<article data-kcd>` root, by design. Unindexed so a vault-wide sweep does not
+		// report them as parse failures.
 		dir: 'research', type: 'unknown', layer: 'data', indexed: false,
 		purpose: 'Sourced research reports and their templates — plain HTML, styled by research.css, never KCD artifacts.'
 	}
 
 ]
 
-/** Framework-layer documents that live directly at vault root — `InstallManifest` deploys them
- *  there, but they sit outside every `LAYOUT` directory row, so `classify` special-cases them the
- *  same way it does `NAV_INDEX_FILE`. */
+/** Framework documents at vault root, outside every `LAYOUT` row; `classify` special-cases them like `NAV_INDEX_FILE`. */
 const FRAMEWORK_ROOT_FILES = [ 'root.html', 'root-context.html', 'kcd_framework.html' ]
 
 /** Path depth at which a file under `lenses/` stops being the lens itself: `lenses/{name}/{file}`
@@ -243,35 +158,14 @@ const LENS_MAX_DEPTH = 3
 
 export class VaultLayout {
 
-	/** The filename that IS a nav-index, wherever it sits — the name carries the type, so a nav-index
-	 *  under any other filename is not one. Public because three places had their own copy of the
-	 *  string; the table that owns the taxonomy should own this too. */
+	/** The filename that IS a nav-index, wherever it sits: the name carries the type. Public, so no copy is kept. */
 	static readonly NAV_INDEX_FILE = 'nav-index.html'
 
-	/**
-	 * The vault folder's name WHEN NOBODY DECLARED ONE. A default, never a fact — the folder may be
-	 * `_Claude`, `_kcd`, `_Gemini`, anything the project chose.
-	 *
-	 * ONE literal, here, because this file previously spelled it five times as a parameter default and
-	 * two other modules kept private copies. Every one of those was a place the default could be
-	 * changed in isolation and a place a reader could mistake for an assertion. `LensObject` re-exports
-	 * this rather than restating it.
-	 */
+	/** The vault folder's name WHEN NOBODY DECLARED ONE: a default, never a fact. Defined once, here. */
 	static readonly DEFAULT_DOC_ROOT = '_Claude'
 
-	/**
-	 * Text authored against the DEFAULT doc root, retargeted at the vault it is actually landing in.
-	 *
-	 * The bundled corpus hardcodes `_Claude/…` in every internal link — 281 occurrences across 42
-	 * documents — so installing it verbatim into a vault called anything else produces a library whose
-	 * links all point at a folder that is not there. Measured on a fresh `--doc-root _kcd` install:
-	 * 111 dangling-link warnings, and every single warning was this.
-	 *
-	 * Identity when the vault IS the default, so the ordinary install is untouched and this cannot
-	 * misfire on it. Where the vault is NOT the default, every occurrence of the default in bundled
-	 * text is wrong by construction — the corpus is talking about its own vault, and that vault has a
-	 * different name here.
-	 */
+	/** Text authored against the DEFAULT doc root, retargeted at the vault it lands in. Identity for the default,
+	 *  so the ordinary install is untouched; anywhere else, every occurrence of the default is wrong by construction. */
 	static retargetDocRoot( text: string, docRoot: string ): string {
 		if( !docRoot || docRoot === VaultLayout.DEFAULT_DOC_ROOT ) return text
 		return text.split( VaultLayout.DEFAULT_DOC_ROOT ).join( docRoot )
@@ -282,11 +176,8 @@ export class VaultLayout {
 		return LAYOUT
 	}
 
-	/**
-	 * The row governing a vault-relative path ( the part BELOW the doc root ), or null when nothing
-	 * owns it. Longest matching directory prefix wins, so a more specific row always beats a shorter
-	 * one it also sits under.
-	 */
+	/** The row governing a path BELOW the doc root, or null. Longest directory prefix wins, so a more specific
+	 *  row always beats a shorter one it sits under. */
 	static entryFor( sub: string ): LayoutEntry | null {
 		const norm = sub.replace( /\\/g, '/' )
 		let best: LayoutEntry | null = null
@@ -298,14 +189,8 @@ export class VaultLayout {
 		return best
 	}
 
-	/**
-	 * A vault-root-relative path ( `_Claude/...` ) to its artifact type — the one path taxonomy.
-	 *
-	 * Four rules run before the table, because none of them is decided by which folder a file sits
-	 * in: a nav-index is a nav-index anywhere; a root-level framework file is `framework` regardless
-	 * of the table; a `context/` descendant is support material for whatever owns it; and inside
-	 * `lenses/`, only the lens's own file is the lens. Everything else is the table.
-	 */
+	/** A vault-root-relative path to its artifact type. Four rules run before the table, none decided by folder:
+	 *  a nav-index anywhere, a framework file at root, `context/` as support material, inside `lenses/` only the lens file. */
 	static classify( relPath: string, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): ArtifactType {
 		const norm = relPath.replace( /\\/g, '/' )
 		if( !norm.startsWith( docRoot + '/' ) ) return 'unknown'
@@ -322,15 +207,8 @@ export class VaultLayout {
 		return entry.type
 	}
 
-	/**
-	 * Every document type that may legally be WRITTEN at this path — the write-time counterpart of
-	 * `classify`. Classification answers "what is here"; this answers "what may land here", and the two
-	 * differ wherever a directory holds a family rather than a single type.
-	 *
-	 * Always includes what `classify` returns, so the two can never disagree about the obvious case. An
-	 * empty array means anything goes: `unknown` is scratch space, and scratch that refused writes would
-	 * be useless.
-	 */
+	/** Types that may legally be WRITTEN here: the write-time counterpart of `classify`, always including its answer.
+	 *  An empty array means anything goes; `unknown` is scratch, and scratch that refused writes would be useless. */
 	static acceptedTypes( relPath: string, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): readonly ArtifactType[] {
 		const implied = VaultLayout.classify( relPath, docRoot )
 		if( implied === 'unknown' ) return []
@@ -342,20 +220,13 @@ export class VaultLayout {
 		return extra.includes( implied ) ? extra : [ implied, ...extra ]
 	}
 
-	/**
-	 * May a document declaring `declared` be written at this path? The one question a write guard should
-	 * ask. An empty accepted set is untyped space and takes anything.
-	 */
+	/** May a document declaring `declared` be written at this path? The one question a write guard should ask. */
 	static accepts( relPath: string, declared: ArtifactType, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): boolean {
 		const allowed = VaultLayout.acceptedTypes( relPath, docRoot )
 		return allowed.length === 0 || allowed.includes( declared )
 	}
 
-	/**
-	 * The top-level directory names the library index descends into — the scanner's whitelist gates
-	 * only immediate children of the doc root, so a nested indexed row ( `kcd/templates` ) folds into
-	 * its top-level segment ( `kcd` ) rather than appearing on its own.
-	 */
+	/** Top-level directory names the library index descends into; a nested indexed row folds into its top segment. */
 	static indexedDirs(): string[] {
 		const out = new Set<string>()
 		for( const entry of LAYOUT ) {
@@ -365,14 +236,8 @@ export class VaultLayout {
 		return [ ...out ]
 	}
 
-	/**
-	 * The inverse of `indexedDirs` — scratch and output space. These directories are not part of the
-	 * library and are NOT installed into a user's vault, so occupancy inside them can never be
-	 * asserted. Protocol §1.1 therefore forbids a link into one; an address is the correct encoding.
-	 *
-	 * Derived from the registry rather than written out, so the ban tracks the layout automatically
-	 * and there is no second list to keep in step.
-	 */
+	/** The inverse of `indexedDirs`: scratch and output space, never installed, so no occupancy can be asserted.
+	 *  Protocol §1.1 forbids a link into one; an address is the encoding. Derived from the registry: no second list. */
 	static ephemeralDirs(): string[] {
 		const indexed = new Set( VaultLayout.indexedDirs() )
 		const out = new Set<string>()
@@ -383,25 +248,14 @@ export class VaultLayout {
 		return [ ...out ]
 	}
 
-	/**
-	 * The directories holding retired content — shipped and linkable, but not graded.
-	 *
-	 * Unlike `ephemeralDirs`, these are NOT collapsed to a top-level segment. The point of an archival
-	 * row is that a nested bucket differs from its parent, so the full declared prefix is what matters:
-	 * collapsing would archive `plans/` whole, or nothing at all.
-	 */
+	/** The directories holding retired content: shipped and linkable, not graded. NOT collapsed to a top segment,
+	 *  unlike `ephemeralDirs`: collapsing would archive `plans/` whole, not just its retired bucket. */
 	static archivalDirs(): string[] {
 		return LAYOUT.filter( e => e.archival ).map( e => e.dir )
 	}
 
-	/**
-	 * Does this path land in archival space? LONGEST-PREFIX match on the doc-root-anchored remainder,
-	 * using the same anchoring `isEphemeralHref` does — so an href ( `_Claude/plans/plans_complete/x` ),
-	 * a vault-relative path, and an absolute file path all answer alike.
-	 *
-	 * A path is archival if it IS a declared directory or sits beneath one. Segment-boundary matching,
-	 * never bare `startsWith`: `plans/plans_completed-notes` must not match `plans/plans_complete`.
-	 */
+	/** Is this path archival? Segment-boundary prefix match on the doc-root-anchored remainder, so an href and an absolute
+	 *  path answer alike. Never bare `startsWith`: `plans/plans_completed-notes` must not match `plans/plans_complete`. */
 	static isArchivalPath( href: string, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): boolean {
 		const parts  = href.replace( /\\/g, '/' ).replace( /^\.\//, '' ).split( '/' ).filter( p => p !== '' )
 		const anchor = parts.lastIndexOf( docRoot )
@@ -409,28 +263,14 @@ export class VaultLayout {
 		return VaultLayout.archivalDirs().some( d => rel === d || rel.startsWith( d + '/' ) )
 	}
 
-	/**
-	 * The directories holding durable machine state — content that must survive a sweep of the space it
-	 * sits in. NOT collapsed to a top-level segment, for the same reason `archivalDirs` is not: the whole
-	 * point of a durable row is that it differs from its disposable parent.
-	 *
-	 * THE ONE PLACE TO ASK. Anything that cleans, resets or empties part of a vault reads this rather
-	 * than deciding for itself, so there is no second list to fall out of step. `VaultDeploy` deletes
-	 * nothing at all today, which is why this currently has no enforcement caller — the declaration and
-	 * its fences exist so that the next thing which DOES delete has somewhere to look, rather than
-	 * rediscovering the hazard by destroying a ledger.
-	 */
+	/** The directories holding durable machine state, NOT collapsed to a top segment. THE ONE PLACE TO ASK: anything
+	 *  that cleans or empties part of a vault reads this rather than keeping a second list. */
 	static durableDirs(): string[] {
 		return LAYOUT.filter( e => e.durable ).map( e => e.dir )
 	}
 
-	/**
-	 * Does this path hold durable state? Same longest-prefix, doc-root-anchored matching as
-	 * `isArchivalPath`, so an href, a vault-relative path and an absolute file path all answer alike.
-	 *
-	 * Segment-boundary matching, never bare `startsWith`: a sibling named `audits/ledgers-old` is a
-	 * different directory and is NOT protected by the `audits/ledgers` row.
-	 */
+	/** Does this path hold durable state? Same matching as `isArchivalPath`. Segment-boundary, never bare `startsWith`:
+	 *  a sibling `audits/ledgers-old` is a different directory and is NOT protected by the `audits/ledgers` row. */
 	static isDurablePath( href: string, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): boolean {
 		const parts  = href.replace( /\\/g, '/' ).replace( /^\.\//, '' ).split( '/' ).filter( p => p !== '' )
 		const anchor = parts.lastIndexOf( docRoot )
@@ -438,21 +278,12 @@ export class VaultLayout {
 		return VaultLayout.durableDirs().some( d => rel === d || rel.startsWith( d + '/' ) )
 	}
 
-	/**
-	 * Does a project-root-relative href land in ephemeral space? Hrefs resolve against the PROJECT
-	 * root ( `resolveHref` ), so a vault target carries its doc-root segment — `_Claude/work/x` — and
-	 * that segment is stripped before the first path element is judged.
-	 *
-	 * TOP-LEVEL segment only, deliberately — contrast `isArchivalPath` above, which matches the longest
-	 * declared prefix. The two exclusions are not interchangeable: ephemeral content never ships and may
-	 * not be linked into ( §1.1 ); archival content ships and must stay linkable.
-	 */
+	/** Does a project-root-relative href land in ephemeral space? Judged on the element after the doc-root segment.
+	 *  TOP-LEVEL only, deliberately: ephemeral may not be linked into (§1.1), archival must stay linkable. */
 	static isEphemeralHref( href: string, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): boolean {
 		const parts = href.replace( /\\/g, '/' ).replace( /^\.\//, '' ).split( '/' ).filter( p => p !== '' )
 
-		// Accepts both an href ( `_Claude/work/x` ) and an absolute file path
-		// ( `C:/…/_Claude/work/x` ), by anchoring on the doc-root segment wherever it appears. Without
-		// the anchor the leading segment is taken as-is, which is the plain relative-href case.
+		// Anchors on the doc-root segment wherever it appears, so an href and an absolute path answer alike.
 		const anchor = parts.lastIndexOf( docRoot )
 		const top    = anchor >= 0 ? parts[ anchor + 1 ] : parts[ 0 ]
 

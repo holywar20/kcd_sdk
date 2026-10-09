@@ -4,20 +4,8 @@ import { LensObject } from '../core'
 
 /**
  * VaultSnapshot — one copy of a vault, kept aside so a destructive operation has an undo.
- *
- * ONE SLOT, DELIBERATELY. This is not version control and must not grow into it: a project gets a
- * single folder, the copy in it is overwritten by the next snapshot, and the only thing offered on
- * top of it is "put it back". The moment it holds a history it acquires a browser, a diff, a pruning
- * policy and a story about which generation you meant — which is git, and git already exists. A vault
- * that matters is usually IN a repository; this is the courtesy for the one that is not.
- *
- * `.git` IS NEVER TOUCHED, in either direction, and that single rule carries most of the safety here.
- * A vault is very often its own repository, and the repository is worth more than any copy this could
- * make of it — 48 MB of history against 11 MB of documents, in the case that prompted this. So a
- * snapshot does not copy it ( the payload would be five-sixths git objects for no gain ), and a clear
- * does not delete it. What that buys is better than the snapshot: on a versioned vault the real undo
- * is `git checkout .`, with every generation rather than one, and a reinstall lands back inside the
- * same repository so the change is a diff the owner can read.
+ * ONE SLOT, DELIBERATELY: this is not version control and must not grow into it — that is git.
+ * `.git` IS NEVER TOUCHED, in either direction; that single rule carries most of the safety here.
  */
 
 /** What is in a project's snapshot slot. `exists: false` is the answer for a project that has never
@@ -26,9 +14,8 @@ export interface SnapshotInfo {
 	/** The slot's folder, whether or not anything is in it. */
 	path:   string
 	exists: boolean
-	/** When the copy was taken, epoch milliseconds — 0 when there is none. Milliseconds rather than an ISO
-	 *  string because that is the time currency every other stamp in this codebase already carries, and a
-	 *  second spelling of "when" is a conversion at every reader. */
+	/** When the copy was taken, epoch milliseconds — 0 when there is none. Milliseconds, like every
+	 *  other stamp in the codebase. */
 	taken:  number
 	/** The doc root the copy was taken from — a vault restored into a differently-named folder would be
 	 *  a vault full of links to the wrong place, so a restore checks this rather than assuming. */
@@ -47,8 +34,7 @@ const STAMP = 'snapshot.json'
 
 export class VaultSnapshot {
 
-	/** What is in the slot, without reading the tree — the stamp carries the counts so a card can report
-	 *  "taken yesterday, 398 files" without walking eleven megabytes to find out. */
+	/** What is in the slot, without reading the tree: the stamp carries the counts, so nothing walks the copy. */
 	static read( slot: string ): SnapshotInfo {
 		const empty: SnapshotInfo = { path: slot, exists: false, taken: 0, docRoot: '', files: 0, bytes: 0 }
 		const stamp = path.join( slot, STAMP )
@@ -70,14 +56,8 @@ export class VaultSnapshot {
 	}
 
 	/**
-	 * Copy the vault into the slot, replacing whatever was there.
-	 *
-	 * The old copy is destroyed BEFORE the new one is written, rather than merged over it, because a
-	 * merge would leave files from two different vaults in one folder and call the result a snapshot.
-	 * One slot means one moment in time.
-	 *
-	 * Returns the stamp it wrote. A vault that does not exist yields an empty slot rather than throwing:
-	 * there was nothing to lose, which is a fine outcome for a backup.
+	 * Copy the vault into the slot, replacing whatever was there. The old copy is destroyed BEFORE the new
+	 * one is written, never merged: a merge would leave two vaults' files in one folder.
 	 */
 	static take( projectRoot: string, slot: string, opts?: { docRoot?: string } ): SnapshotInfo {
 		const docRoot = opts?.docRoot || LensObject.DEFAULT_DOC_ROOT
@@ -103,15 +83,8 @@ export class VaultSnapshot {
 	}
 
 	/**
-	 * Put the copy back, replacing the vault's current contents.
-	 *
-	 * A restore CLEARS FIRST and then copies, which makes it a true return to the snapshot rather than a
-	 * merge: a file created after the snapshot was taken is gone afterwards, which is the only reading of
-	 * "put it back" that is not a lie. `.git` survives, as everywhere here.
-	 *
-	 * False when there is nothing to restore, or when the copy was taken from a different doc root — the
-	 * bundled text is retargeted at the vault it was installed into, so dropping a `_Claude` snapshot into
-	 * a `_kcd` vault would install a library of links to a folder that is not there.
+	 * Puts the copy back over the vault, after clearing it so nothing created since the snapshot survives.
+	 * False when there is nothing to restore or the doc root differs: a `_Claude` copy in a `_kcd` vault would be dead links.
 	 */
 	static restore( slot: string, projectRoot: string, opts?: { docRoot?: string } ): boolean {
 		const docRoot = opts?.docRoot || LensObject.DEFAULT_DOC_ROOT
@@ -127,12 +100,8 @@ export class VaultSnapshot {
 	}
 
 	/**
-	 * Empty the vault, keeping the folder and anything in `PRESERVE`.
-	 *
-	 * The FOLDER stays. A vault is an address other things hold — the doc root on the project row, an
-	 * agent's lens path, a person's editor — and removing the directory itself would break those in a way
-	 * that emptying it does not. What a person means by "remove the documentation" is that the documents
-	 * are gone, not that the mount point is.
+	 * Empty the vault, keeping the folder and anything in `PRESERVE`. The folder stays because a vault is an
+	 * address other things hold — the project row, an agent's lens path, a person's editor.
 	 */
 	static clear( projectRoot: string, opts?: { docRoot?: string } ): number {
 		const docRoot = opts?.docRoot || LensObject.DEFAULT_DOC_ROOT

@@ -12,8 +12,7 @@ import type { ReaderFn } from '../core';
 export const fsReader: ReaderFn = ( absPath ) => fs.readFileSync( absPath, 'utf-8' );
 
 /**
- * Walk up from a start path until an ancestor contains the doc root. Disk discovery, so
- * it lives node-side (it was a LensObject static; moved here when core lost `fs`).
+ * Walk up from a start path until an ancestor contains the doc root. Disk discovery, so it lives node-side.
  */
 export function inferProjectRoot( startPath: string, docRoot = LensObject.DEFAULT_DOC_ROOT ): string {
 	let dir = path.dirname( path.resolve( startPath ) );
@@ -27,17 +26,9 @@ export function inferProjectRoot( startPath: string, docRoot = LensObject.DEFAUL
 }
 
 /**
- * Walk up from a start path to the nearest directory holding a `package.json` — "which package am I
- * part of?".
- *
- * The companion to `inferProjectRoot` above, and the answer to a different question: that one finds the
- * WORKSPACE by its vault, this one finds the PACKAGE by its manifest. Reach for this whenever code needs
- * a path inside its own project, because the alternative is counting directories up and naming a folder
- * on the way back down — an assertion about the tree's shape that nothing checks and that a differently
- * named checkout silently invalidates.
- *
- * Throws rather than falling back. A guessed root can name a directory that exists but belongs to someone
- * else, and writing to the wrong tree while reporting success is worse than not starting.
+ * The package root by its `package.json` — the counterpart to `inferProjectRoot`, which finds the workspace by its vault.
+ * Use this for any path inside its own project, never directory counting. Throws rather than falling back: a guessed
+ * root can name someone else's directory.
  */
 export function findPackageRoot( startPath: string ): string {
 	let dir = path.resolve( startPath );
@@ -51,7 +42,7 @@ export function findPackageRoot( startPath: string ): string {
 
 /**
  * Dredge a lens from disk with the real fs reader injected — the node-side convenience so
- * main never hand-wires `fs` into LensObject.load. projectRoot is inferred if not given.
+ * main never hand-wires `fs` into LensObject.load.
  */
 export function loadLensFromDisk( lensPath: string, opts?: { projectRoot?: string; docRoot?: string; depth?: number; eager?: boolean } ): LensObject {
 	const projectRoot = opts?.projectRoot ?? inferProjectRoot( lensPath );

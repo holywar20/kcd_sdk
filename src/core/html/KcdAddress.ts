@@ -1,15 +1,8 @@
 /**
- * KcdAddress — the addressing-contract vocabulary, defined ONCE.
- *
- * This is the closed `data-kcd-*` world from the KCD Document Protocol §1–§3, expressed as small
- * total functions over an HtmlTree node. It is the SHARED layer: KcdValidate asks it "is this a
- * conforming field?"; KcdParse asks it "what is this field's value?". The field-type validators
- * ( FIELD ) and the closed sets live here, not inside either head — the protocol's promise ( §1.6 )
- * that the same `data-kcd-type` vocabulary drives document validation AND the inline editor's
- * SettingField controls is only real if there is one definition.
- *
- * It owns NO policy ( "is `description` required?" is the validator's business ) — only the grammar:
- * what the components are, what a field's value IS, and whether a raw value satisfies its type.
+ * KcdAddress — the addressing-contract vocabulary, defined ONCE and shared by both heads: KcdValidate asks
+ * "is this a conforming field?", KcdParse asks "what is this field's value?". The FIELD validators and the closed
+ * sets live here, not in either head, so `data-kcd-type` drives validation and the editor's SettingField controls alike.
+ * It owns NO policy ("is `description` required?" is the validator's business) — only the grammar.
  */
 
 import { HtmlTree } from './HtmlTree';
@@ -22,63 +15,32 @@ export type FieldValidator = ( v: string ) => boolean;
 export const KcdAddress = new class KcdAddress {
 
 	// ── The closed sets ( protocol §2, §4 ) ──────────────────────────────────────
-	/** `note` and `how-to` were retired 2026-07-30 — they duplicated what the folder already says
-	 *  ( see ArtifactType ). Twelve documents declared one; all became `reference`.
-	 *
-	 *  `audit` was retired 2026-10-03 ( Bryan ): an audit produces a searchable note, not a document.
-	 *  REMOVAL FROM THIS LIST IS THE SHARP EDGE of that retirement, and it is sharper than the type
-	 *  comment implied — `KcdValidate` raises `unknown-type` for a root type absent here, and an error
-	 *  means `KcdParse.parse` THROWS while `tryParse` answers null. A document still declaring `audit`
-	 *  would therefore fail to parse rather than degrade to `unknown`, which is why the twelve audit
-	 *  artifacts were deleted FIRST ( task 385 ) and `query_docs { type: 'audit' }` was confirmed empty
-	 *  before this line changed. The wire is the half that does degrade: an unregistered type hydrates
-	 *  as a bare `KCDPrimitive` ( `KCDPrimitive.hydrateBase` ) and throws nothing. */
+	/** Removing a type from this list is the sharp edge: a root type absent here makes `KcdParse.parse` THROW
+	 *  (`unknown-type`), so retire one only once no document still declares it. */
 	TYPES        = [ 'lens', 'plan', 'reference', 'framework', 'template', 'prompt-partial', 'nav-index', 'habit', 'contract', 'generator', 'analyzer', 'bug-report' ];
 	STATUSES     = [ 'draft', 'active', 'observation', 'composed', 'disabled', 'deployed', 'complete', 'retired', 'paused' ];
 	AUDIENCES    = [ 'human', 'agent', 'both' ];
 	MERGES       = [ 'additive', 'declarative', 'union' ];
-	/** The Know / Care / Do tiers — INTERNAL now. No document carries a `data-kcd-region` wrapper any more
-	 *  ( plan agents-own-behaviour, 2026-09-22 ); the projector still tags blocks with a tier to sort a
-	 *  compile, and `KcdContext` derives it from the section. */
+	/** The Know / Care / Do tiers are INTERNAL — `KcdContext` derives one from the section, never from a wrapper. */
 	REGIONS      = [ 'know', 'care', 'do' ];
 	/** A lens's whole, closed section vocabulary: personality + philosophy + references. Behaviour — habits,
 	 *  tools, contracts — belongs to the agent, and a lens that carries it is refused. */
 	LENS_SECTIONS = [ 'personality', 'philosophy', 'references' ];
 	SLOT_FIELDS  = [ 'what', 'where', 'why' ];
 	PARAM_FIELDS = [ 'name', 'type', 'default', 'description' ];
-	/** The one idiom every routable artifact ( reference, habit, contract, plan, anything else a
-	 *  slot can point at ) shares. Absent on a slot ⇒ 'on', the default. DERIVED from `SLOT_MODES`
-	 *  rather than restated: these were two independent literals until 2026-09-16, so the set the
-	 *  validator graded against could drift from the set the parser read. */
+	/** The one idiom every routable artifact shares. Absent on a slot ⇒ 'on'.
+	 *  Derived from `SLOT_MODES`, not restated: two independent literals let the validator and parser drift. */
 	MODES: string[] = [ ...SLOT_MODES ];
-	/** The §10 SEED modes — a completely separate vocabulary that happens to share the
-	 *  `data-kcd-mode` attribute with slots above. `prepend` maintains a `<!-- kcd:begin/end -->`
-	 *  block inside a host entry file; `create-only` writes the whole file and then never touches it
-	 *  again. Absent ⇒ `prepend` ( see `VaultUtilities.parseSeedsFrom` ).
-	 *
-	 *  Closed and checked HERE because the parse casts the raw attribute straight to the union with no
-	 *  check, and every miss folds to the `prepend` arm: a typo'd `create-only` does not fail, it
-	 *  quietly does the other thing — on the one document the installer reads BEFORE a vault exists,
-	 *  where nobody is watching. Two vocabularies on one attribute is the trap; naming both closes it. */
+	/** A second vocabulary on `data-kcd-mode` (§10 seeds; absent ⇒ `prepend`). Closed here: the parse casts unchecked,
+	 *  and every miss folds to `prepend`, so a typo'd `create-only` silently does the other thing. */
 	SEED_MODES   = [ 'prepend', 'create-only' ];
-	/** The closed slot-KIND vocabulary ( protocol §3 — `data-kcd-slot="<kind>"` ). Dredge roles
-	 *  ( reference / habit / contract / tool / rule ) plus the non-dredge kinds ( `link` = a nav row
-	 *  carrying an href, `table-data` = a plain faux-table row ); `domains` folds into `reference`.
-	 *  Every slot MUST name one — a bare `data-kcd-slot` is invalid ( KcdValidate: `unkinded-slot` ). */
+	/** The closed slot-KIND vocabulary (protocol §3). `domains` folds into `reference`.
+	 *  Every slot MUST name one — a bare `data-kcd-slot` is invalid (KcdValidate: `unkinded-slot`). */
 	SLOT_KINDS   = [ 'reference', 'habit', 'contract', 'tool', 'rule', 'link', 'table-data' ];
 
 	/**
-	 * THE FIELD NAMES A SLOT ROW IS ACTUALLY READ FROM — the one list the reader and the validator share.
-	 *
-	 * `what` / `where` / `why` are the faux-table's three columns. `rule` is a fourth NAME for the first of
-	 * them: a rule row is a What with no Where and no Why, which is why it needs no second row shape and no
-	 * second render path — see `KcdContext.readSlot`.
-	 *
-	 * It is here, beside `SLOT_KINDS`, because the alternative is what shipped: `readSlot` knew three names,
-	 * the validator checked only that SOME field existed, and a `rule` cell satisfied the validator while
-	 * projecting nothing. Seventy-eight authored rules across seven documents were invisible to every agent
-	 * that loaded them, on pages that rendered correctly for a human and passed `validate_docs` clean. One list,
-	 * read by both, is what stops a field name being legal to write and impossible to read.
+	 * The field names a slot row is READ from, shared by reader and validator: a legal field must be a readable one.
+	 * `rule` is a fourth name for `what` (no Where, no Why) — see `KcdContext.readSlot`.
 	 */
 	ROW_FIELDS   = [ 'what', 'where', 'why', 'rule' ];
 
@@ -92,10 +54,8 @@ export const KcdAddress = new class KcdAddress {
 		'data-kcd-table', 'data-kcd-head', 'data-kcd-chips', 'data-kcd-tag',
 		'data-kcd-audience', 'data-kcd-chrome', 'data-kcd-live', 'data-kcd-script',
 		'data-kcd-address',
-		// The §10 host-seed idiom ( `root-context.html` ): a `<script type="text/kcd-md">` payload
-		// plus WHICH host it is for and WHICH file it lands in. Absent here since the idiom was
-		// written, which made the seed source — the one document the installer reads BEFORE a vault
-		// exists — fail validation and stay invisible to scan / health / get.
+		// The §10 host-seed idiom: a `<script type="text/kcd-md">` payload naming its host and target file.
+		// Must be listed here, or the seed source fails validation and goes invisible to scan / health / get.
 		'data-kcd-seed', 'data-kcd-target'
 	];
 
@@ -125,11 +85,8 @@ export const KcdAddress = new class KcdAddress {
 	validates( declared: string, value: string ): boolean { const f = this.FIELD[ declared ]; return !!f && f( value ); }
 
 	// ── Addresses ( protocol §1.1 ) ────────────────────────────────────────────────
-	// An address is a location that MAY be occupied. Two value shapes, told apart by their own form:
-	// an artifact NAME ( a slug — resolved through the same name index `base`/`lens` use, so it
-	// survives any move ), or a project-root-relative PATH ( for targets that have no name ).
-	// Well-formed means: no whitespace, not absolute, and no `../` chain — a `../` escapes the project
-	// root, which is the one thing that can never resolve ( see `resolveHref` ).
+	// A location that MAY be occupied: an artifact NAME (a slug, survives moves) or a root-relative PATH.
+	// Well-formed means no whitespace, not absolute, and no `../` — which escapes the project root and can never resolve.
 
 	/** A `../` segment anywhere in the value — the shape that cannot resolve from the project root. */
 	DOTDOT_RE = /(?:^|\/)\.\.(?:\/|$)/;
@@ -145,9 +102,8 @@ export const KcdAddress = new class KcdAddress {
 	isAddress( el: HtmlEl ): boolean { return HtmlTree.has( el, 'data-kcd-address' ); }
 
 	/**
-	 * An address element's value. The visible TEXT is the address by default ( the core law's
-	 * one-element-two-duties rule, with no machine copy ); the attribute carries it only when the
-	 * prose has to read differently — the same escape hatch `href` already provides.
+	 * The visible TEXT is the address by default; `data-kcd-address` overrides it only when the prose must read
+	 * differently — the same escape hatch `href` provides.
 	 */
 	addressOf( el: HtmlEl ): string {
 		const attr = HtmlTree.get( el, 'data-kcd-address' );
@@ -169,15 +125,8 @@ export const KcdAddress = new class KcdAddress {
 	isHumanOnly( el: HtmlEl ): boolean { return this.audienceOf( el ) === 'human'; }
 
 	/**
-	 * A raw `data-kcd-mode` resolved against the closed slot set — `null` for absent AND for anything
-	 * that is not a mode. Telling those two apart is the caller's business: the validator must not
-	 * complain about an absent attribute, the parser must default it to `on`.
-	 *
-	 * THE ONLY READER, and that is the point. KcdParse and KcdValidate each held their own idea of the
-	 * accepted set and fell in OPPOSITE directions on the same input — the parser demoted an
-	 * unrecognised mode to `on` with no error at all, while the validator raised a hard `bad-mode` on
-	 * it. A document could therefore pass one head and be quietly rewritten by the other. Reading
-	 * through one function makes that disagreement unrepresentable.
+	 * A raw `data-kcd-mode` against the closed slot set: `null` for absent AND for a non-mode; callers tell them apart.
+	 * THE ONLY READER: the parser and validator must never disagree about a mode, so both read through here.
 	 */
 	readMode( raw: string | undefined ): SlotMode | null {
 		if ( !raw ) return null;
@@ -185,13 +134,8 @@ export const KcdAddress = new class KcdAddress {
 	}
 
 	/**
-	 * A section's CROSS-ARTIFACT fusion key ( context-optimization plan, Phase 2 ) — deliberately a
-	 * SEPARATE attribute from `data-kcd-merge`. That attribute is already load-bearing today as the
-	 * intra-file duplicate-section-name dedup STRATEGY ( protocol §3, `additive|declarative|union` —
-	 * ~35 files already write `data-kcd-merge="union"` on an unrelated `references` section each ).
-	 * Reusing its value as a merge KEY would silently fuse every one of those unrelated sections
-	 * together the moment two such artifacts loaded in the same context. `data-kcd-merge-key` is the
-	 * new, orthogonal slot the plan actually needs; `data-kcd-merge` is untouched.
+	 * A section's cross-artifact fusion key, deliberately SEPARATE from `data-kcd-merge`: that attribute is the
+	 * intra-file dedup strategy, and reusing its value would silently fuse unrelated sections loaded together.
 	 */
 	mergeKeyOf( el: HtmlEl ): string | undefined { return HtmlTree.get( el, 'data-kcd-merge-key' ); }
 

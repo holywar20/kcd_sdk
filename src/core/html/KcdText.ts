@@ -1,16 +1,8 @@
 /**
- * KcdText — HTML artifact → faithful readable prompt text ( parser-family, the AI-context READ
- * direction ). Walks the shared HtmlTree and emits block-structured plain text: headings as
- * markdown `#` lines, list items as `- ` bullets, paragraphs / blockquotes on their own lines,
- * table rows as ` · `-joined cells. The frontmatter `<dl>` and page chrome ( head / style / script )
- * are dropped; everything else inside the `<article>` is emitted in document order so no authored
- * content is lost.
- *
- * DELIBERATE PLACEHOLDER. The canonical dual-audience emitter ( the parser lens's Phase-3
- * AI-context head ) will supersede this — it is kept minimal and faithful, and has NO caller today:
- * its one caller was the model-bound root context, cut on 2026-09-29. Prompt-level
- * special tags have no settled canonical form yet, so nothing here strips angle-bracket content
- * beyond ordinary HTML structure — whatever an artifact holds, its text rides through whole.
+ * KcdText — HTML artifact → faithful readable prompt text, the AI-context READ direction.
+ * DELIBERATE PLACEHOLDER: the canonical dual-audience emitter will supersede it.
+ * Nothing here strips angle-bracket content beyond ordinary HTML structure — whatever an artifact
+ * holds, its text rides through whole. Prompt-level special tags have no settled canonical form yet.
  */
 
 import { HtmlTree, type HtmlEl, type HtmlNode } from './HtmlTree';
@@ -57,7 +49,6 @@ export const KcdText = new class KcdText {
 		}
 	}
 
-	/** Collapse a node's whole-subtree text to a single trimmed line. */
 	inline( n: HtmlNode ): string {
 		return HtmlTree.textOf( n ).replace( /\s+/g, ' ' ).trim();
 	}

@@ -24,17 +24,15 @@ export interface SurveyTests {
 
 /**
  * What a component is, by the coarsest honest reading of its manifest and location. Deliberately
- * few and deliberately fallible — `unknown` is a legitimate, common answer and reads better than a
- * confident wrong one.
+ * few and fallible: `unknown` reads better than a confident wrong answer.
  */
 export type ComponentKind = 'application' | 'library' | 'plugin' | 'tool' | 'docs' | 'unknown';
 
 /**
  * One component — a repository, package, or sub-project. THE unit of this survey.
  *
- * Everything a reader needs about a component is HERE, not spread across sibling arrays to be
- * re-joined by path prefix. That join is deterministic, so code does it once rather than asking a
- * model to do it every time ( the lost-in-distance failure mode ).
+ * Everything a reader needs is HERE, not in sibling arrays re-joined by path prefix. Code does that
+ * join once, deterministically, rather than a model redoing it each time.
  */
 export interface SurveyComponent {
 	id:          string;            // short, stable, filename-safe
@@ -52,7 +50,7 @@ export interface SurveyComponent {
 	stats:       { files: number; bytes: number };
 }
 
-/** The whole survey, in memory. `Survey.write` flushes it to a shallow tree of JSON files. */
+/** The whole survey, in memory. */
 export interface SurveyReport {
 	schema:       string;           // 'survey/1'
 	generated:    string;           // ISO
@@ -62,11 +60,11 @@ export interface SurveyReport {
 	limits:       { maxFiles: number; truncated: boolean };
 }
 
-/** Never walked. Build output and vendor trees describe the toolchain, not the project. */
 /** The vault folder name, skipped by default — a survey is of the project BESIDE the vault. Its own
  *  literal rather than an import of LensObject: Survey is otherwise dependency-free over fs+path. */
 const DEFAULT_DOC_ROOT = '_Claude';
 
+/** Never walked. Build output and vendor trees describe the toolchain, not the project. */
 const SKIP_DIRS = new Set( [
 	'node_modules', '.git', '.svn', '.hg', 'dist', 'build', 'out', 'target', 'bin', 'obj',
 	'.next', '.nuxt', '.venv', 'venv', '__pycache__', '.tox', '.gradle', '.idea', '.vscode',
@@ -109,10 +107,8 @@ const CONVENTIONAL_ENTRIES = [
 ];
 
 /**
- * Declaring one of these is positive evidence a component is an APPLICATION rather than a library.
- * A `main` field cannot tell them apart — an Electron app and a published library both have one —
- * so the framework it depends on is the honest signal. Absence proves nothing; it just means we fall
- * back to the weaker reading.
+ * Declaring one of these is positive evidence of an APPLICATION. A `main` field cannot tell an
+ * Electron app from a published library; the framework dependency can. Absence proves nothing.
  */
 const APP_FRAMEWORKS = [
 	'electron', 'next', 'nuxt', '@angular/core', 'react-scripts',
@@ -138,9 +134,7 @@ const MAX_LANGUAGES    = 10;
 const MAX_ENTRY_POINTS = 8;
 const MAX_TEST_DIRS    = 8;
 
-/** Reserved so a component can never mint this id. Nothing writes a roster file any more — `Survey.write`
- *  was deleted on 2026-10-05 ( TASK-730 ) — but the name stays reserved against the day something does,
- *  and `_mintIds` still excludes it. */
+/** Reserved so no component can mint this id: `_mintIds` excludes it. */
 const INDEX_FILE = 'index.json';
 
 interface RawFile { rel: string; size: number; inTestDir: boolean; base: string }
@@ -148,47 +142,33 @@ interface RawFile { rel: string; size: number; inTestDir: boolean; base: string 
 /**
  * Survey — the deterministic reconnaissance pass over a project the vault will sit beside.
  *
- * A CENSUS, not a parse. It names components, languages, entry points and test layout by walking the
- * tree and reading filenames, so it produces a real answer on a Python, Go or C# repository where a
- * TypeScript-only import scan produces nothing at all. The first thing a new user sees has to be
- * about THEIR code, and most code is not TypeScript.
+ * A CENSUS, not a parse: it names components, languages, entry points and test layout from the tree
+ * and its filenames, so it answers on a Python, Go or C# repo where a TypeScript import scan would not.
  *
- * The unit is the COMPONENT — the root, plus every directory carrying its own manifest. Each file is
- * attributed to the DEEPEST component containing it, so a monorepo reads as its real parts instead of
- * one averaged blur. Everything about a component is co-located on it; nothing needs re-joining by
- * path prefix, because that join is deterministic and belongs in code.
+ * The unit is the COMPONENT: the root, plus every directory with its own manifest. Each file is
+ * attributed to its DEEPEST component, so a monorepo reads as its real parts. Nothing needs re-joining
+ * by path prefix.
  *
- * EXPERIMENTAL. This is a prototype for document architecture — a temporary artifact that flushes and
- * refills. Whether a non-frontier agent can actually orient from it, cold and without the reasoning
- * that produced it, is an open question this exists to answer.
+ * EXPERIMENTAL: a temporary prototype for document architecture. Whether a cold, non-frontier agent can
+ * orient from it is the open question it exists to answer.
  */
 export class Survey {
 
 	/**
 	 * Walk `projectRoot` and produce the report. Never throws on odd trees.
 	 *
-	 * The vault is EXCLUDED. A survey reconnoitres the project the vault sits beside, so counting the
-	 * vault's own artifacts as the user's code is not a rounding error — it is the wrong answer to the
-	 * only question this asks. Left unskipped, a freshly installed vault ( ~44 framework documents )
-	 * swamps a small project entirely, and every agent reading the roster concludes the project is
-	 * made of KCD HTML. Found 2026-07-25, when a 6-file test project surveyed as 50 files.
+	 * The vault is EXCLUDED: a survey reconnoitres the project the vault sits beside. Left in, a fresh
+	 * vault ( ~44 framework documents ) swamps a small project, and the roster reads as KCD HTML.
 	 *
-	 * The AGENT SCAFFOLDING is excluded too, by the same argument, via `skipPaths` — the host entry files
-	 * and the MCP registration file are configuration for the agent, not substance of the project. The
-	 * caller supplies the list ( `VaultUtilities.installedPaths` derives it from the §10 seed declarations )
-	 * rather than this module naming those files, which keeps Survey dependency-free over fs+path and keeps
-	 * one authority for "what did the install write". Found 2026-07-29: a 26-file corpus surveyed as 30, and
-	 * those four files were enough to flip the root component's kind from `unknown` to `docs` — a database
-	 * and ops folder reported as documentation, on the strength of three Markdown files the installer had
-	 * written seconds earlier. That roster is the walkthrough's entire evidence base.
+	 * Agent scaffolding is excluded the same way, via `skipPaths`, which the caller supplies
+	 * ( `VaultUtilities.installedPaths` ) so this module names no install files. Left in, four installer
+	 * files flipped a root component from `unknown` to `docs`.
 	 */
 	static run( projectRoot: string, opts?: { maxFiles?: number; docRoot?: string; skipPaths?: string[] } ): SurveyReport {
 		const root     = path.resolve( projectRoot );
 		const maxFiles = opts?.maxFiles ?? MAX_FILES;
 		const docRoot  = opts?.docRoot ?? DEFAULT_DOC_ROOT;
-		// Normalised to '/' on the way in, because the walk's `rel()` already emits that form — comparing a
-		// caller's OS-native path against a '/'-joined one silently matches nothing, which would look exactly
-		// like the option working.
+		// Normalised to '/' to match `rel()`: an OS-native path silently matches nothing, looking like a working option.
 		const skipPaths = new Set( ( opts?.skipPaths ?? [] ).map( p => p.replace( /\\/g, '/' ) ) );
 
 		const files:     RawFile[] = [];
@@ -246,25 +226,11 @@ export class Survey {
 		};
 	}
 
-	/**
-	 * `write` STOOD HERE AND WAS DELETED on 2026-10-05 ( TASK-730 ). It flushed a survey tree to disk,
-	 * and it DELETED EVERY `.json` IN ITS TARGET DIRECTORY before writing — an uncalled destructive
-	 * write sitting in a shared utility, with no caller and no test anywhere in the tree since before
-	 * the deletion was ruled. `Survey.run` builds the report and `Survey.project` is the lean text
-	 * projection an agent reads; neither touches disk, and `survey_project` serves one of those two.
-	 * Nothing regressed when this went, because nothing had ever called it.
-	 *
-	 * If a survey ever needs persisting again, write it through a door that does not empty a directory
-	 * it does not own — the hazard here was not the writing, it was the flush.
-	 */
+	// Persisting a survey must never empty a directory it does not own.
 
 	/**
-	 * The lean text projection — what an agent actually READS.
-	 *
-	 * Raw JSON is the right thing to store and a poor thing to prompt with: repeated keys and
-	 * punctuation cost roughly 1.5–2× the tokens of an equivalent outline, and small models score
-	 * worse retrieving from it. So the stored tree stays JSON and this is served instead. `stats`
-	 * drops whole — the same partition `layout` gets in an insight document.
+	 * The lean text projection: what an agent actually reads. Raw JSON costs about 1.5–2× an outline's
+	 * tokens and retrieves worse. `stats` is left out, as `layout` is in an insight document.
 	 */
 	static project( report: SurveyReport ): string {
 		const out: string[] = [];
@@ -307,10 +273,8 @@ export class Survey {
 
 		const ids = Survey._mintIds( ordered );
 
-		// Deepest-first, so `owner()` finds the most specific component containing a file. The root is
-		// EXCLUDED from the candidates and used as the fallback: it contains everything by definition,
-		// so leaving it in the search would let it swallow every file it happened to be tested against
-		// first ( it shares a path-depth with any top-level component ).
+		// Deepest first, so `owner()` finds the most specific component. The root is the fallback, not a candidate:
+		// it contains everything, so tested first it would swallow every file.
 		const byDepth = ordered.filter( r => r !== '.' )
 			.sort( ( a, b ) => b.split( '/' ).length - a.split( '/' ).length );
 		const owner   = ( rel: string ): string =>
@@ -319,9 +283,8 @@ export class Survey {
 		const buckets = new Map<string, RawFile[]>( ordered.map( r => [ r, [] ] ) );
 		for ( const f of files ) buckets.get( owner( f.rel ) )?.push( f );
 
-		// Nesting is by NEAREST ANCESTOR COMPONENT, not by direct path parent — the directory between
-		// two components often carries no manifest of its own ( `kcd_all_mcps/` holding servers, say ),
-		// and matching on the path parent alone orphans everything beneath it.
+		// Nest by NEAREST ANCESTOR COMPONENT, not path parent: an intervening directory often has no manifest,
+		// and a path-parent match orphans everything beneath it.
 		const parentOf = new Map<string, string>();
 		for ( const r of ordered ) {
 			if ( r === '.' ) continue;
@@ -333,7 +296,6 @@ export class Survey {
 			const bucket = buckets.get( cRoot ) ?? [];
 			const abs    = path.join( root, cRoot === '.' ? '' : cRoot );
 
-			// Languages, ranked.
 			const langs = new Map<string, number>();
 			let bytes = 0, testFiles = 0;
 			const testDirs = new Set<string>(), patterns = new Set<string>();
@@ -400,9 +362,7 @@ export class Survey {
 		for ( const r of roots ) {
 			const segs = r === '.' ? [ 'root' ] : r.split( '/' );
 
-			// Widen leftwards through the path until the id is unique: two components both called
-			// `server` become `server` and `api-server`, which says WHICH one — where a numeric
-			// suffix ( `server-2` ) only says "there was another".
+			// Widen leftwards until unique: `server` and `api-server` say WHICH one, where `server-2` only says there was another.
 			let id = 'component';
 			for ( let take = 1; take <= segs.length; take++ ) {
 				id = segs.slice( segs.length - take ).map( safe ).filter( Boolean ).join( '-' ) || 'component';
@@ -444,9 +404,8 @@ export class Survey {
 	}
 
 	/**
-	 * Name / version / bin off a manifest, best-effort. JSON is parsed; everything else is matched
-	 * with a narrow regex rather than pulling TOML/YAML/XML parsers into the SDK for two fields. A
-	 * miss returns nothing — a manifest's PRESENCE is the load-bearing signal, not its metadata.
+	 * Name, version and bin, best-effort: JSON is parsed; other formats get a narrow regex, not a
+	 * TOML/YAML/XML parser for two fields. A miss returns nothing: a manifest's presence is the signal.
 	 */
 	private static _manifestMeta( abs: string ): { name?: string; version?: string; hasBin?: boolean; isApp?: boolean } {
 		let text: string;

@@ -2,19 +2,10 @@ import { KCDPrimitive } from '../framework/KCDPrimitive';
 import type { SerializedArtifact } from '../types';
 
 /**
- * A utility: a registered, runnable tool — an executable `.js` code file the human runs and
- * (eventually) the interface triggers as a button. The tier is folder-gated (`draft/` proposed,
- * `deployed/` approved) and allowlisted by `registry.md`; a tool runs only if listed there.
- *
- * This class is the SOURCE OF TRUTH for what a utility IS — its expected frontmatter and role —
- * so the parser, MCP, and UI treat utilities as first-class instead of falling back to a base
- * primitive. The expected frontmatter (typed accessors below): `type`, `name`, `description`,
- * `status`, and the optional `params` — a utility's parameters (today: a name list; tomorrow a
- * SettingField-typed variable surfaced in the work block, see the `parameters` idiom).
- *
- * NOTE — disk form: utilities carry COMMENT-frontmatter, a `/*--- … ---*\/` block at the head of
- * the `.js` file, parsed exactly like Markdown `---` frontmatter. Wiring that comment-frontmatter
- * read path into the scanner/pipeline is a follow-up fill; this class is the model now.
+ * A utility: a registered, runnable `.js` tool. The tier is folder-gated (`draft/` proposed,
+ * `deployed/` approved), and a tool runs only if `registry.md` lists it.
+ * The source of truth for what a utility is: its frontmatter accessors and role.
+ * Its frontmatter is a comment block at the head of the file, `/*--- … ---*\/`, parsed like Markdown `---`.
  */
 export class UtilityObject extends KCDPrimitive {
 
@@ -31,11 +22,8 @@ export class UtilityObject extends KCDPrimitive {
 	getRole() { return 'do' as const; }
 
 	// ── Typed frontmatter accessors ──────────────────────────────────────────
-	// The basic properties a utility is expected to carry. `name` comes from the base
-	// ( getName ); the rest are surfaced here so consumers read a utility's shape without
-	// reaching into the raw frontmatter bag.
+	// `name` comes from the base ( getName ); the rest are surfaced here so consumers skip the raw bag.
 
-	/** Human-facing summary — what the tool does. Empty string when absent. */
 	getDescription(): string {
 		return String( this.frontmatter['description'] ?? '' );
 	}
@@ -45,9 +33,7 @@ export class UtilityObject extends KCDPrimitive {
 		return String( this.frontmatter['status'] ?? '' );
 	}
 
-	/** The utility's parameters — user-set inputs (NODE-set, never agent-set: the security
-	 *  barrier). Stored as a comma/space-separated `params` list; returned split, [] when absent.
-	 *  These are the seed of the general `parameters` idiom (a SettingField-typed variable). */
+	/** The utility's parameters — user-set, NODE-set and never agent-set: the security barrier. */
 	getParams(): string[] {
 		const raw = this.frontmatter['params'];
 		if ( !raw ) return [];

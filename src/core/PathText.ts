@@ -1,26 +1,16 @@
 /**
- * PathText — path arithmetic on TEXT. The two operations the SDK core needs from a path module,
- * `resolve` and `relative`, done on strings alone: no `fs`, no working directory, no platform module.
- * It lives in @kcd/core so it imports on either side of the bridge; Node's `path` used to reach the
- * browser bundle through the ONE core file that imported it, `LensObject` ( bug-report-13 ).
+ * PathText — path arithmetic on TEXT (`resolve`, `relative`), with no `fs`, no cwd and no platform module, so it
+ * imports on either side of the bridge. Style is read off the path, never the host; output is spelled as Node's
+ * `path.win32` / `path.posix` would spell it, because the node layer compares against Node's own resolution.
  *
- * A path's STYLE is read off the path, never off the host. A drive letter or a UNC prefix means
- * Windows: `\` separators, case-insensitive comparison. A leading `/` with no device means posix.
- * Either style comes out spelled the way Node's own `path.win32` / `path.posix` would spell it, and
- * that is load-bearing rather than cosmetic: the node layer compares what this module resolves against
- * what Node resolved ( `Vault.resolveHref` beside `Vault.toAbs` ), and link healing and backlink
- * queries ride that equality. The test file pins the mirror against both of Node's implementations.
- *
- * What it will NOT do is resolve a relative path against the working directory. Core cannot see one,
- * and a vault path was never relative to it. A relative part resolves against the absolute part before
- * it, and a call with no absolute part at all throws, because any answer would be a guess.
+ * It never resolves against the working directory. A relative part resolves against the absolute part before it;
+ * a call with no absolute part at all throws, because any answer would be a guess.
  */
 
 type Style = 'win32' | 'posix'
 
-/** A Windows DEVICE at the head of a path: a drive ( `C:` ) or a UNC share ( `\\server\share` ), the
- *  extended-length prefix included ( `\\?\C:` reads as a share named `C:` on a server named `?`, which
- *  is how Node reads it too ). Either separator, as Node accepts. */
+/** A Windows DEVICE at the head of a path: a drive or a UNC share, the extended-length prefix included. `\\?\C:`
+ *  reads as a share named `C:` on a server named `?`, which is how Node reads it too. */
 const DEVICE = /^(?:[A-Za-z]:|[\\/]{2}[^\\/]+[\\/]+[^\\/]+)/
 
 export class PathText {
@@ -32,11 +22,8 @@ export class PathText {
 		return /^[\\/]/.test( p.slice( device.length ) )
 	}
 
-	/**
-	 * Resolve right to left, as Node does: the rightmost rooted part is the base, the parts after it are
-	 * appended, `.` and `..` fold, and nothing climbs above the root. A part rooted without a device
-	 * ( `\x` ) takes the device of the nearest device-carrying part to its left.
-	 */
+	/** Right to left, as Node does: the rightmost rooted part is the base. A part rooted without a device
+	 *  ( `\x` ) takes the device of the nearest device-carrying part to its left. */
 	static resolve( ...parts: string[] ): string {
 		let device  = ''
 		let rooted  = false
@@ -60,11 +47,8 @@ export class PathText {
 		return PathText._join( device, segments, style )
 	}
 
-	/**
-	 * `to` as seen from `from`, both resolved first. Equal paths give `''`; a target on another device, or
-	 * in the other style, comes back absolute, as Node answers it. Windows compares without regard to
-	 * case and answers with the target's own spelling.
-	 */
+	/** `to` as seen from `from`, both resolved first. A target on another device, or in the other style, comes back
+	 *  absolute, as Node answers it. Windows compares case-insensitively and answers in the target's own spelling. */
 	static relative( from: string, to: string ): string {
 		const f = PathText.resolve( from )
 		const t = PathText.resolve( to )

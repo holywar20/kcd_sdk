@@ -4,18 +4,12 @@ import type { ToolDefinition, ToolResult } from './McpServer';
 import type { ServerManifest } from './manifest';
 
 /**
- * verify.ts — the verification utility.
+ * verify.ts — the verification utility: the vocabulary a server author writes (TestSpec + Assertion), the report it
+ * produces (VerifyReport), and the engine that interprets one against the other (runVerify). Assertions are data, not
+ * code, editable through a future authoring UI and never compiled.
  *
- * The whole "prove a server works" capability in one place: the vocabulary a
- * server author writes (TestSpec + Assertion), the report it produces
- * (VerifyReport), and the engine that interprets one against the other
- * (runVerify). Assertions are data, not code — editable through a future
- * authoring UI, never compiled.
- *
- * runVerify() takes a server's registered tools and its manifest, runs every
- * tool's TestSpecs against its live handler in-process (no transport), and hands
- * back a dated report. It mirrors McpServer's error contract: a handler that
- * throws is folded to an isError result, exactly as it would be on the wire.
+ * runVerify() runs every tool's TestSpecs against its live handler in-process, with no transport, and returns a dated
+ * report. A handler that throws folds to an isError result, exactly as it would on the wire.
  */
 
 /**
@@ -119,20 +113,15 @@ function judge( assertions: Assertion[], result: ToolResult ): { pass: boolean; 
 		return { pass: false, detail: `unexpected error: ${ textOf( result ) }` };
 	}
 
-	// No assertions = a SMOKE case: the only claim is "this call succeeds". Returning here rather than
-	// falling through to the parse is the whole point — every assertion type below reads a key off a parsed
-	// object, so parsing was only ever a means to checking them, never a requirement of its own. Parsing
-	// unconditionally made "returns JSON" an unwritten assertion on every spec, which no tool author ever
-	// wrote and which a TEXT-returning tool can never satisfy.
-	//
-	// A text-returning survey tool is what surfaced it.
+	// No assertions = a SMOKE case: the only claim is "this call succeeds". Parsing exists only to check assertions, never
+	// as a requirement of its own, so a text-returning tool can satisfy a smoke spec.
 	if ( assertions.length === 0 ) return { pass: true };
 
 	let data: Record<string, unknown>;
 	try {
 		data = JSON.parse( textOf( result ) ) as Record<string, unknown>;
 	} catch {
-		// Now an honest failure: something asked for a key, so a non-JSON payload really is the wrong shape.
+		// Something asked for a key, so a non-JSON payload is the wrong shape.
 		return { pass: false, detail: 'result payload was not JSON, but assertions require a JSON object' };
 	}
 

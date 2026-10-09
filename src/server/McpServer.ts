@@ -1,22 +1,14 @@
 import * as readline from 'readline';
 
 /**
- * McpServer — a dependency-free MCP server over stdio.
+ * McpServer — a dependency-free MCP server over stdio, hand-rolled to escape the `@modelcontextprotocol/sdk` + zod type
+ * graph, which OOMs `tsc` (the dist must be built with esbuild). Newline-delimited JSON-RPC 2.0, one UTF-8 JSON message
+ * per line, with no embedded newlines.
  *
- * Rolled by hand to escape the `@modelcontextprotocol/sdk` + zod type graph, which
- * OOMs `tsc` at 4GB (the dist must be built with esbuild to dodge it). This is the
- * whole wire protocol in one file: newline-delimited JSON-RPC 2.0 on stdin/stdout,
- * the MCP `initialize` handshake, and `tools/list` / `tools/call`. No external deps —
- * only Node builtins — so it lives in kcd_sdk and every server reuses it.
+ * stdout carries protocol messages ONLY: all diagnostics go to stderr, or they corrupt the stream.
  *
- * Transport contract (MCP stdio): every message is a single line of UTF-8 JSON
- * terminated by '\n', with no embedded newlines. stdout carries protocol messages
- * ONLY — all diagnostics go to stderr, or they corrupt the stream.
- *
- * Errors are split the MCP way: a malformed call or unknown method is a JSON-RPC
- * *protocol* error (the model never sees it); a handler that fails returns an
- * `isError` tool result (the model sees it and can self-correct). Handlers therefore
- * never throw across this boundary — McpServer catches and folds for them.
+ * Errors split the MCP way: a malformed call or unknown method is a protocol error the model never sees; a handler that
+ * fails returns an `isError` result the model can act on. Handlers never throw across this boundary.
  */
 
 /** A single block of tool output. Text is the only type this server emits. */
@@ -28,9 +20,7 @@ export type ToolResult = {
 	isError?: boolean;
 };
 
-/** Client-facing tool hints (no effect on execution) — forwarded verbatim in `tools/list`
- *  so a client can badge a tool read-only vs. destructive. All optional; mirrors the MCP
- *  spec's tool annotations. */
+/** Client-facing hints with no effect on execution, forwarded verbatim in `tools/list`. Mirrors the MCP spec's tool annotations. */
 export interface ToolAnnotations {
 	title?:           string;
 	readOnlyHint?:    boolean;
@@ -47,21 +37,15 @@ export interface ToolDefinition {
 	inputSchema: Record<string, unknown>;
 	/** Optional client hints (read-only / destructive). Emitted in `tools/list` when present. */
 	annotations?: ToolAnnotations;
-	/** An idiomatic sample input — a ready-to-run example of what this tool expects. Emitted in
-	 *  `tools/list` so an inspector can prepopulate a call. StarmindServer fills it from the first
-	 *  verify spec by default (the example you test with is the example a user sees). */
+	/** A ready-to-run sample input, emitted in `tools/list` so an inspector can prefill a call. StarmindServer fills it
+	 *  from the first verify spec, so the example a user sees is the one that was tested. */
 	example?: Record<string, unknown>;
-	/** The expanded doc-block — the tool's own account of its capacity (params, returns, edge cases),
-	 *  the rich half of the two-tier model. `description` is the one-liner on the wire; `doc` is the
-	 *  full read a surface fetches on demand. Emitted in `tools/list` when present. */
+	/** The expanded doc-block: the tool's own account of its params, returns and edge cases. `description` is the one-liner
+	 *  on the wire; `doc` is the full read a surface fetches on demand. */
 	doc?:        string;
-	/** `meta` is the call's out-of-band envelope — JSON-RPC's `_meta`, which rides BESIDE `arguments`
-	 *  and is written by the CLIENT, never by the model ( see Authorization ). Optional, so a handler with
-	 *  no interest in it stays a one-parameter function.
-	 *
-	 *  A handler FORWARDS it and never reads it: only a guard interprets an envelope. That asymmetry is
-	 *  the containment — a tool holds nothing it could strip, rewrite or synthesize, so passing it
-	 *  along is the only thing it can do with it. */
+	/** `meta` is the call's out-of-band envelope: JSON-RPC's `_meta`, written by the CLIENT and never by the model (see
+	 *  Authorization). A handler FORWARDS it and never reads it, since only a guard interprets an envelope: a tool holds
+	 *  nothing it could strip, rewrite or synthesize. */
 	handler:     ( args: Record<string, unknown>, meta?: Record<string, unknown> ) => Promise<ToolResult>;
 }
 
@@ -89,8 +73,7 @@ const INVALID_REQUEST  = -32600;
 const METHOD_NOT_FOUND = -32601;
 const INVALID_PARAMS   = -32602;
 
-// MCP protocol version this server speaks. Echoed in the initialize result; if the
-// client requests a different one we still echo theirs back (clients negotiate down).
+// Echoed in `initialize`. A client asking for another version gets its own echoed back: clients negotiate down.
 const PROTOCOL_VERSION = '2024-11-05';
 
 export class McpServer {
@@ -131,20 +114,11 @@ export class McpServer {
 			return;
 		}
 
-		// EVERY READ OF `msg` SITS INSIDE A TRY, and that is the whole point of this block's shape.
-		// `null` is valid JSON, and so are `7` and `"x"` — they parse cleanly and then throw on the
-		// FIRST property read. That read used to sit above the try, so one such line escaped
-		// `handleLine` as a rejected promise; `connect` fires this with `void`, and an unhandled
-		// rejection is a process fault under Node's default. The handler that exists to contain a bad
-		// frame has to contain the frame's own SHAPE too, not just its contents.
-		//
-		// TWO TRIES BECAUSE THERE ARE TWO FAILURES, owed two different protocol answers: a frame that
-		// is not a request at all ( INVALID_REQUEST, no id to answer on ), and a handler that failed
-		// inside a request that was well formed ( INVALID_PARAMS, answered on its id ). Folding them
-		// into one catch would make a malformed frame indistinguishable from a bad argument.
-		//
-		// FIXED IN BOTH COPIES BY HAND, 2026-10-04. The vendored twin is
-		// `starmind_dev/src/mcp/McpServer.ts`, whose header asks for exactly that; not a divergence.
+		// Every read of `msg` sits inside a try: `null`, `7` and `"x"` parse cleanly and throw on the first property read,
+		// and a rejected promise from here is a process fault under `void`. Two tries because there are two failures with
+		// two answers: a frame that is not a request (INVALID_REQUEST, no id to answer on), and a handler that failed inside
+		// a well-formed request (INVALID_PARAMS, answered on its id). One catch would make the two indistinguishable.
+		// Kept in step with the vendored copy at starmind_dev/src/mcp/McpServer.ts.
 		try {
 			if ( typeof msg.method !== 'string' ) {
 				if ( msg.id !== undefined ) this.sendError( msg.id, INVALID_REQUEST, 'Invalid request: missing method' );
@@ -202,10 +176,8 @@ export class McpServer {
 	}
 
 	/**
-	 * The wire tool surface — the exact array `tools/list` sends, exposed publicly so tooling can read a
-	 * built server's surface WITHOUT spawning it over stdio (the promotion script regenerates the committed
-	 * `tools.snapshot.json` from this — authoritative by construction, since it is the same projection the
-	 * wire uses). No handlers, no protocol framing: just the descriptors a client sees.
+	 * The wire tool surface, exposed so tooling can read a built server without spawning it: the promotion script regenerates
+	 * the committed `tools.snapshot.json` from this, authoritative because it is the same projection the wire uses.
 	 */
 	listTools(): Record<string, unknown>[] {
 		return [ ...this.tools.values() ].map( ( t ) => ( {
@@ -242,15 +214,13 @@ export class McpServer {
 	}
 
 	/**
-	 * The argument keys a caller sent that this tool does not declare, as a refusal message — or null
-	 * when they all check out. This is what makes a mis-named parameter an error rather than a silent
-	 * answer to a question nobody asked.
+	 * The refusal for argument keys the tool does not declare, or null when they all check out. A mis-named parameter must
+	 * be an error, not a silent answer to a question nobody asked.
 	 */
 	static unknownArgs( tool: ToolDefinition, args: Record<string, unknown> ): string | null {
 		const schema = tool.inputSchema;
 
-		// A tool opts out of a closed set here. Read at the TOP level only — a nested object that sets it
-		// ( a freeform frontmatter bag, a per-call args bag ) means it there, not up here.
+		// Opt-out is read at the TOP level only: a nested object that sets it means that object, not the call.
 		if ( schema[ 'additionalProperties' ] === true ) return null;
 
 		// Nothing to compare against is not a claim that nothing is allowed.
@@ -264,20 +234,12 @@ export class McpServer {
 	}
 
 	/**
-	 * Run a registered tool in-process by name — the dispatch a COMPOSING tool ( e.g. a batch ) uses
-	 * without going over the wire. Same contract as a wire call: a handler that throws folds into an
-	 * isError result, never propagating. An unknown tool is an isError result too — unlike a wire
-	 * tools/call ( which raises a protocol error ), there is no protocol layer here, so a caller can
-	 * treat every outcome uniformly as a ToolResult. Unrecognised arguments are refused the same way,
-	 * because the model has to SEE that one to correct it.
+	 * Run a registered tool in-process by name, the dispatch a COMPOSING tool (e.g. a batch) uses. Same contract as a wire
+	 * call: a throw folds into an isError result, and so does an unknown tool, since there is no protocol layer here.
+	 * Unrecognised arguments are refused the same way, because the model has to SEE that one to correct it.
 	 *
-	 * `meta` is NOT part of that check — it sits beside `arguments` on the wire, outside the tool's
-	 * inputSchema and outside anything the model can author.
-	 *
-	 * `meta` MUST be threaded explicitly: a composing tool has to pass its own envelope through, or the
-	 * inner call runs with LESS authority than the outer one. That direction is deliberate. A batch that
-	 * forgets loses an exception; it can never INHERIT a stale one, because there is no ambient per-call
-	 * state here to inherit from — which is exactly what an ambient stash would have made possible.
+	 * `meta` MUST be threaded explicitly, and is not part of the argument check. A composing tool that forgets it runs its
+	 * inner call with LESS authority, never a stale one: there is no ambient per-call state to inherit from.
 	 */
 	async invoke( name: string, args: Record<string, unknown>, meta: Record<string, unknown> = {} ): Promise<ToolResult> {
 		const tool = this.tools.get( name );

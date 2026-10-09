@@ -12,25 +12,11 @@ import type { ToolResult } from '../server/McpServer';
 
 /**
  * VaultTools — the KCD tool engine: one implementation of the ten vault tools, wired by a face.
- *
- * Starmind's `sm_documentation` keystones are that face, calling these in-process for its agents, and a
- * face is wiring. What a tool DOES — the path jail, the write-time type check, the lean-or-verbatim read,
- * the synth advisories, the validate-before-write gate, the batch sequencing — lives here once, so no
- * face can drift from it.
- *
- * WHAT A FACE OWNS. Where the vault is ( the keystones read the call's project ), what each tool is
- * CALLED ( `get_doc` ), and how a result is delivered. Everything a face owns arrives through the
- * constructor or through `spec`.
- *
- * NAMES ARE PER FACE, AND THE PROSE FOLLOWS THEM. Every sibling reference — in a doc, a schema
- * description, an example, a refusal — is written as a `{{op}}` token and rendered against the face's
- * own names, so a refusal names the tool its reader actually holds. One copy of the prose.
- *
- * RETURNS THE WIRE ENVELOPE. Every op hands back a `ToolResult` — the MCP `tools/call` shape, which is
- * also what a keystone returns — so a face is one line per tool. Refusals are written for the model
- * reading them: what was wrong, then what would be right, in one message.
- *
- * NOTHING CACHES. Every op reads the vault fresh; the one thing held is the Vault binding itself.
+ * Starmind's `sm_documentation` keystones are that face; what a tool does — the path jail, the write-time type check,
+ * the validate-before-write gate, the batch sequencing — lives here once, so no face can drift from it.
+ * A face owns where the vault is, what each tool is CALLED, and how a result is delivered.
+ * Sibling references are `{{op}}` tokens rendered against the face's own names, so a refusal names the tool its reader holds.
+ * Every op returns the MCP `ToolResult` envelope, and nothing caches: every op reads the vault fresh.
  */
 
 /** The ten operations, in the order the wire lists them. */
@@ -65,9 +51,8 @@ export interface VaultToolsOptions {
 	/** Where the stylesheet sits relative to the vault root — `KcdEmit.cssHrefFor`'s second argument.
 	 *  Absent means the vault's own `kcd.css`. */
 	cssVaultRel?: string;
-	/** Told after a write LANDS, with the absolute path of every file it touched — the artifact written,
-	 *  moved or removed, every referrer a heal rewrote, and every folder nav-index the write rebuilt. A host
-	 *  holding an index invalidates off it. */
+	/** Told after a write lands, with every absolute path it touched: the artifact, each referrer a heal rewrote,
+	 *  and each folder nav-index rebuilt. A host holding an index invalidates off it. */
 	onWrite?:     ( paths: string[] ) => void;
 	/** Told after a move lands, with the source and destination as absolute paths. `onWrite` names both
 	 *  among everything else it touched and cannot say which was which; a host keeping an identity per
@@ -115,15 +100,12 @@ export class VaultTools {
 				page:    typeof args[ 'page' ] === 'number' ? args[ 'page' ] as number : undefined,
 			} );
 
-			// EVERY NOTE IS A FACT ABOUT THE QUERY, never a member of the result set — so none of them join
-			// the payload, they LEAD it, where the reader meets them before deciding the list is the whole
-			// answer. Wrapping a clean result in an envelope to carry fields that are usually empty would
-			// spend tokens on every call to report nothing.
+			// Notes are facts about the query, never members of the result set, so they LEAD the payload and
+			// never join it. A clean result stays bare: no envelope to carry fields that are usually empty.
 			const notes: string[] = [];
 
-			// Paging first, because it qualifies the list itself: a reader who takes twenty refs for the
-			// whole answer has been misled about what matched, which is a worse error than not knowing a
-			// file failed to parse.
+			// Paging first, because it qualifies the list: a reader who takes twenty refs for the whole answer
+			// has been misled about what matched.
 			if ( answer.pages > 1 ) {
 				const from = ( answer.page - 1 ) * VaultUtilities.QUERY_PAGE_SIZE + 1;
 				const to   = from + ( answer.matches as unknown[] ).length - 1;
@@ -146,9 +128,8 @@ export class VaultTools {
 				);
 			}
 
-			// THE CLEAN CASE IS BYTE-IDENTICAL TO WHAT IT ALWAYS WAS — a bare array, no wrapper, no header,
-			// not a token. A vault with nothing to say about a query pays nothing for the ability to say it,
-			// and that is what keeps both advisories worth reading when they do appear.
+			// THE CLEAN CASE IS BYTE-IDENTICAL to what it always was — a bare array, no wrapper, no header — so
+			// both advisories stay worth reading when they appear.
 			if ( notes.length === 0 ) return VaultTools.result( answer.matches );
 
 			return VaultTools.text( notes.join( '\n\n' ) + '\n\n' + JSON.stringify( answer.matches, null, 2 ) );
@@ -167,9 +148,8 @@ export class VaultTools {
 			const depth = typeof args[ 'depth' ] === 'number' ? args[ 'depth' ] as number : undefined;
 			const type  = this.vault.classify( filePath );
 
-			// The default read is LEAN — `full` is the opt-in back to the verbatim shape, because the reader is
-			// the common caller and the editor is the rare one. Where the projection lives is the SDK's business
-			// ( KcdContext owns every AI-audience projection ); this is the gate choosing between two of them.
+			// The default read is LEAN; `full` opts back into the verbatim shape. The projection lives in KcdContext,
+			// and this gate only chooses between the two.
 			const project = ( a: SerializedArtifact ) => args[ 'full' ] === true ? a : KcdContext.leanArtifact( a );
 
 			if ( type === 'lens' ) {
@@ -182,10 +162,8 @@ export class VaultTools {
 			return VaultTools.result( project( artifact.serialize() ) );
 		} catch ( e ) {
 			const message = errorText( e );
-			// A raw ENOENT hands back an ABSOLUTE path the caller never wrote, which tells an agent nothing it
-			// can act on — it reads as "the vault is broken" rather than "that artifact is not there". Name the
-			// path AS ASKED FOR and point at the tool that answers "what exists", so the next call is a search
-			// rather than a second guess at a filename.
+			// A raw ENOENT names an absolute path the caller never wrote, which reads as "the vault is broken".
+			// Name the path as asked for, and point at the search tool.
 			if ( message.includes( 'ENOENT' ) ) {
 				return VaultTools.error(
 					`No artifact at "${ filePath }". Paths are vault-relative ` +
@@ -242,8 +220,7 @@ export class VaultTools {
 
 	save( args: Record<string, unknown> ): ToolResult {
 		const filePath = String( args[ 'path' ] ?? '' );
-		// FILING, not editing ( bug-report-20 ): two filers took the same next number and the second write replaced
-		// the first unseen. The refusal comes from the open, so it holds under the race a pre-check would lose.
+		// `create` FILES, never edits: the refusal comes from the exclusive open, so it holds under a race a pre-check would lose.
 		const create   = args[ 'create' ] === true;
 		try {
 			const raw      = ( args[ 'artifact' ] ?? {} ) as Record<string, unknown>;
@@ -251,21 +228,16 @@ export class VaultTools {
 
 			this.jail( filePath );
 
-			// THE ONE REQUIRED OBJECT, checked before anything reads it ( bug-report-25 ). Emitting reads it on BOTH
-			// paths, and an absent one surfaced as V8's own `Cannot convert undefined or null to object` — a
-			// message naming no field, taken for a broken edit path. It also left `checkType` nothing to read, so the
-			// directory's type guard was skipped too.
+			// The frontmatter object is checked before anything reads it: an absent one surfaced as an unnamed V8 error,
+			// and left `checkType` nothing to read.
 			const fm = raw[ 'frontmatter' ];
 			if ( !fm || typeof fm !== 'object' || Array.isArray( fm ) )
 				return VaultTools.error( `${ this.names.save } refused "${ filePath }": \`artifact.frontmatter\` must be an object of fields ( name, description, type, status … ), and this call carried ${ carried( fm ) }. ${ this.names.get } with \`full: true\` returns it beside \`body\` — send both.` );
 			this.checkType( filePath, raw );
 
-			// TWO WAYS IN, one write. `content` is the AUTHORING path: sections and rows go to KcdSynth and the
-			// markup is DERIVED from the type's shape, so an author supplies content and never markup. `body`
-			// is the EDIT path ( get with `full: true` → mutate → save ), where the body is already structured
-			// and its CONTENT must survive — not its bytes: `KcdEmit` re-parses and re-serializes the whole body
-			// through `HtmlTree`, which normalizes whitespace and quote style. Supplying both would silently
-			// discard one, so the combination is refused rather than resolved by a precedence rule nobody can see.
+			// Two ways in, one write: `content` is authored and its markup derived from the type's shape; `body` is the
+			// edit path, where content must survive re-serialization through `HtmlTree`. Supplying both is refused,
+			// not resolved by a precedence rule nobody can see.
 			const content = raw[ 'content' ] as SynthInput | undefined;
 			const hasBody = typeof raw[ 'body' ] === 'string' && ( raw[ 'body' ] as string ).trim() !== '';
 			if ( content && hasBody )
@@ -288,27 +260,24 @@ export class VaultTools {
 				if ( synth.undeclared.length && shape && !shape.open )
 					advisories.push( `sections not declared by the "${ declared }" shape: ${ synth.undeclared.join( ', ' ) } — the compiler will not read them. Declared: ${ KcdShapes.orderFor( declared ).join( ', ' ) }` );
 
-				// Advisory only — KcdValidate stays the SOLE gate. This names the gap while the author still
-				// holds the content, which is the cheapest moment to close it. Audit what was SUPPLIED, prose and
-				// rows alike — a slot-bearing section arrives as rows and never appears in `sections`.
+				// Advisory only: KcdValidate stays the sole gate. Audit what was SUPPLIED, prose and rows alike, since a
+				// slot-bearing section arrives as rows and never appears in `sections`.
 				const audit = KcdShapes.audit( declared, KcdSynth.suppliedSections( content ) );
 				if ( audit.missing.length ) advisories.push( `missing required section(s): ${ audit.missing.join( ', ' ) }` );
 				if ( audit.thin.length )    advisories.push( `missing expected section(s): ${ audit.thin.join( ', ' ) }` );
 
-				// The other half of the advisory: `audit` asks whether the right SECTIONS are here, this asks
-				// whether what is inside them will read as intended. Markdown markers in prose emit as literal
-				// characters.
+				// Prose warnings ask whether what is inside the sections will read as intended; markdown markers emit
+				// as literal characters.
 				advisories.push( ...KcdSynth.proseWarnings( content ) );
 			}
 
 			const artifact = { ...raw, body } as unknown as SerializedArtifact;
 
-			// TIER 2 of the stylesheet contract ( protocol §8.1 ): a depth-relative link, derived from this
-			// document's own destination and from where the stylesheet sits in THIS vault. Tier 1, the inline
-			// baseline, is emitted unconditionally and needs nothing from here.
+			// Tier 2 of the stylesheet contract (protocol §8.1): a depth-relative link. Tier 1, the inline baseline,
+			// is emitted unconditionally and needs nothing from here.
 			const html = KcdEmit.emit( artifact, KcdEmit.cssHrefFor( filePath, this.opts.cssVaultRel ) );
-			// `docRoot` matters HERE, not only in reports: without it the ephemeral-link law was evaluated
-			// against the wrong vault name, so a save refused legal documents and accepted illegal ones.
+			// `docRoot` matters here: without it the ephemeral-link law checked the wrong vault name, so saves refused
+			// legal documents and accepted illegal ones.
 			const report = KcdValidate.validate( html, { path: filePath, docRoot: this.vault.docRoot } );
 			if ( !report.ok ) {
 				const detail = report.errors.map( e => `${ e.code } @ ${ e.where }: ${ e.msg }` ).join( '; ' );
@@ -356,12 +325,8 @@ export class VaultTools {
 	// ── Batch ─────────────────────────────────────────────────────────────────
 
 	/**
-	 * Run `calls` in order through the FACE's own dispatch. The batch touches nothing itself; every
-	 * dispatched call runs its own op, jail included. A face passes `invoke` because only the face knows how
-	 * a name resolves to a sibling on it.
-	 *
-	 * The folder nav-indexes are rebuilt ONCE, when the batch ends, over everything its calls touched — held
-	 * per vault, so it holds even on a face that builds a fresh engine for every sibling call.
+	 * Run `calls` in order through the face's own dispatch, every call running its own op, jail included; the batch touches nothing itself.
+	 * Nav-indexes rebuild ONCE when the batch ends, held per vault so it holds on a face that builds a fresh engine per call.
 	 */
 	async batch( args: Record<string, unknown>, invoke: VaultToolInvoke ): Promise<ToolResult> {
 		this.navIndex.defer();
@@ -384,13 +349,8 @@ export class VaultTools {
 	}
 
 	/**
-	 * EVERY CALL RUNS — a batch is not a transaction ( Bryan, 2026-09-18 ). A step that fails or is refused
-	 * does not stop the ones after it, and nothing already applied is undone. One result per call, in order,
-	 * carrying the step's own reply verbatim, so the caller learns exactly which landed and why the others
-	 * did not, and decides for itself what a partial outcome means.
-	 *
-	 * A batch whose `calls` cannot be read is the one case that stops before any step — refused whole, with what
-	 * arrived, because there is no step to run and an empty result list would read as success.
+	 * EVERY CALL RUNS: a batch is not a transaction. A failed step does not stop later ones, and nothing applied is undone.
+	 * Unreadable `calls` is the one refusal before any step, because an empty result list would read as success.
 	 */
 	private async runBatch( args: Record<string, unknown>, invoke: VaultToolInvoke ): Promise<ToolResult> {
 		const malformed = malformedCalls( args[ 'calls' ] );
@@ -438,9 +398,7 @@ export class VaultTools {
 	private jail( inputPath: string ): void {
 		if ( this.vault.isInside( inputPath ) ) return;
 
-		// This is the most-hit refusal there is, and it used to report the offending path and the root and
-		// stop there — true, and no help. What a caller actually needs is the currency ( paths are
-		// vault-RELATIVE ) and where to look up a real one, so both ride the rejection.
+		// The most-hit refusal: it names the currency (paths are vault-RELATIVE) and where to find a real one, so both ride the rejection.
 		throw new Error(
 			`Path "${ inputPath }" is outside the vault ("${ this.vault.root }") — paths here are vault-RELATIVE `
 			+ `( "references/domain/note.html" ), not absolute and never "../"-escaped; a leading "${ path.basename( this.vault.root ) }/" `
@@ -449,13 +407,8 @@ export class VaultTools {
 	}
 
 	/**
-	 * On a save, assert the target directory ACCEPTS the artifact's declared type — a lens cannot be saved
-	 * into references/. A missing declared type is left to KcdValidate downstream; this only catches a real
-	 * category error.
-	 *
-	 * Asks `accepts`, not `classify`: `references/` implies `reference` and legitimately holds how-tos and
-	 * notes, so comparing against the single implied type refused valid documents. The message names the
-	 * whole accepted set, so the fix is in the error.
+	 * On a save the target directory must ACCEPT the declared type; a missing type is left to KcdValidate.
+	 * Asks `accepts`, not `classify`: references/ legitimately holds how-tos and notes, so one implied type refused valid documents.
 	 */
 	private checkType( writePath: string, artifact: unknown ): void {
 		const fm = typeof artifact === 'object' && artifact !== null
@@ -470,8 +423,7 @@ export class VaultTools {
 
 		const allowed = this.vault.acceptedTypes( writePath ).map( t => `"${ t }"` ).join( ' | ' );
 
-		// One type is decided by the FILENAME, not the folder, so for it the accepted-set message names the
-		// wrong cause and invites the wrong fix. Name the real condition.
+		// A nav-index is decided by its filename, not its folder, so the accepted-set message would name the wrong cause.
 		const hint = declaredType === 'nav-index' && !writePath.replace( /\\/g, '/' ).endsWith( '/' + VaultLayout.NAV_INDEX_FILE )
 			? ` — a nav-index is identified by its filename, so it must be named "${ VaultLayout.NAV_INDEX_FILE }"`
 			: '';
@@ -541,10 +493,8 @@ function carried( v: unknown ): string {
 }
 
 /**
- * Why `calls` cannot be run, or '' when it can. A BATCH THAT RUNS NOTHING SAYS SO ( 2026-09-21 ): `calls` sent as a
- * JSON string — the commonest way a model gets this wrong — used to read as an empty list and come back as
- * `{ results: [] }`, which an agent took for success and moved on from with nothing written. It is refused, never
- * parsed: the gate judged the steps it could see, and a string is none, so running it would run steps unjudged.
+ * Why `calls` cannot be run, or '' when it can. A string `calls` is refused, never parsed: the gate judged the steps it
+ * could see, and a string is none, so running it would run steps unjudged.
  */
 function malformedCalls( calls: unknown ): string {
 	if ( typeof calls === 'string' ) {
@@ -569,9 +519,7 @@ function textOf( r: ToolResult ): string {
 }
 
 // ── What each tool says ───────────────────────────────────────────────────────────────────────────
-// One copy of the prose, with every sibling reference written as a `{{op}}` token. `spec` renders it
-// against a face's names, so a doc that says "read one with {{get}}" names `sm_documentation__get_doc`
-// in Starmind.
+// One copy of the prose, with every sibling reference a `{{op}}` token that `spec` renders against a face's names.
 
 const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 	query: {
@@ -872,9 +820,7 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 	},
 
 	batch: {
-		// No fixed destructiveHint would be honest either way — a batch of reads is harmless, one that
-		// dispatches a move or a delete is not. Defensively true: a client that trusts the hint should be
-		// warned, not surprised.
+		// Defensively true: a batch of reads is harmless, but one dispatching a move or delete is not, and a client should be warned.
 		annotations: { destructiveHint: true },
 		example: {
 			calls: [

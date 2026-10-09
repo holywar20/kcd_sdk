@@ -2,22 +2,15 @@ import { HtmlTree, type HtmlEl } from './HtmlTree';
 import { KcdAddress } from './KcdAddress';
 
 /**
- * LensMigration — the one-way rewrite of a Know / Care / Do lens into the flat lens ( plan agents-own-behaviour,
- * task 66 ): personality + philosophy + references, and nothing that behaves.
+ * LensMigration — the one-way rewrite of a Know / Care / Do lens into a flat lens: personality, philosophy and
+ * references, and nothing that behaves. Personality ← the lede and Care's Purpose; philosophy ← Care's Philosophy
+ * and Open Questions; references ← Know's references and Domains; dropped ← the Do region, every intro line, and `base`.
  *
- *   personality ← the lede under the title, then the Care region's Purpose
- *   philosophy  ← the Care region's Philosophy, then its Open Questions under a sub-heading
- *   references  ← the Know region's reference rows, then its Domains rows — code areas are references too
- *   dropped     ← the Do region whole ( habits, contracts, tools belong to the agent and the project ), every
- *                 region's own intro line, and the `base` frontmatter field
- *
- * SPLICED, NOT RE-SERIALIZED. Every piece that survives is cut from the source by its parsed span, so the prose
- * a person wrote comes across byte for byte; only the scaffolding around it is new. Null for a document that is
- * not a lens or is already flat.
+ * SPLICED, NOT RE-SERIALIZED: surviving pieces are cut from the source by span, so authored prose comes across
+ * byte for byte. Null for a document that is not a lens or is already flat.
  */
-// The helpers below carry the `_` prefix and NOT `private`. This const is an anonymous-class instance, so
-// declaration emit has no name to write for a private member and refuses the whole build ( TS4094 ). The `_`
-// is the signal a reader acts on either way; `private` here buys nothing and costs `npm run build`.
+// Helpers carry the `_` prefix, not `private`: this is an anonymous-class instance, and declaration emit cannot
+// name a private member (TS4094), which breaks `npm run build`.
 export const LensMigration = new class LensMigration {
 
 	flatten( html: string ): string | null {
@@ -74,12 +67,10 @@ export const LensMigration = new class LensMigration {
 		return [ `<section data-kcd-section="${ name }">`, `\t${ heading }`, ...body.map( ( b ) => b.startsWith( '\t' ) ? b : '\t' + b ), '</section>' ].join( '\n' );
 	}
 
-	/** An element's exact source. */
 	_span( html: string, el: HtmlEl ): string {
 		return html.slice( el.start!, el.end! ).trim();
 	}
 
-	/** Where an element's open tag ends. */
 	_openEnd( html: string, el: HtmlEl ): number {
 		return html.indexOf( '>', el.start! ) + 1;
 	}
@@ -94,7 +85,6 @@ export const LensMigration = new class LensMigration {
 		return sec.kids.find( ( k ): k is HtmlEl => HtmlTree.isEl( k ) && /^h[1-6]$/.test( k.tag ) );
 	}
 
-	/** What a section says, without its heading: the source between the heading ( or the open tag ) and the close. */
 	_content( html: string, sec: HtmlEl | null ): string {
 		if( !sec ) return '';
 		const heading = this._firstHeading( sec );

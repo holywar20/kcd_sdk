@@ -8,28 +8,16 @@ export const DREDGE_MAX = 4;
 
 export type HydratorFn = ( json: SerializedArtifact ) => KCDPrimitive;
 
-/** Clamp a requested dredge depth into the legal [1, DREDGE_MAX] range.
- *  HARD-CODED to 2 ( = direct children only, no grandchildren ) — Bryan, 2026-07-13: dredge is
- *  real but was generating noise while the current focus is inheritance/override visualization.
- *  2 is the floor, not 1: `habitClass` ( what SlotResolver groups slots by ) lives on the CHILD
- *  artifact's own frontmatter, never in the lens's own policy table — depth 1 fetches nothing and
- *  silently blanks every slot, which looks like a parse bug but isn't one. Depth 2 is also the
- *  pre-existing system default ( LENS_DEFAULT_DEPTH below ), so this rejects anything DEEPER than
- *  before, it doesn't reopen anything wider. Restore
- *  `Math.max( 1, Math.min( DREDGE_MAX, Math.floor( depth ) ) )` to bring variable depth back. */
+/** Hard-coded to 2. Depth 1 fetches nothing, and `habitClass` lives on the child, so every slot silently blanks.
+ *  Restore `Math.max( 1, Math.min( DREDGE_MAX, Math.floor( depth ) ) )` to vary depth again. */
 export function clampDepth( _depth: number ): number {
 	return 2;
 }
 
 /**
- * Base artifact: the object model behind every KCD document. HTML is the sole substrate —
- * a document enters through `fromHtml` ( validate-first via KcdParse ) or `fromSerialized`
- * ( the wire ). There is no markdown parse path; conformance is enforced once, at parse, by
- * the shared KcdValidate. Subclasses override `getRole`, `getPolicy`, and `toContextBlock`
- * to add type-specific behavior; structure/frontmatter rules are no longer per-subclass code.
- *
- * The hydrator registry and path utilities live here as static methods so subclasses never
- * need to import a separate utility module.
+ * Base artifact: the object model behind every KCD document. HTML is the sole substrate; conformance
+ * is enforced once, at parse, by the shared KcdValidate. Subclasses override `getRole`, `getPolicy` and
+ * `toContextBlock`; the hydrator registry and path utilities are static here.
  */
 export class KCDPrimitive {
 
@@ -37,11 +25,7 @@ export class KCDPrimitive {
 
 	private static _hydrators = new Map<ArtifactType, HydratorFn>();
 
-	/**
-	 * Register a type's wire-hydrator so `fromSerialized` rebuilds the right subclass
-	 * (real prototype → real getRole/toContextBlock). Registered centrally from the
-	 * primitives barrel, the one place that already pulls in every subclass.
-	 */
+	/** Registered from the primitives barrel, the one place that already imports every subclass. */
 	static registerHydrator( type: ArtifactType, fn: HydratorFn ): void {
 		KCDPrimitive._hydrators.set( type, fn );
 	}
@@ -55,9 +39,7 @@ export class KCDPrimitive {
 	protected sections: Record<string, string>;
 	protected frontmatter: Record<string, unknown>;
 	protected isDirty: boolean;
-	/** Tuned state: whether this artifact contributes to the next outbound request.
-	 *  Runtime tuning, not document content — rides serialization so both process
-	 *  copies agree, but never reaches disk. */
+	/** Runtime tuning, not document content: rides serialization so both process copies agree, but never reaches disk. */
 	protected isIncluded = true;
 
 	protected constructor( path: string, type: ArtifactType ) {
@@ -72,42 +54,20 @@ export class KCDPrimitive {
 
 	// ── Static entry points ──────────────────────────────────────────────────
 
-	/**
-	 * The HTML front end ( parser-family row 1 ): validate-first, then hydrate the right subclass.
-	 * The parser produces a `ParsedArtifact` ( a SerializedArtifact superset ), so the existing
-	 * `fromSerialized` dispatch builds the correct prototype with no md parse pipeline. A malformed
-	 * document never reaches here — `KcdParse.parse` throws, all-or-nothing.
-	 */
-	/** `docRoot` names the vault this document belongs to — required, no default. Every document read
-	 *  passes through here, so this is the seam that decides whether the validator can tell a link into
-	 *  scratch space from a link into a folder that merely shares a name. */
+	/** The HTML front end: validate-first, then hydrate. A malformed document throws in `KcdParse.parse`, all-or-nothing.
+	 *  `docRoot` is required, no default: it is what lets the validator tell scratch space from a same-named folder. */
 	static fromHtml( html: string, absPath: string, docRoot: string ): KCDPrimitive {
 		return KCDPrimitive.fromSerialized( KcdParse.parse( html, absPath, docRoot ) );
 	}
 
-	/**
-	 * The HTML back end ( parser-family row 5, the inverse of `fromHtml` ): this instance's current
-	 * state → a full HTML document string. Regenerates frontmatter only — sections/regions/slots ride
-	 * through from `body` untouched ( see KcdEmit's doc comment ). Callers ( `KcdService.save` ) are
-	 * expected to validate the result before writing; this method does not.
-	 *
-	 * `cssHref` is TIER 2 of the stylesheet contract ( protocol §8.1 ). OMITTING IT IS ONLY SAFE FOR A
-	 * CALLER THAT NEVER LANDS A FILE — the fallback is the bare filename, correct only at the vault
-	 * root, so a nested artifact written without one carries a link that resolves to nothing. §8.1
-	 * names this as a deliberate gap for the in-memory uses ( `Agents._draftLens` builds HTML and hands
-	 * it straight to a reader ); a WRITE path must pass `KcdEmit.cssHrefFor( vaultRelPath )`. Tier 1,
-	 * the inline baseline, rides automatically either way.
-	 */
+	/** Serializes state to a full HTML document. Regenerates frontmatter only, and does not validate: save callers must.
+	 *  Omit `cssHref` only for a caller that never lands a file; a write path must pass `KcdEmit.cssHrefFor( vaultRelPath )`. */
 	toHtml( cssHref?: string ): string {
 		return KcdEmit.emit( this.serialize(), cssHref );
 	}
 
-	/**
-	 * Hydrate from wire JSON — dispatched by type to the registered subclass hydrator so a
-	 * serialized habit comes back a HabitObject, a lens a LensObject (with its nodes). Falls
-	 * back to a base primitive for types with no hydrator. Trusts the state as already valid;
-	 * this is the seam both the parser ( via fromHtml ) and the bridge cross.
-	 */
+	/** Dispatches by type to the registered hydrator, or a base primitive when none is registered.
+	 *  Trusts the state as valid: this is the seam both the parser and the bridge cross. */
 	static fromSerialized( json: SerializedArtifact ): KCDPrimitive {
 		const fn = KCDPrimitive._hydrators.get( json.type );
 		if ( fn ) return fn( json );
@@ -145,20 +105,11 @@ export class KCDPrimitive {
 
 	// ── KCD role & structural validation ─────────────────────────────────────
 
-	/**
-	 * This artifact's KCD role — determines which context dock it belongs to.
-	 * Default is 'know'. Do-role artifacts (Habit, Contract, Generator, Analyzer,
-	 * Utility) override to return 'do'. LensObject overrides to return 'lens'.
-	 */
+	/** Default `know`. Do-role subclasses override to `do`; `LensObject` overrides to `lens`. */
 	getRole(): KCDRole { return 'know'; }
 
-	/**
-	 * Non-throwing structural validation. Conformance is enforced at parse time by the shared
-	 * KcdValidate ( a malformed document never becomes an object — `fromHtml` throws ), so a
-	 * hydrated object is valid by construction and has no per-subclass checks left to re-run.
-	 * Kept as the stable seam for callers ( e.g. the MCP health sweep, which already treats a
-	 * parse throw as the error ); returns no issues for a well-formed object.
-	 */
+	/** Returns no issues: conformance is enforced at parse by the shared KcdValidate, so a hydrated object is valid by construction.
+	 *  Kept as the seam callers use; the MCP health sweep treats a parse throw as the error. */
 	typeCheck(): TypeCheckIssue[] {
 		return [];
 	}
@@ -193,18 +144,8 @@ export class KCDPrimitive {
 		return this.isIncluded ? this.toContextBlock() : '';
 	}
 
-	/**
-	 * This artifact's region-block decomposition ( context-optimization plan, Phase 2 ) — the unit
-	 * `ContextAssembler` merges and sorts across a whole loaded set. An excluded artifact contributes
-	 * no blocks, mirroring `contribute()`. Every block here defaults to this artifact's OWN
-	 * `getRole()` ( `do` for habit/contract/generator/analyzer/utility, `know` for everything else ) —
-	 * a lens's `data-kcd-region` wrappers override that per-section inside `KcdContext.projectBlocks`.
-	 * `sourceLayer` defaults `'lens'` ( "part of the normal dredge graph" ); `LensObject` overrides to
-	 * tag its `injected` children `'injected'` instead. `habitClass` comes straight from this
-	 * artifact's own `habit-class` frontmatter field ( protocol §6 ) — every block a classed habit
-	 * contributes carries the SAME class, since the mutual-exclusion cascade resolves at the whole-
-	 * artifact level, not per section.
-	 */
+	/** This artifact's region blocks for `ContextAssembler`. An excluded artifact contributes none, mirroring `contribute()`.
+	 *  Blocks default to `getRole()`; a lens's `data-kcd-region` wrappers override per section in `KcdContext.projectBlocks`. */
 	getContextBlocks(): TaggedBlock[] {
 		this.ensureContent();
 		if ( !this.isIncluded ) return [];
@@ -214,59 +155,28 @@ export class KCDPrimitive {
 			.map( b => ( { ...b, sourceLayer: 'lens' as const, path: this.path, artifactType: this.type, habitClass } ) );
 	}
 
-	/**
-	 * The token COST of this artifact's contribution — literally `getContextBlocks()` priced per block, so
-	 * it INHERITS that method's recursion instead of re-implementing it: a leaf sums its own region blocks,
-	 * a `LensObject` sums its dredged + injected children's ( `getContextBlocks()` already folds them in ),
-	 * and no per-type override is needed for either. An excluded artifact contributes no blocks, so it costs
-	 * 0 by construction. Deliberately loose — a ±5% variance is expected and fine ( per-block sums run a hair
-	 * above a single-pile estimate ); the only EXACT count is the real wire usage the agent reads back off a
-	 * response. ( `Agent` is not a `KCDPrimitive` and its context carries bound env beyond
-	 * `getContextBlocks()`, so it defines its OWN `estimateTokens()` over its compiled blocks — the same
-	 * price-the-blocks shape, one level up. )
-	 */
+	/** Token cost of this artifact's contribution: `getContextBlocks()` priced per block, so it inherits that recursion.
+	 *  Loose by design (about ±5%); the exact count is the wire usage read back off a response. */
 	estimateTokens(): number {
 		return this.getContextBlocks().reduce( ( sum, b ) => sum + ( b.text ? KCDPrimitive._estimateTokens( b.text ) : 0 ), 0 );
 	}
 
-	/**
-	 * The one token estimator — chars ÷ 4, floored at 1 for a present-but-tiny block. Lives here beside the
-	 * hydrator registry + path utilities, so every artifact and both process-side `Utils` baskets share ONE
-	 * formula with no separate import ( the `_` marks it the shared primitive `estimateTokens()` piles text
-	 * into, not a public surface ). The real per-token count is a connector concern; this is the cheap,
-	 * always-available estimate the whole budget UI runs on. Identical to the renderer's old
-	 * `Utils.estimateTokens`, which now delegates here.
-	 */
+	/** The one token estimator: chars ÷ 4, floored at 1. Shared by every artifact and both process-side `Utils`; the real count is a connector concern. */
 	static _estimateTokens( text: string ): number {
 		return Math.max( 1, Math.round( text.length / 4 ) );
 	}
 
-	/**
-	 * This artifact's FULL-body context cost — its whole projected block priced regardless of tuned state,
-	 * i.e. what it weighs at `load` mode. Distinct from `estimateTokens()`, which respects inclusion and
-	 * returns 0 when excluded: a composition card asks "what would this cost if it rode full-body", which is
-	 * this. ( The home for `Composition.contextTokens( primitive )`. )
-	 */
+	/** Full-body cost regardless of inclusion: what this artifact weighs at `load` mode. Unlike `estimateTokens()`, never 0. */
 	bodyTokens(): number {
 		return KCDPrimitive._estimateTokens( this.toContextBlock() );
 	}
 
-	/**
-	 * This artifact's `on`-mode ROUTING-ROW cost — the single manifest line `- {name} — {why} ({path})` it
-	 * reduces to when demoted from full body to a pointer. `why` is composition copy ( the lens slot's
-	 * description ), passed in because it lives on the lens→artifact relationship, not on the artifact
-	 * itself; name + path are the artifact's own. ( The home for `Composition.stubTokens( name, why, href )`. )
-	 */
+	/** Cost of the `on`-mode routing row `- {name} — {why} ({path})`, the line a demoted artifact reduces to. */
 	stubTokens( why: string ): number {
 		return KCDPrimitive._estimateTokens( `- ${ this.getName() } — ${ why } (${ this.getPath() })` );
 	}
 
-	/**
-	 * This artifact's cost at a given slot mode — the ONE home for the off/on/load split, so every
-	 * composition row reads the same number the compile actually pays: `off` = 0, `on` = the routing row
-	 * ( `stubTokens` ), `load` = the full body ( `bodyTokens` ). The artifact-axis mirror of the tool
-	 * axis' baked per-mode counts. ( The home for `Composition.habitModeTokens( node, mode, name, why )`. )
-	 */
+	/** Cost at a slot mode: `off` = 0, `on` = `stubTokens`, `load` = `bodyTokens`. The one home for that split. */
 	modeTokens( mode: SlotMode, why = '' ): number {
 		if ( mode === 'off' ) return 0;
 		return mode === 'load' ? this.bodyTokens() : this.stubTokens( why );
@@ -278,7 +188,6 @@ export class KCDPrimitive {
 
 	// ── Getters ──────────────────────────────────────────────────────────────
 
-	/** frontmatter.name if present, otherwise the filename stem ( extension stripped ). */
 	getName(): string {
 		this.ensureContent();
 		const fmName = this.frontmatter['name'];
@@ -314,13 +223,8 @@ export function classifyHref( href: string ): LinkType {
 }
 
 /**
- * The path taxonomy: a vault-root-relative path (`_Claude/...`) to its ArtifactType.
- * LensObject.classifyByPath wraps this for absolute paths; getBacklinks feeds it hrefs
- * directly (link hrefs are vault-root-relative by project convention).
- *
- * The taxonomy itself lives in VaultLayout (`@kcd/core`) — one table that classification,
- * the library index whitelist, and the deploy scaffold all read, so the structure can't drift
- * between them again. This stays as the established entry point for existing callers.
+ * Vault-root-relative path to its `ArtifactType`. The taxonomy lives in `VaultLayout`: one table that
+ * classification, the library index and the deploy scaffold all read, so they cannot drift apart.
  */
 export function classifyRelPath( rel: string, docRoot = '_Claude' ): ArtifactType {
 	return VaultLayout.classify( rel, docRoot );

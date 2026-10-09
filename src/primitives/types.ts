@@ -7,44 +7,24 @@ import type { ContextBlock } from '../core/html/KcdContext';
 export type KCDRole = 'know' | 'do' | 'lens';
 
 /**
- * Where a block's ARTIFACT sits relative to the dredge graph — not the artifact's own
- * Know/Care/Do region. The specificity hierarchy is `injected > agent > lens`: a session-dropped
- * node is most specific, then a component the AGENT bolts on itself ( `base*` — its own habit/reference
- * choices ), then what a lens contributes. `agent` is what lets an agent's habit choice OUTRANK the
- * lens's in a slot ( the composability of behaviour ). The plan's full hierarchy also names a
- * Constellation layer between injected and agent; that stays unrealized ( no distinct Constellation
- * source tag exists yet ). `SlotResolver.RANK` reads through this type, so adding the last layer later
- * is a rank-map edit, not a redesign.
+ * Where a block's ARTIFACT sits in the dredge graph. Specificity runs `injected > agent > lens`, so an agent's habit
+ * choice can outrank the lens's in a slot. A Constellation layer between injected and agent stays unrealized.
  */
 export type SourceLayer = 'lens' | 'injected' | 'agent';
 
-/** A `ContextBlock` plus the facts `ContextAssembler`/`SlotResolver` need to reason ACROSS
- *  artifacts — where in the dredge graph it came from, which artifact it came from, that artifact's
- *  own type, and its `habit-class` (if any). Bookkeeping only; the wire text stays source-blind,
- *  none of these ride into the rendered output. `artifactType` is what lets a merge group resolve
- *  "lens leads" (`ContextAssembler.merge`); `habitClass` is what lets `SlotResolver` find contending
- *  blocks in the first place. */
+/** A `ContextBlock` plus the facts `ContextAssembler` and `SlotResolver` reason across artifacts with. Bookkeeping
+ *  only: none of it rides into the rendered output. */
 export interface TaggedBlock extends ContextBlock {
 	sourceLayer: SourceLayer;
 	path: string;
 	artifactType: ArtifactType;
-	/** This block's artifact's own `habit-class` frontmatter field (protocol §6), or `null` for
-	 *  classless (additive) content — the default for everything that isn't a classed habit. */
+	/** The artifact's `habit-class` (protocol §6); `null` for classless, additive content. */
 	habitClass: string | null;
 }
 
 /**
- * ContextSegment — one block of an assembled request's context, broken out by SOURCE for inspection.
- * The flat system string a model sees is `Σ` of these joined; kept structured so the telemetry/transcript
- * can show WHAT each source contributed and what it COST.
- *
- *  - `source` — the bucket: `'system'` (the agent's systemPrompt / above-lens layer), `'lens'` (a lens
- *    header block), an artifact type (`'reference' | 'plan' | 'habit' | 'index' | …`), or `'instruction'`
- *    (the task body). Drives the per-source grouping + colour. A plain string (not a tight union) — a new
- *    artifact type slots in without a type change at this glue seam.
- *  - `tokens` — the REAL count from the model's own tokenizer, filled at RUN time (main-side, where the
- *    connector lives). `null` when not yet counted or the connector can't count — no estimate is ever
- *    substituted (the ruling: real values, never guesses).
+ * One block of an assembled request, by source. `tokens` is the model's own count, filled at run time, or `null`
+ * when uncounted; no estimate is ever substituted. `source` is a plain string, so a new artifact type needs no change.
  */
 export interface ContextSegment {
 	source: string;
@@ -54,13 +34,8 @@ export interface ContextSegment {
 }
 
 /**
- * SegmentKey — where one compiled block files in the per-source breakdown: the folder a reader finds it
- * under, and the human label beside it. The KEY half of `ContextSegment`, split out because the two are
- * answered at different moments — a block's identity is decided per block (`Agent.segmentKey`), while a
- * segment is the run of adjacent blocks that share one.
- *
- * `Agent.segmentKey` answers `null` for a STRUCTURAL block — a `---` divider, a band heading — which has
- * no identity of its own and belongs to the segment it introduces.
+ * Where one compiled block files in the per-source breakdown: the folder and label a reader finds it under.
+ * `Agent.segmentKey` returns `null` for a structural block, a divider or band heading, which joins the segment it opens.
  */
 export interface SegmentKey {
 	source: string;
@@ -81,35 +56,19 @@ export interface TypeCheckIssue {
 export type ArtifactType =
 	| 'lens'
 	| 'plan'
-	// `reference` covers the whole knowledge store. `note` and `how-to` used to sit here beside it and
-	// were retired 2026-07-30: the FOLDER is the category ( references/how-to/, references/notes/, and a
-	// dozen more that never had a matching type ), so a type naming one said a second time what the path
-	// already said. Two of fourteen categories having a type of their own is not a taxonomy, it is a
-	// leftover — and it read as authoritative, so an agent authoring a how-to declared `how-to`, hit a
-	// write guard that only accepted `reference`, and hand-edited around the tool. That is the cost of an
-	// idiom that looks like a rule.
+	// `reference` covers the whole knowledge store. The folder is the category; a type per folder would only restate it.
 	| 'reference'
 	| 'generator'
 	| 'analyzer'
-	// `audit` sat here and was RETIRED 2026-10-03 ( Bryan ): an audit produces a searchable note, not a
-	// document, so the type governed nothing the moment the last twelve audit artifacts were deleted
-	// ( task 385 ). The `reports/` directory it governed now carries `unknown`, beside `logs`, `audits`
-	// and `scratch`. The retirement was the whole type, not merely a disused entry — see KcdAddress.TYPES.
-	// A filed defect and the proof of its repair ( the `bug-report` contract ). EPHEMERAL — a verified
-	// report is deleted at the monthly sweep — but shaped, where a report's own shape was its reporting
-	// contract's business: its status words and its annotated body fields are the task board's own, so a
-	// report maps onto a `bugfix` Task field for field — see BugReportObject.
+	// `audit` is retired: an audit is a searchable note, not a document, and `reports/` now carries `unknown`.
+	// EPHEMERAL: a verified report is deleted at the monthly sweep. Its fields are the task board's; see BugReportObject.
 	| 'bug-report'
 	| 'utility'
 	| 'habit'
 	| 'contract'
 	| 'template'
-	// Reusable prompt wording a human fills in — see PromptPartialObject. A TYPE and not a `references/`
-	// category, because it is a different KIND of document rather than a different subject: a partial is
-	// consumed programmatically and concatenated into a request, where a reference is read. That is the
-	// line the retired `note`/`how-to` failed and this clears — those restated their folder, this does not.
-	// Named `prompt-partial` rather than `prompt`/`template` deliberately: `template` already means the
-	// authoring stencils under `kcd/`, and overloading it is the idiom-explosion this comment exists under.
+	// Reusable prompt wording a human fills in (see PromptPartialObject). A type, because it is consumed, not read.
+	// Not `prompt` or `template`: `template` already names the authoring stencils under `kcd/`.
 	| 'prompt-partial'
 	| 'framework'
 	| 'nav-index'
@@ -130,9 +89,8 @@ export interface LinkEntry {
 }
 
 /**
- * An ADDRESS ( protocol §1.1 ) — a location that may or may not be occupied. Distinct from a
- * `LinkEntry` in exactly one way, and it is the whole point: a link asserts that something is
- * there, an address does not. Vacancy is legal, so nothing here is ever validated for existence.
+ * A location that may or may not be occupied (protocol §1.1). Unlike a `LinkEntry`, an address asserts nothing is there,
+ * so vacancy is legal and nothing here is validated for existence.
  */
 export interface AddressEntry {
 	/** The address itself — an artifact `name` slug, or a project-root-relative path. */
@@ -144,19 +102,8 @@ export interface AddressEntry {
 }
 
 /**
- * A slot's wire mode — the SAME idiom for every artifact a slot can point at (reference, habit,
- * contract, plan, MCP tool, anything else routable). No per-artifact-type special casing.
- *
- * FOR TOOLS THIS IS NOW A SOURCE VOCABULARY, NOT THE ONE IN FORCE. An agent carries the two axes an
- * allowance really has ( `Policy` and `Surface`, in `ToolAccess` ); a LENS still authors this single
- * three-state, because a slot's mode is a `data-kcd-mode` attribute and splitting it is a document-format
- * break across every lens on disk. `LensObject.getToolPolicies` / `getToolSurfaces` spend the diagonal at
- * that one seam. References and habits still run on this natively.
- *   off  — excluded entirely; not dredged, not even shown as a routing row.
- *   on   — the default. Routing row only (what/where/why) — the agent looks it up when its
- *          When/trigger fires. Cheap: never fetched into the context-assembly graph.
- *   load — the target's full text is dredged and rides inline, no lookup required.
-
+ * A slot's wire mode, the same for every artifact a slot points at. For tools it is a source vocabulary only: an agent
+ * carries `Policy` and `Surface`, and a lens still authors this three-state. `off` excludes, `on` is a routing row, `load` rides inline.
  */
 export const SLOT_MODES = [ 'off', 'on', 'load' ] as const;
 export type SlotMode = typeof SLOT_MODES[number];
@@ -190,29 +137,21 @@ export interface SerializedArtifact {
 	/** Tuned state: whether this artifact contributes to the outbound request.
 	 *  Absent = included (the default). Runtime tuning — never written to disk markdown. */
 	included?: boolean;
-	/** Dredge policy, parsed once at the HTML front end and carried across the bridge so the
-	 *  receiver never re-derives it. Absent on the md path / non-lens artifacts (LensObject
-	 *  re-derives from its Know table). The parser owns policy; this is where it rides. */
+	/** Dredge policy, parsed once at the HTML front end so the receiver never re-derives it. Absent on the md path
+	 *  and non-lens artifacts, which re-derive it. */
 	policy?: PolicyEntry[];
 }
 
 /**
- * The wire form of a dredged lens: the lens's own SerializedArtifact plus its dredged
- * children (NOT the lens itself), each serialized. Crosses the bridge whole; the receiver
- * rebuilds it with LensObject.fromSerialized, which recurses each child's own hydrator.
+ * The wire form of a dredged lens: its own SerializedArtifact plus its dredged children, each serialized.
+ * LensObject.fromSerialized rebuilds it, recursing into each child's own hydrator.
  */
 export interface SerializedLens extends SerializedArtifact {
 	nodes: SerializedArtifact[];
-	/** Dynamically injected Know context — references/plans dropped onto the agent at
-	 *  session time (the GUI equivalent of pasting context into a chat window). Rides
-	 *  the wire and contributes as always-loaded Know; never written to disk markdown.
-	 *  Absent on a lens that has had nothing injected. */
+	/** Know context dropped onto the agent at session time. Never written to disk markdown; absent when nothing was injected. */
 	injected?: SerializedArtifact[];
-	/** Per-tool three-state inclusion the LENS itself contributes ( tool name → mode ), parsed from
-	 *  the lens's Tools table ( `data-kcd-section="tools"` — where-less slots, `group.tool` identities, not
-	 *  path artifacts ). The composition BASELINE, read through the lens's two axis getters and overridden
-	 *  per-tool by the agent's own maps. Absent on a lens with no Tools table. Unlike references/habits,
-	 *  a tool is not a dredged node, so it rides here rather than in `nodes`. */
+	/** The lens's own per-tool three-state, from its Tools table; the composition baseline the agent's maps override.
+	 *  Rides here, not in `nodes`, because a tool is not a dredged node. */
 	toolModes?: Record<string, SlotMode>;
 	/** Set on a lens that crosses as its RECORD alone — no content and no nodes, only what a reader needs to read
 	 *  it on access. The receiver rebuilds it with `LensObject.lazy` and hands it a reader. */

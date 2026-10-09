@@ -1,38 +1,8 @@
 /**
- * THE ARGUMENT TYPES — what a hole in a command line may hold, and the logic that decides it.
- *
- * ── WHY A REGISTRY AND NOT A PILE OF `if`s ──
- * A command's parts used to be three opaque kinds — `fix`, `in`, `pick` — and the validation for all of
- * them lived in one `inspectPart` ladder that applied the same blanket character blacklist to every value.
- * That is wrong in both directions at once: too strict for a value whose legitimate form contains a
- * blacklisted character, and too vague for a person authoring one, who was told "in" and had to guess.
- *
- * So each type OWNS its own logic and its own words. A row below is the whole of a type: what an author
- * picks it by, what an agent is told to put there, how a value is cleaned up, and what makes one invalid.
- * Growing the vocabulary is adding a word to `FillKind` and a row here — the two edits sit next to each
- * other, so a type cannot exist without the logic that decides it.
- *
- * ── THERE IS DELIBERATELY NO FREE-TEXT TYPE ── ( Bryan, 2026-09-27 )
- * There was one, and it was the old `in` kind: any string, guarded by a blacklist of shell metacharacters.
- * It is gone, and not as a simplification — a blacklist is a claim that every dangerous spelling has been
- * thought of, which is the same bet a shell makes and the bet this whole design exists to refuse. An
- * agent-authored value is admissible only where "correct" has a definition somebody can write down.
- *
- * A file path has one. That is why it is the first type and, for now, the only one. A script path that must
- * sit inside a permitted folder would have one too; so would a port, or a member of a fixed menu. "Any
- * string a shell might accept" does not, and no amount of character-filtering gives it one.
- *
- * ── NORMALIZE, THEN VALIDATE, AND THE ORDER IS LOAD-BEARING ──
- * `normalize` runs first and its output is what gets validated AND what reaches argv. That ordering is the
- * only safe one: a validator that inspects a raw value while argv receives a cleaned one is checking a
- * string that never runs, which is the classic validate-then-mutate hole. `Command` normalizes in exactly
- * one place for exactly this reason — see `Command.filled`.
- *
- * ── WHAT A TYPE MAY NOT RELAX ──
- * Three checks sit ABOVE this registry in `Command.inspectPart` and no row here can widen them, because
- * they break the argv itself rather than merely looking dangerous: a control character ( the npm shims
- * truncate an argument at the first newline, silently ), the length cap, and a leading `-` ( the one
- * injection that survives having no shell at all ). A type narrows; it never widens.
+ * The argument types: what a hole in a command line may hold, and the logic that decides it. Each type owns its
+ * logic and words, so a type cannot exist without its check. There is no free-text type: a blacklist is the bet
+ * a shell makes, that every dangerous spelling was thought of. `normalize` runs before `validate`, and its output is what runs.
+ * A type narrows and never widens the control, length and leading-dash checks in `Command.inspectPart`.
  */
 
 /** A hole an agent fills. The union rather than a bare string is the point: adding a type is a word here
@@ -44,41 +14,16 @@ export type FillKind = 'file_path' | 'folder_path';
 export type PartKind = 'literal' | FillKind | 'retired';
 
 /**
- * WHAT THE PROGRAM DOES WITH THE PATH A HOLE HOLDS — declared by the author, beside the hole.
- *
- * ── WHY IT IS ON THE PART AND NOT AT THE CHECK ──
- * The reach check needs an OPERATION — reading a file and writing over it are different questions with
- * different answers, and the file door has had a separate entrance for each of them all along. The type
- * cannot supply it: `file_path` says a value is shaped like a path and says nothing about what the binary
- * on the other end does with it. So every path argument was judged at `read`, which is right for a
- * typecheck and wrong the moment a command takes an output file.
- *
- * Inferring it from the command line was DECLINED ( Bryan, 2026-09-16 ): deciding that `>` means write and
- * `rm` means delete is a parser whose edges are wrong, which is the same argument that made the parts array
- * beat escaping. The author knows; the author says.
- *
- * ── REQUIRED, WITH NO DEFAULT, EVER ──
- * A default of `read` would make a forgotten annotation a silent grant that looks harmless — the one
- * failure mode a security annotation may not have. Required means a forgotten one fails to AUTHOR: the
- * compiler refuses the part, the authoring surface will not produce a usable hole without it, and a stored
- * part that lacks it comes back visibly broken. That is the difference between onus-on-the-author as a
- * convention and as a construction, and it costs nothing.
- *
- * ── THE ACCEPTED LIMIT ──
- * This is the author's INTENT, and nothing verifies the binary agrees. See `_pathsAllowed` in
- * `CommandService`, where the limit is written down beside the check that rests on it.
+ * What the program does with the path a hole holds, declared by the author beside the hole. The type says a value
+ * is shaped like a path, not what the binary does with it, so inferring this from the command line was declined:
+ * deciding that `>` means write is a parser with wrong edges. Required with no default, since a default of `read`
+ * would make a forgotten annotation a silent grant. This is the author's intent; nothing verifies the binary agrees.
  */
 export type PathAccess = 'read' | 'write' | 'delete';
 
-/** ONE LEVEL, WHOLE — the same shape `PartType` has, for the same reason: the words an author picks it by
- *  live beside the thing they name, so a surface offering the choice needs no vocabulary of its own.
- *
- *  `…Info` RATHER THAN `AccessLevel`, and the names below are prefixed for the same reason: the SDK already
- *  exports an `AccessLevel` and an `ACCESS_LEVELS` from its session surface — the four-rung reach ladder,
- *  `none` included — through this very barrel. A second pair under those names is an AMBIGUOUS star
- *  re-export, which TypeScript resolves by dropping BOTH, so the reach ladder would have quietly vanished
- *  from `@kcd/core` and taken every consumer of it with it. This is a different axis ( what a program does )
- *  from that one ( what a principal may reach ), and it says so in the name. */
+/** One access level, whole, as `PartType` is. Named `…Info` and not `AccessLevel`: the SDK already exports
+ *  `AccessLevel` and `ACCESS_LEVELS` through this barrel, and a same-named pair is an ambiguous star re-export
+ *  that TypeScript drops entirely. */
 export interface PathAccessInfo {
 	level: PathAccess;
 	/** What an author picks it by. */
@@ -119,9 +64,8 @@ export function isPathAccess( value: unknown ): value is PathAccess {
 }
 
 /**
- * ONE TYPE, WHOLE. The display half is for the person authoring; `describe` is the sentence an agent reads
- * in the manifest, which is why a hole needs no hand-written hint — the type already says what belongs
- * there, and a per-hole sentence was a second copy of it that nobody could author anyway.
+ * One type, whole. `describe` is the sentence an agent reads in the manifest, so a hole needs no hand-written
+ * hint: the type already says what belongs there.
  */
 export interface PartType {
 	kind: FillKind;
@@ -132,8 +76,8 @@ export interface PartType {
 	/** What the AGENT is told this hole wants. Generated into the manifest line. */
 	describe: string;
 	/**
-	 * Clean a value up before it is judged or run. Total and idempotent — it must not reject, because
-	 * rejecting is `validate`'s job and a normalizer that threw would produce a fault with no code.
+	 * Clean a value before it is judged or run. Total and idempotent: it must not reject, since rejecting
+	 * is `validate`'s job.
 	 */
 	normalize( raw: string ): string;
 	/**
@@ -145,29 +89,17 @@ export interface PartType {
 	fault: 'not_a_file_path' | 'not_a_folder_path';
 }
 
-/** Characters Windows itself forbids in a filename. Four of them — `|`, `<`, `>` and `"` — are on any
- *  shell's interesting list too, so this rule is narrower than a blanket blacklist where it matters and
- *  wider only where a real filename needs it: `(`, `)`, `$`, `%`, `^` and `&` are ordinary characters in a
- *  real path ( `C:\Program Files (x86)`, `report (final).pdf` ) and the blanket rule refused all of them. */
+/** Characters Windows forbids in a filename. Narrower than a shell blacklist on purpose: `(`, `$`, `%`, `^`
+ *  and `&` are legal in real paths. */
 const ILLEGAL_IN_PATH = /["*?<>|]/;
 
 /** A drive at the head of a path, which is the ONE place a colon is legal. `a:b` is not a path. */
 const DRIVE = /^[A-Za-z]:(?=[\\/]|$)/;
 
 /**
- * THE DE-ESCAPE, shared by every path-shaped type.
- *
- * A model hands a path back the way it has seen one written, which in practice means wrapped in quotes
- * ( because a path with a space is quoted everywhere a human writes one ) or with its separators doubled
- * ( because it travelled through JSON ). Both are the SAME path, and refusing them teaches an agent nothing
- * it can act on — it sent the right answer in a normal spelling.
- *
- * ONE LAYER OF QUOTES, not a loop. `""x""` is not a path anybody meant, and unwrapping repeatedly turns a
- * suspicious value into a clean one, which is the opposite of what a normalizer is for.
- *
- * SHARED rather than copied into each row, because a second de-escape that drifts from this one would mean a
- * file argument and a folder argument disagreed about what the same string denotes — and the one that got it
- * wrong would be the one nobody tested.
+ * The de-escape every path type shares: a path quoted, or with doubled separators from JSON, is the same path.
+ * One layer of quotes only, since unwrapping repeatedly would turn a suspicious value clean. Shared so no two
+ * types disagree about what one string denotes.
  */
 function _dePath( raw: string ): string {
 	let v = raw.trim();
@@ -187,14 +119,8 @@ function _dePath( raw: string ): string {
 }
 
 /**
- * THE SYNTAX RULES EVERY PATH SHARES — what makes a string not a path at all, whatever it points to.
- *
- * Returns the offending detail, or null. Shared for the same reason `_dePath` is: these are facts about path
- * spelling rather than about files, and two copies would eventually disagree about one of them.
- *
- * WHAT IS DELIBERATELY NOT HERE: anything about the filesystem. This module sees no disk, so a traversal has
- * to be refused by SHAPE, and whether a path is really a directory is a question for the process that
- * spawns. Confinement to a root is not here either — it needs a passport, and this needs nothing.
+ * The syntax rules every path shares: what makes a string not a path, whatever it points to. This module sees
+ * no disk, so a traversal is refused by shape; confinement needs a passport and is decided elsewhere.
  */
 function _pathSyntax( value: string ): string | null {
 	const illegal = ILLEGAL_IN_PATH.exec( value )?.[ 0 ];
@@ -203,14 +129,8 @@ function _pathSyntax( value: string ): string | null {
 	// The colon, minus the one legal position for it.
 	if( value.replace( DRIVE, '' ).includes( ':' ) ) return ':';
 
-	/*
-	 * `..` BY SEGMENT, never by substring. A file honestly named `..bashrc` or `a..b` carries the two
-	 * characters and climbs nowhere; only a whole segment does.
-	 *
-	 * NOT THE SAME AS CONFINEMENT. This stops a path climbing out of wherever it starts; it does not decide
-	 * where it may start, and an absolute path still goes wherever it says. Deciding that is the reach
-	 * check's job, and it happens where a passport is in hand.
-	 */
+	/* `..` is refused by whole segment, never substring: `..bashrc` climbs nowhere. This is not confinement;
+	 * the reach check decides where a path may start. */
 	if( value.split( /[\\/]/ ).includes( '..' ) ) return '..';
 
 	return null;
@@ -231,10 +151,7 @@ export const PART_TYPES: Readonly<Record<FillKind, PartType>> = {
 			const syntax = _pathSyntax( value );
 			if( syntax ) return syntax;
 
-			// A TRAILING SEPARATOR MEANS A DIRECTORY, which is the one rule separating this row from the next.
-			// A value ending in `\` denotes a folder in every spelling anybody uses, so accepting it here would
-			// let a folder through a hole an author declared for a file — and the program on the other end
-			// would then fail in its own words, about an argument rather than about the hole.
+			// A trailing separator denotes a folder, so it cannot satisfy a file hole. This is the rule that separates the two rows.
 			if( /[\\/]$/.test( value ) ) return 'trailing separator';
 
 			return null;
@@ -248,21 +165,15 @@ export const PART_TYPES: Readonly<Record<FillKind, PartType>> = {
 		describe: 'a directory path — absolute, or relative to the working directory',
 		fault:    'not_a_folder_path',
 
-		/** The shared de-escape, plus the trailing separator a folder is allowed to carry — dropped, so `C:\x\`
-		 *  and `C:\x` are one value rather than two that compare unequal downstream.
-		 *
-		 *  A ROOT KEEPS ITS SEPARATOR. `C:\` stripped to `C:` is a DRIVE-RELATIVE path, which resolves against
-		 *  that drive's current directory and means something else entirely; `/` stripped to `''` is nothing at
-		 *  all. Both are the one case where the trailing separator is load-bearing. */
+		/** The shared de-escape, with a trailing separator dropped so a folder compares equal with or without one.
+		 *  A root keeps its separator: `C:\` stripped is drive-relative, and `/` stripped is nothing. */
 		normalize: ( raw ) => {
 			const v = _dePath( raw );
 			if( /^[A-Za-z]:[\\/]$/.test( v ) || v === '/' || v === '\\' ) return v;
 			return v.replace( /[\\/]+$/, '' );
 		},
 
-		/** THE SHARED SYNTAX RULES AND NOTHING MORE. Whether the directory EXISTS is not answerable here — this
-		 *  module sees no disk — and it need not be: a working directory that is not there fails at `spawn`, in
-		 *  the operating system's own words, which is a better sentence than one guessed at from a stat. */
+		/** Shared syntax only. Existence is not answerable without disk: a missing directory fails at `spawn`, in the OS's own words. */
 		validate: _pathSyntax
 	}
 };

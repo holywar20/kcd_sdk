@@ -1,18 +1,7 @@
 /**
- * ToolDef — the minimal tool descriptor an Agent binds as environment ( `agent.bindEnv({ toolDefs })` ).
- * The core-side shape of the app's `WireToolDef`, carrying only what the agent needs: the name/description/
- * schema to build its tool manifest + preload surface, and the BAKED per-mode counts to price them.
- *
- * Deliberately STRUCTURAL: the app's richer `WireToolDef` ( which also carries annotations / example / doc )
- * is assignable to this, so the renderer binds its store's tools directly with no mapping, and the SDK never
- * imports an app type — the dependency stays app → SDK, never the reverse.
- *
- * A tool def is immutable once its server declares it, so its cost is BAKED main-side ( see MCPService, off
- * the one `KCDPrimitive._estimateTokens` ) and rides with the def. `manifestTokens` is the `manifest`-surface
- * one-liner weight, `preloadTokens` the `preload`-surface full weight — the agent SUMS these rather
- * than re-estimating a schema. Absent only on a def that never crossed the priced serve seam ( e.g. a test
- * double ), where a reader falls back to computing. Both fields are named for the surface they price, so
- * the pair reads as one vocabulary with `SURFACES`.
+ * ToolDef — the minimal tool descriptor an Agent binds as environment (`agent.bindEnv({ toolDefs })`).
+ * Deliberately STRUCTURAL: the app's richer `WireToolDef` is assignable to it, and the SDK never imports an app
+ * type, so the dependency stays app → SDK. Token counts are baked main-side when the def is served, and summed.
  */
 export interface ToolDef {
 	name:         string;
@@ -20,20 +9,11 @@ export interface ToolDef {
 	inputSchema:  Record<string, unknown>;
 	manifestTokens?: number;
 	preloadTokens?:  number;
-	/** The MCP server this tool belongs to — stamped main-side at the priced serve seam so a bound agent
-	 *  can GROUP its manifest by server ( folder ) with the server's own description. Absent on a test
-	 *  double or a def that never crossed the seam ( grouped under a fallback bucket then ). */
+	/** The MCP server this tool belongs to, stamped main-side so the manifest groups by server. Absent on a def
+	 *  that never crossed the seam. */
 	server?: { id: string; name: string; doc: string };
-	/**
-	 * THE WIRE IDENTITY, `group.tool` — stamped beside `server` at the same seam.
-	 *
-	 * IT RIDES RATHER THAN BEING SPELLED HERE. The separator belongs to the app's tool vocabulary and this
-	 * package must not import an app type, so an SDK that built the string would be a second speller of a
-	 * format it cannot see change — and a mode map keyed by one speller and read by another is exactly the
-	 * split this field exists to end.
-	 *
-	 * Absent on a def that never crossed the seam, where a reader falls back to the bare name.
-	 */
+	/** THE WIRE IDENTITY, `group.tool`, stamped beside `server`. It rides rather than being spelled here: an SDK
+	 *  that built the string would be a second speller of a format it cannot see change. */
 	id?: string;
 	/** THE WIRE NAME, `group__tool` — the identity as a model reads and writes it, stamped beside `id` and
 	 *  riding for the same reason. What the manifest names a tool by. Absent pre-seam. */

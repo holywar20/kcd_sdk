@@ -1,12 +1,7 @@
 /**
- * TextTypes — the whitelist of file extensions read as raw text (for preview / future context
- * injection). ONE named list, easy to extend: add an extension here and every text-aware surface
- * gains it at once — the main file service's read gate and the renderer browser's preview/inject
- * affordance. Node-free core: both processes (and the file MCP) ask "is this text?".
- *
- * Extension-based by ruling: a known-text extension is the gate (don't guess from bytes alone).
- * Anything not listed reads as binary → not returned as text. To teach the app a new text type, add
- * its extension to `extensions` — that's the whole ritual.
+ * TextTypes — the whitelist of extensions read as raw text. Node-free, so both processes and the file MCP can ask
+ * "is this text?". Extension-based by ruling: the known-text extension is the gate, never a guess from bytes, and
+ * anything not listed reads as binary. To teach the app a new text type, add its extension to `extensions`.
  */
 export const TextTypes = {
 
@@ -36,7 +31,6 @@ export const TextTypes = {
 	isText( path: string ): boolean {
 		const name = path.replace( /\\/g, '/' ).split( '/' ).pop() ?? ''
 		const dot  = name.lastIndexOf( '.' )
-		// dot at 0 (`.gitignore`) or absent (`Dockerfile`) → test the whole name; else the extension.
 		const key  = dot > 0 ? name.slice( dot + 1 ) : name.replace( /^\./, '' )
 		return this.extensions.has( key.toLowerCase() )
 	}

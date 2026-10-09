@@ -5,58 +5,12 @@ import { HtmlTree, KcdEmit, KcdValidate, VaultLayout } from '../core'
 import type { SerializedArtifact } from '../primitives'
 
 /**
- * NavIndex — every folder `nav-index.html` is DERIVED from the documents under it, never kept by hand.
- *
- * A hand-kept index is a second copy of every document's name and description, and a second copy drifts:
- * a move healed its href and a delete removed its row, but nothing added a row when a document was born
- * and nothing touched one when a description changed. Measured before this existed: two ACTIVE plans
- * missing from the registry the plan contract calls "the registry of every plan", a whole habit class
- * missing from the habit index, and tombstones the source documents had already shed still standing in
- * the catalog. Deriving the index deletes the copy, and with it every way for the two to disagree.
- *
- * MECHANICAL, and it judges nothing. A row is what the document says about itself:
- *   • what  — its `<h1>`, falling back to its `name`
- *   • where — its path
- *   • why   — the LEAD of its `description`: the first sentence, cut back to its first clause when it runs
- *             past `WHY_MAX`. The index-format habit asks for one phrase, and this is also the pressure
- *             that makes a description open with its purpose
- *   • lens  — a fourth column, only when some document in the index declares one ( plans do )
- * grouped into sections by `status`, and within a section by category folder — the first folder below
- * the index, because the folder IS the category.
- *
- * WHAT IS A DOCUMENT is a head read, not a parse: an `.html` file carrying `<article data-kcd="…">` and a
- * frontmatter `<dl>` with a `name`. Anything else — a stray page, a half-written file, a text dump with
- * the wrong extension — is ignored rather than refused, because an index is not the place to grade a
- * vault; `health` is. A bundle ( `x/x.html` ) is one document: its main file is indexed and everything
- * else under that folder belongs to it — unless that main file declares a `habit-class`, because a habit
- * class folder holds its poles side by side and a pole may share the class's name. The pole says what it
- * is, so the folder is a category.
- *
- * DRAFTS. A directory whose layout row declares `drafts` ( `plans` → `work/{lens}/plans` ) also lists what is
- * being drafted for it, in a section of its own and grouped by lens. Those rows are ADDRESSES, never links —
- * a draft lives in ephemeral space and authorizes nothing — and a write to a draft rebuilds the index it is
- * drafted for.
- *
- * WHAT IT NEVER TOUCHES: the vault ROOT index, which deploy writes once as a map the project grows and
- * is deliberately not generated ( see `VaultDeploy._navIndex` ), and any index in ephemeral space —
- * `work/` holds indexes that are somebody's scratch.
- *
- * THE COST IS BOUNDED THREE WAYS, because a vault is not always kept tidy:
- *   • SCOPE — a write rebuilds only the indexes in its own ancestor folders, never the vault.
- *   • READ  — each candidate costs a head read of a few KB ( to the end of its `<h1>` ), never the whole
- *             file; a non-`.html` file costs nothing past the directory listing.
- *   • CAP   — an index over `CAP` candidate files is left as it stands and the write says so, rather than
- *             stalling every save in a vault somebody filled with ten thousand pages.
- * NOTHING CACHES, matching `VaultTools`: every rebuild reads what is on disk, so a document edited by any
- * other means — a script, a plain file tool, another process — is picked up by the next write.
- *
- * WRITE-IF-CHANGED. The rebuilt index is compared with the file on disk before `updated` is stamped, so
- * a write that changes nothing an index shows leaves the index's bytes and mtime alone.
- *
- * A BATCH REBUILDS ONCE. `defer` / `flush` hold the rebuild for the length of a batch, keyed by VAULT
- * rather than by caller — Starmind builds a fresh `VaultTools` per call, so a flag on one instance would
- * never be seen by the siblings the batch dispatches. The price, stated: a write that lands on the same
- * vault DURING someone else's batch has its index rebuilt when that batch ends, not before.
+ * NavIndex — every `nav-index.html` is DERIVED from the documents under it, never hand-kept: a kept copy drifts.
+ * A row is what a document says about itself; grading is `health`'s job. A non-document `.html` is ignored.
+ * A bundle's main file is the document unless it declares a `habit-class`. Drafts are ADDRESSES, never links.
+ * Never touched: the vault root index and any ephemeral index. Nothing caches.
+ * Cost is bounded by scope, a few-KB head read, and a CAP that leaves an oversized index alone.
+ * A batch rebuilds once per VAULT, not per caller (`defer`/`flush`): each call builds a fresh instance.
  */
 
 /** One indexed document, as its own head describes it. */
@@ -134,9 +88,8 @@ export class NavIndex {
 	// ── Rebuild ───────────────────────────────────────────────────────────────
 
 	/**
-	 * Rebuild every index these absolute paths reach — or, inside a batch, remember them for `flush`.
-	 * Never throws: a rebuild that fails is reported as skipped, because the write that caused it has
-	 * already landed and an index is not worth losing it over.
+	 * Rebuild every index these absolute paths reach, or inside a batch remember them for `flush`.
+	 * Never throws: a failed rebuild is reported as skipped, because the write that caused it has landed.
 	 */
 	refresh( absPaths: string[] ): NavIndexResult {
 		const root = this.vault.root
@@ -161,8 +114,8 @@ export class NavIndex {
 	}
 
 	/**
-	 * The folder indexes a change to these paths reaches: every `nav-index.html` in an ancestor folder of
-	 * each path, nearest first. Never the vault root's own, and never one in ephemeral space.
+	 * Every `nav-index.html` in an ancestor folder of each path, nearest first. Never the vault root's own,
+	 * and never one in ephemeral space.
 	 */
 	affected( absPaths: string[] ): string[] {
 		const ephemeral = new Set( VaultLayout.ephemeralDirs() )
@@ -187,7 +140,6 @@ export class NavIndex {
 		return [ ...found ]
 	}
 
-	/** Rebuild one index from the documents under its folder. */
 	rebuild( indexRel: string ): 'written' | 'unchanged' | { skipped: string } {
 		const dir     = path.posix.dirname( indexRel )
 		const indexAbs = path.join( this.vault.root, indexRel )
@@ -266,9 +218,8 @@ export class NavIndex {
 	}
 
 	/**
-	 * The candidates that are documents in their own right. A bundle — a folder `b/` holding `b/b.html` — is
-	 * ONE document: its main file stands for it, and everything else under the folder belongs to it. The
-	 * index's own folder is never treated as a bundle.
+	 * A bundle — a folder `b/` holding `b/b.html` — is ONE document: its main file stands for it and the rest
+	 * belongs to it. The index's own folder is never a bundle.
 	 */
 	documents( dir: string, files: string[], isBundle: ( folder: string ) => boolean = this.bundleTest( dir, files ) ): string[] {
 		return files.filter( rel => {
@@ -280,8 +231,8 @@ export class NavIndex {
 	}
 
 	/**
-	 * Is this folder a bundle — does it hold `folder/folder.html`, and is that file a bundle's main rather than
-	 * one pole of a habit class? Memoized for one rebuild: every file under a folder asks about it.
+	 * Does `folder/folder.html` make a bundle, or is it one pole of a habit class? Memoized per rebuild, since
+	 * every file under a folder asks.
 	 */
 	bundleTest( dir: string, files: string[] ): ( folder: string ) => boolean {
 		const present = new Set( files )
@@ -325,9 +276,8 @@ export class NavIndex {
 	}
 
 	/**
-	 * The front of a file — through the end of its `<h1>` when one follows the frontmatter, else through
-	 * `</dl>`. Null when there is no frontmatter inside `HEAD_MAX`, which is also how a non-document is
-	 * turned away without reading it whole.
+	 * The front of a file: through its `<h1>` when one follows the frontmatter, else through `</dl>`. Null
+	 * when no frontmatter sits within `HEAD_MAX`, so a non-document is turned away unread.
 	 */
 	head( abs: string ): string | null {
 		let fd: number

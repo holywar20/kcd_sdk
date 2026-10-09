@@ -1,29 +1,9 @@
 /**
- * Noise — the BUILD-ARTIFACT filter. It is not a security boundary, and the distance between this
- * file and `Blacklist` beside it is the point.
- *
- * `Blacklist` hides SECRETS. Its defaults cannot be switched off, every reader enforces it, and a
- * path it refuses is refused. This list hides things that are merely UNINTERESTING — a dependency
- * tree, a bundler's output, a lockfile — and any caller may ignore it outright. Blacklist's own
- * header asks for exactly this separation, in these words: noise "belongs to a separate, opt-in
- * flag, because mixing the two teaches people to trim this list." Folded together, the noise half
- * invites editing, and the person editing it eventually trims a secret out of the same array.
- *
- * ── IT PRUNES, IT DOES NOT FILTER, AND THAT IS THE WHOLE REASON IT EXISTS ──
- * Every walk in this SDK is capped. Applied to the RESULTS of one, a noise list buys nothing: the
- * cap trips deep inside the dependency tree and the walk returns before it ever reaches the source.
- * Measured on this project — 83,491 entries, of which 57,943 sit under `node_modules`, against a
- * GLOB_CAP of 1,000 — a content search of the project root finds its first thousand matches inside
- * the first `node_modules` it meets and reports no matches for strings that plainly exist. So a
- * skipped directory is never DESCENDED INTO, which is a different operation from dropping its
- * entries afterwards, and the only one that helps.
- *
- * ── WHAT EARNS A PLACE HERE ──
- * Only directories that are, by near-universal convention, MACHINE OUTPUT or vendored input — never
- * a place a person writes code. `bin/`, `obj/` and `env/` were considered and rejected on that test:
- * `bin/` holds hand-written CLI entry points in most Node projects, and `env` is too generic a word
- * to claim. A false positive here is invisible — the file simply cannot be found — so the bar is
- * "would anyone be surprised", not "is it usually generated".
+ * Noise — the BUILD-ARTIFACT filter. Not a security boundary: secrets belong in `Blacklist`, and folding the two
+ * together teaches people to trim a secret out of this array. It PRUNES rather than filters: every walk is capped,
+ * so a skipped directory must never be descended into — in practice the cap trips inside `node_modules`. Only
+ * near-universal machine output or vendored input belongs here, never a place a person writes code; a false
+ * positive is invisible, so the bar is "would anyone be surprised", not "is it usually generated".
  */
 
 /** Directory NAMES never descended into. Matched whole and case-insensitively against a single path
@@ -43,14 +23,11 @@ export const NOISE_DIRS: readonly string[] = [
 	'coverage', '.nyc_output'
 ]
 
-/** File-name SUFFIXES never opened. Suffix rather than glob for the same reason the directories are
- *  a name compare: this runs once per candidate file in a walk of tens of thousands.
- *
- *  `.lock` covers `yarn.lock`, `Cargo.lock`, `poetry.lock` and `composer.lock` in one entry; the two
- *  JSON/YAML lockfiles have to be named because their extensions are ones a person also writes. */
+/** File-name SUFFIXES never opened. Suffix, not glob: this runs once per candidate in a walk of tens of thousands.
+ *  `.lock` covers most lockfiles; the two JSON/YAML ones are named, since their extensions are ones a person writes. */
 export const NOISE_FILES: readonly string[] = [
 	// minified + bundled output — a single one of these matches nearly every query, which is what
-	// makes them worse than useless in a result list ( this project vendors four, ~900 KB each )
+	// makes them worse than useless in a result list
 	'.min.js', '.min.mjs', '.min.css', '.bundle.js', '.chunk.js',
 	// source maps: machine-written, enormous, and a superset of text that is already searchable
 	'.map',
@@ -60,9 +37,8 @@ export const NOISE_FILES: readonly string[] = [
 
 export const Noise = {
 
-	/** Should a walk refuse to descend into a directory of this NAME? Takes the bare segment, never a
-	 *  full path — the caller has the dirent's name already and joining a path to re-split it would be
-	 *  the expensive half of a check that runs per entry. */
+	/** Should a walk refuse to descend into a directory of this NAME? Takes the bare segment, never a full path —
+	 *  re-splitting a joined path per dirent would be the expensive half of a check that runs per entry. */
 	skipsDir( name: string ): boolean {
 		const key = name.toLowerCase()
 		return NOISE_DIRS.some( ( d ) => d === key )

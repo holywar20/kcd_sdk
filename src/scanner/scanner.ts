@@ -4,17 +4,13 @@ import * as yaml from 'js-yaml';
 import { KcdParse } from '../core/html/KcdParse';
 
 export interface ScanOptions {
-	/** Substring filter applied to relativePath. Omit to return all scanned files. */
 	filter?: string;
-	/** WHITELIST of immediate subdirectory names under the scan root to descend into. A top-level
-	 *  directory not in the set has its WHOLE subtree skipped ( never walked ); root-level files are
-	 *  still scanned, and directories below the first level are always walked. Omit to walk everything. */
+	/** Whitelist of top-level subdirectories to walk; an unlisted one is skipped whole. Root-level files
+	 *  and everything below the first level are always walked. */
 	includeDirs?: string[];
 }
 
-/** The file extensions the scanner indexes — HTML artifacts ( the substrate ) plus `.js` utilities
- *  ( the canonical registered-tool form, metadata in a `/*--- … ---*\/` comment block ). Markdown is
- *  gone: HTML is the sole document substrate. */
+/** `.html` artifacts (the substrate) and `.js` utilities, whose metadata sits in a `/*--- … ---*\/` comment block. */
 const SCAN_EXTS = [ '.html', '.js' ];
 
 export interface RawLink {
@@ -28,7 +24,6 @@ export interface RawAddress {
 }
 
 export interface ScannedFile {
-	/** Absolute path to the file. */
 	path: string;
 	/** Path relative to the scan root, forward-slashes. */
 	relativePath: string;
@@ -43,7 +38,7 @@ export interface ScannedFile {
 }
 
 // JS comment-frontmatter: /*---\n<yaml>\n---*/ — the canonical form for `.js` utilities (a tool
-// carries its metadata in a leading block comment parsed exactly like the old markdown frontmatter).
+// carries its metadata in a leading block comment parsed exactly like Markdown frontmatter).
 const JS_FRONTMATTER_RE = /^\/\*---\r?\n([\s\S]*?)\r?\n---\s*\*\/\r?\n?([\s\S]*)$/;
 
 // Inline links in a `.js` comment body: [text](href). Deliberately simple.
@@ -53,11 +48,7 @@ const LINK_RE = /\[([^\]]*)\]\(([^)]+)\)/g;
 export interface ScanReport {
 	files: ScannedFile[];
 	/** Vault-relative paths of `.html` files that could not be parsed as artifacts, in walk order.
-	 *
-	 *  THIS LIST IS THE WHOLE REASON THIS SHAPE EXISTS. A file that fails to parse is absent from
-	 *  `files`, and absence is indistinguishable from "no such document" at every caller — so a reader
-	 *  hunting a document that IS on disk is told nothing at all and has no way to learn otherwise. The
-	 *  drop is correct; being silent about it is not. */
+	 *  Absence from `files` reads as "no such document", so every drop is reported here. */
 	faults: string[];
 }
 
@@ -67,17 +58,8 @@ export function scan( root: string, docRoot: string, opts?: ScanOptions ): Scann
 }
 
 /**
- * `scan`, reporting what it could not parse.
- *
- * ONE WALK, not two. The obvious way to learn what a scan dropped is to walk the tree again and diff,
- * and it is wrong twice over: it doubles the IO on a hot read path, and the two walks do not cover the
- * same set ( `documentPaths` takes indexed directories and root files; this takes the whole root ), so
- * the difference between them is not the failure set and never was.
- *
- * A `filter` narrows `files` and NOT `faults`. The filter reads `relativePath`, which a fault still
- * has — but a caller filtering is asking which documents match, and a document that cannot be parsed
- * cannot be said to match or not match. Reporting it either way would be a claim; reporting it always
- * is the honest one, and the caller can narrow the list itself.
+ * `scan`, reporting what it could not parse. One walk only: re-walking doubles the IO and covers a different set.
+ * A `filter` narrows `files` and never `faults`: an unparseable file cannot be said to match or not.
  */
 export function scanReport( root: string, docRoot: string, opts?: ScanOptions ): ScanReport {
 	const absRoot = path.resolve( root );
@@ -90,12 +72,8 @@ export function scanReport( root: string, docRoot: string, opts?: ScanOptions ):
 	for ( const absPath of walked ) {
 		const parsed = parseFile( absPath, absRoot, docRoot );
 		if ( !parsed ) {
-			// ONLY AN `.html` FILE CAN BE A FAULT, and the guard states that rather than leaving it to be
-			// inferred. It is true today by accident of `parseFile`: the `.js` path never returns null,
-			// because a utility's comment-frontmatter is best-effort metadata on a code file and failing to
-			// read it is not the file failing to be what it is. Nothing records that, so a future failure
-			// mode on the `.js` branch would start reporting code as unreadable documents — an advisory
-			// nobody can act on, in the one list whose whole value is that every line deserves a look.
+			// Only `.html` can fault: a `.js` file's comment-frontmatter is best-effort, so a `.js` failure
+			// must not be reported as an unreadable document.
 			if ( /\.html?$/i.test( absPath ) )
 				faults.push( path.relative( absRoot, absPath ).replace( /\\/g, '/' ) );
 			continue;
@@ -107,9 +85,8 @@ export function scanReport( root: string, docRoot: string, opts?: ScanOptions ):
 	return { files, faults };
 }
 
-/** `topDirs`, when non-null, gates ONLY the immediate subdirectories of the scan root ( `atRoot` ) — a
- *  top-level dir not in the whitelist is skipped entirely, everything else ( root-level files, deeper
- *  dirs ) is walked as normal. */
+/** `topDirs`, when non-null, gates ONLY the immediate subdirectories of the scan root ( `atRoot` ); an
+ *  unlisted one is skipped entirely. Everything else is walked. */
 function walkFiles( dir: string, topDirs: Set<string> | null, atRoot = true ): string[] {
 	const results: string[] = [];
 	let entries: fs.Dirent[];

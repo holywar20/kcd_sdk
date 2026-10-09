@@ -4,37 +4,10 @@ import type { ToolMode } from '../primitives/ToolAccess';
 import type { TaggedBlock } from '../primitives/types';
 
 /**
- * AgentCompiler — an agent's context, built from its record ( plan agents-own-behaviour, task 55 ).
- *
- * An agent is its personality, its lenses, its habits and its tools, plus the contracts its PROJECT
- * holds, and that is all this reads.
- *
- * THE PERSONALITY IS THE AGENT'S ( Bryan, 2026-09-26 ). It rides `systemPrompt` and leads, above every lens.
- * It used to come from the FIRST lens in the stack — the "primary" — which alone contributed its whole Care
- * while every later lens contributed only its philosophy. That made stack POSITION carry a meaning nothing
- * about a lens justified: the same lens was a persona in one agent and a footnote in the next depending on
- * where it sat in a list. There is no primary now. Every lens contributes the same thing as every other.
- *
- * SEVERAL PHILOSOPHIES IS THE POINT, NOT A COLLISION. Each lens brings what IT defends, and an agent wearing
- * two holds two sets of prerogatives that will not always agree. Nothing here reconciles them and nothing
- * should: the agent is the system of judgement, and the tension is what it is being asked to trade off
- * ( Bryan, 2026-09-26 ). A compiler that flattened this would be answering a question that belongs to the
- * agent — and quietly, where the answer could not be seen.
- *
- * A reference two lenses share still stands as the FIRST has it ( see `_lensBlocks` ) — that one is not about
- * primacy, it is about not shipping the same document twice under two different modes. A lens's own habit and
- * tool tables are NOT read — behaviour belongs to the agent now, and a
- * lens is documentation. Habits the agent loads ride in full; the rest ride as one line of why, so the agent
- * knows they exist and where to find them. The tools are described, never granted here: what an agent may call
- * is its passport's business, or Claude Code's. The contracts are the project's rather than the agent's —
- * every agent holds all of them, derived from `contracts/` so the roster has one home and nothing to
- * synchronise. SKILLS are a third, narrower tier ( plan 22, TASK-318 ): each attached one contributes its
- * name and description alone — the spine label the Agent Skills standard trusts to make discovery work — and
- * an agent holding none emits no section at all, so this compiler never regressed the un-skilled majority.
- *
- * IT NEVER WALKS LENS INHERITANCE. No base lens is appended and nothing a lens points at is followed except the
- * references it loads. What the agent is, is what its record names.
- *
+ * AgentCompiler — an agent's context, built from its record: its personality, lenses, habits and tools, plus
+ * the project's contracts, and nothing else. The personality rides `systemPrompt` and leads; no lens is primary.
+ * Several philosophies in one stack are the point — the agent weighs them; nothing here reconciles them.
+ * Lens habit and tool tables are not read, tools are described and never granted, and inheritance is never walked.
  * Runs alongside `Agent.compile` until the migration retires the lens-chain path.
  */
 
@@ -58,45 +31,34 @@ export interface CompileTool {
 	mode?:        ToolMode;
 }
 
-/** One of the PROJECT's contracts. Not the agent's — every agent in a project holds all of them, which is
- *  why there is no mode here and nothing to author per agent. `when` is the trigger, read from the
- *  document; the roster is derived from `contracts/`, so there is no second copy to keep in step. */
+/** One of the PROJECT's contracts, not the agent's: every agent holds all of them, and the roster is
+ *  derived from `contracts/`, so there is no second copy to keep in step. */
 export interface CompileContract {
 	name: string;
 	path: string;          // vault-relative — where the agent fetches it
 	when: string;
 }
 
-/**
- * ONE ATTACHED SKILL — the spine label the standard intends, and nothing else ( plan 22, TASK-318 ).
- *
- * `name` and `description` are the whole of it. No body, no frontmatter, no bundle manifest, no folder
- * path — reaching for the rest is `read_skill`'s job, paid only when something calls it. The description is
- * NEVER truncated here or anywhere upstream of this type: it is the one field a model matches a task
- * against, and resolving WHICH skill a slug names is `SkillLibraryService`'s job, not this compiler's —
- * this is handed the two strings already resolved, because this package holds no library and no disk.
- */
+/** One attached skill: name and description alone, never truncated, since the description is what a model matches on.
+ *  Resolving a slug is `SkillLibraryService`'s job; this compiler holds no library and no disk. */
 export interface CompileSkill {
 	name:        string;
 	description: string;
 }
 
 export interface AgentCompileInput {
-	/** The agent being compiled. ABSENT OR EMPTY IS A REAL INPUT, not a missing field: a bare lens stack has
-	 *  no agent behind it since the substrate was removed ( TASK-440 ), and the lens header drops its
-	 *  "You are …" clause rather than naming nobody. */
+	/** The agent being compiled. Absent or empty is a real input — a bare lens stack has no agent, and the
+	 *  lens header drops its "You are …" clause rather than naming nobody. */
 	name?:   string;
-	/** The agent's PERSONALITY — its own words, and they lead, above every lens. Still spelled
-	 *  `systemPrompt` because that is the field on the record; what a person writes into it is who the
-	 *  agent is, which is why the editor calls it Personality. */
+	/** The agent's PERSONALITY — its own words, leading above every lens. Still spelled `systemPrompt`
+	 *  because that is the field name on the record. */
 	systemPrompt?: string | null;
 	lenses:  LensObject[];
 	habits:  CompileHabit[];
 	tools:   CompileTool[];
 	contracts?: CompileContract[];
-	/** Skills ATTACHED to this agent, already resolved to their name and description — an unresolvable
-	 *  slug is dropped before it reaches here, so every entry compiles. Absent or empty emits nothing: an
-	 *  agent holding no skills must compile byte-identical to an agent compiled before this field existed. */
+	/** Skills attached to this agent, already resolved — an unresolvable slug is dropped upstream. Absent or
+	 *  empty emits nothing, so an agent with no skills compiles byte-identical to before this field existed. */
 	skills?: CompileSkill[];
 	host?:   CompileHost;
 }
@@ -111,16 +73,14 @@ export interface AgentCompiled {
 	skills:  string[];        // names of the skills that compiled, in attachment order
 }
 
-/** THE ONE Care section a lens contributes — what it defends, what it refuses, how it decides. Every other
- *  Care section is who the WEARER is, and that is authored on the agent ( `systemPrompt` ), not here. Read by
- *  every lens in the stack alike; there is no first-one-wins any more. */
+/** The one Care section a lens contributes. Every other Care section is the wearer's, authored on the agent
+ *  (`systemPrompt`), not here. */
 const PHILOSOPHY = 'philosophy';
 
 const _norm = ( p: string ): string => p.replace( /\\/g, '/' );
 
-/** Every reference path a lens names, in any mode — `off` included, because a mode is a claim on the
- *  reference, and the first lens to make one decides it. Forward-slashed and absolute where the lens knows its
- *  root, so a block's path can be matched against it. */
+/** Every reference a lens names in any mode, `off` included: the first lens to name one decides its mode.
+ *  Forward-slashed and absolute where the root is known, so a block's path can be matched against it. */
 function _namedRefs( lens: LensObject ): string[] {
 	const root = lens.getProjectRoot();
 	return lens.getPolicy()
@@ -134,14 +94,8 @@ const _claimed = ( claimed: Set<string>, path: string ): boolean => {
 	return false;
 };
 
-/**
- * What a lens contributes — THE SAME FROM EVERY LENS IN THE STACK: its philosophy, its own Know tables, and
- * the bodies of the references it loads. No lens brings a personality; the agent has one of those.
- *
- * The one thing position still decides is a SHARED REFERENCE: a document an earlier lens already names stands
- * as that lens has it, mode included, so a later lens can neither load what an earlier one kept on the shelf
- * nor ship it twice. That is de-duplication, not primacy.
- */
+/** A lens contributes its philosophy, its Know tables and its loaded references, the same from every lens.
+ *  Position decides only a shared reference: an earlier lens's claim stands, mode included, never shipped twice. */
 function _lensBlocks( lens: LensObject, claimed: Set<string> ): TaggedBlock[] {
 	const own    = lens.getPath();
 	const care   = lens.getOwnBlocks( 'care' ).filter( b => b.section === PHILOSOPHY );
@@ -159,16 +113,8 @@ function _habitLine( h: CompileHabit ): string {
 	return `- ${ h.name } — ${ h.why || 'no why recorded' } (${ h.path })`;
 }
 
-/**
- * ONE ARTIFACT'S LOADED BODY — its context blocks, trimmed and joined, which is the whole of what a
- * compiled context carries for an artifact that rides in full.
- *
- * EXTRACTED FROM `_habitBody` RATHER THAN WRITTEN BESIDE IT ( TASK-451 ). The measurement surface at the
- * bottom of this file needs the loaded form of an artifact nobody has a `CompileHabit` for, and the one
- * thing it must not do is approximate this join: a second renderer would drift from the compile and the
- * drift would be invisible, which defeats the only purpose a size report has. So this is the renderer and
- * `_habitBody` is now this plus the habit's own null check.
- */
+/** An artifact's loaded body — the one join for both the compile and the measurement projection below, since
+ *  a second renderer would drift from the compile without anyone seeing it. */
 function _artifactBody( artifact: KCDPrimitive ): string | null {
 	const text = artifact.getContextBlocks().map( b => b.text.trim() ).filter( Boolean ).join( '\n\n' );
 	return text || null;
@@ -201,21 +147,8 @@ const CONTRACT_NOTE =
 	+ 'fetch it whole with `sm_documentation__get_doc { path: "contracts/{name}.html" }` and read it before '
 	+ 'starting: a contract is fetched, not compiled, and one summarised on the way in has lost its steps.';
 
-/**
- * THE COMPILE'S OWN PROJECTIONS, exposed so one artifact's loaded size can be measured without compiling
- * a whole agent to read a delta off the total ( TASK-451 ).
- *
- * IT IS NOT A SECOND RENDERER AND MUST NEVER BECOME ONE. Every member here is a function `compile` above
- * already calls, or a one-line binding of one — so a measurement and the context an agent actually
- * receives cannot disagree. The reason that matters is narrow and worth stating: a size report's ONLY
- * value is being trusted about a number, and an approximation of this join would drift from the compile
- * silently. If a projection changes, both readings change together, because there is one of each.
- *
- * WHAT IS DELIBERATELY ABSENT. There is no projection for a plan, a nav-index, a template, a bug report or
- * anything else the compile has no opinion about — a caller measuring one of those is told there is none,
- * rather than handed a plausible figure for text no agent ever receives. An artifact type's absence from
- * this object IS the answer for it.
- */
+/** The compile's own projections, so a size report measures what an agent receives; never a second renderer.
+ *  Artifact types the compile has no opinion about have no projection, and that absence is the answer. */
 export const AgentProjection = {
 	/** An artifact's LOADED form — what an agent that carries it in full pays every turn. */
 	body:         _artifactBody,
@@ -224,13 +157,8 @@ export const AgentProjection = {
 	/** A contract's line. A contract has no loaded form here on purpose: the compile carries the line and
 	 *  the agent fetches the document whole when it applies. */
 	contractLine: _contractLine,
-	/**
-	 * One lens's section, measured ALONE — nothing claimed ahead of it.
-	 *
-	 * That is the honest reading for a lens on its own and it is an UPPER BOUND inside a stack: `compile`
-	 * passes a growing `claimed` set, so a reference an earlier lens already names stands as that lens has
-	 * it and contributes nothing here. A caller reporting this figure has to say so.
-	 */
+	/** One lens measured alone: an UPPER BOUND inside a stack, since references an earlier lens claims are dropped.
+	 *  A caller reporting this figure has to say so. */
 	lensSection:  ( lens: LensObject ): string => _lensSection( lens, new Set<string>() )
 };
 
@@ -240,26 +168,15 @@ export const AgentCompiler = {
 		const host  = input.host ?? 'starmind';
 		const parts: string[] = [];
 
-		// EMPTY IS A REAL ANSWER, and nothing is emitted for it — no header, no placeholder, no sentence
-		// saying the agent has no personality ( Bryan, 2026-09-26 ). A personality here is VOICE GUIDANCE:
-		// "talk like Winston Churchill". An agent that names none is not an agent with a hole in it, it is
-		// an agent running on whatever its model was trained to sound like, which is a perfectly good
-		// default. Announcing the absence would spend context telling a model something about itself that
-		// it is better off simply being.
+		// A personality is voice guidance, so an empty one emits nothing — announcing the absence would spend
+		// context telling a model something about itself that it is better off simply being.
 		const prompt = input.systemPrompt?.trim();
 		if ( prompt ) parts.push( prompt );
 
 		const lenses = input.lenses.map( l => l.getName() );
 		if ( input.lenses.length ) {
-			// NO LENS OVERRULES ANOTHER. This line used to name the first as the persona and give it the
-			// casting vote; both halves were wrong once personality moved to the agent. What it says instead
-			// is what a stack actually is — several sets of prerogatives, held at once, to be weighed rather
-			// than ranked. The weighing is the agent's, which is why it is asked for here in the open.
-			//
-			// AND IT NAMES NOBODY WHEN THERE IS NOBODY ( TASK-440 ). A bare lens stack compiles with no agent
-			// behind it, so "You are …" has no subject and the clause is dropped rather than filled with an
-			// empty string. The rest of the sentence is unchanged — what the lenses bring does not depend on
-			// who is wearing them.
+			// No lens overrules another: several prerogatives are weighed by the agent, not ranked here.
+			// Without a name the "You are …" clause is dropped rather than filled with an empty string.
 			const who   = input.name?.trim();
 			const order = input.lenses.length > 1
 				? ( who ? `You are ${ who }, wearing ${ input.lenses.length } lenses at once: ${ lenses.join( ', ' ) }. `
@@ -292,9 +209,7 @@ export const AgentCompiler = {
 			parts.push( habit.join( '\n\n' ) );
 		}
 
-		// ATTACHED SKILLS — the spine label the standard intends. Each entry here already resolved against
-		// the library before it arrived ( an unresolvable slug never reaches this function ), so nothing here
-		// decides absence — it only decides whether there is a section to print at all.
+		// Skills arrive already resolved, so nothing here decides absence — only whether a section prints.
 		const skillRows = input.skills ?? [];
 		if ( skillRows.length )
 			parts.push( [ '# Skills', skillRows.map( _skillLine ).join( '\n' ) ].join( '\n\n' ) );

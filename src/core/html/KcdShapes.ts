@@ -1,37 +1,10 @@
 /**
  * KcdShapes — the per-TYPE document shape, as data ( parser-family, protocol §2/§4 ).
- *
- * THE PROBLEM THIS SOLVES. A KCD document's shape has been written down three times and never once
- * in a form code can read: the per-type template scaffolds ( prose, for a human to copy, and
- * `data-kcd="template"` is EXEMPT from validation ), the contracts' body-section prose, and the
- * primitives' doc-comments. `KcdValidate` enforces the GRAMMAR ( a section must be named and
- * non-empty, a slot must carry a kind ) but not the SHAPE ( a plan has a Goal ) — its one type-aware
- * pass is `checkHabit`, hand-written for a single type. So a plan with no Goal, no Phases and no
- * Current State validates clean today, and structural drift is not prevented, merely undetected.
- *
- * THE POINT IS TO REMOVE JUDGMENT FROM THE AGENT. An author should be able to say "this is a
- * reference, here is what it says" and never learn the substrate. Every question this table answers
- * — which sections exist, which are mandatory, what order they take, which carry slot ROWS rather
- * than prose — is a question an agent currently answers by reading a template and guessing. Declared
- * once here, three consumers read it and no one guesses:
- *
- *   SYNTHESIZE  ( write ) — text in, conforming HTML out; the author supplies content, not markup.
- *   VALIDATE    ( write ) — the general per-type arm `checkHabit` is the hand-written first row of.
- *   PROJECT     ( read )  — a read REPORTS its gaps rather than refusing; see `audit`.
- *
- * READS REPORT, WRITES REFUSE. A read must never be blocked from telling you what is wrong — a tool
- * that refuses to open a malformed document is the tool that cannot diagnose it, which is the
- * absence-shaped failure this project keeps re-finding. `audit` is therefore pure and non-throwing;
- * the write gate is what turns its findings fatal.
- *
- * TIERS ARE THE MIGRATION LEVER. `required` is an error, `expected` a warning, `optional` silent, and
- * an `open` type accepts sections outside its list entirely. The corpus already conforms ( lenses
- * 13/13; plans 31/36 on goal+phases+current-state ), so these knobs exist to land the check without
- * lighting up documents that were authored correctly under a looser rule — not to soften it forever.
- *
- * WHAT THIS TABLE IS NOT. It does not know where a type lives on disk ( `VaultLayout` owns that ),
- * nor which frontmatter fields a document carries ( `KcdValidate.FRONTMATTER` owns that ). One table,
- * one question: what SHAPE does a body of this type take.
+ * One table says what SHAPE a body of each type takes: sections, their tiers, their order, and which carry slot rows.
+ * Three consumers read it: synthesis and the validator's per-type arm ( write ), and `audit` ( read ).
+ * READS REPORT, WRITES REFUSE: `audit` is pure and non-throwing, and only the write gate makes its findings fatal.
+ * Tiers are the migration lever: `required` is an error, `expected` a warning, `optional` silent; an `open` type accepts undeclared sections.
+ * The table does not know where a type lives on disk ( VaultLayout ) or which frontmatter it carries ( KcdValidate.FRONTMATTER ).
  */
 
 /** How hard a section's absence is. `required` → error, `expected` → warning, `optional` → silent. */
@@ -65,14 +38,9 @@ export interface TypeShape {
 	purpose:   string;
 	sections?: SectionSpec[];
 	regions?:  RegionSpec[];
-	/** Sections outside the declared list are legal. True for types whose body is deliberately loose
-	 *  ( a reference is pointer prose; its section vocabulary is wide by design and policing it would
-	 *  invent a rule the corpus never had ). */
+	/** Undeclared sections are legal. Set for types whose body is deliberately loose, such as a reference. */
 	open?:     boolean;
-	/** The type's OWN status vocabulary, replacing the global set for this type alone. Absent ⇒ the
-	 *  global `KcdAddress.STATUSES`. For a type whose lifecycle is not draft→active — a bug report moves
-	 *  queued→working→verified — and forcing it onto the global words would mean translating at every
-	 *  read. */
+	/** This type's own status vocabulary, replacing the global `KcdAddress.STATUSES` when present. */
 	statuses?: readonly string[];
 }
 
@@ -93,20 +61,13 @@ export interface ShapeAudit {
 const SCAFFOLD_NOTE = 'scaffold-note';
 
 /**
- * The table. Every entry is derived from the type's own template scaffold plus the corpus as
- * authored — not invented here. A type absent from this table is UNGOVERNED rather than
- * malformed: `audit` reports `known: false` and finds nothing, so adding a type is additive and a
- * missing entry can never manufacture an error.
+ * A type absent from this table is UNGOVERNED rather than malformed: `audit` reports `known: false`
+ * and finds nothing, so a missing entry can never manufacture an error.
  */
 export const SHAPES: Record<string, TypeShape> = {
 
-	// OPEN by evidence. The required three ( goal / phases / current-state ) are the real invariant and
-	// hold across the corpus; the rest of a plan's body is the author's to organize, and 18 documents
-	// use bespoke sections — `decisions`, `findings-transport`, `spec-currency`, `out-of-scope`,
-	// `inventory` — to do exactly that. Closing the vocabulary would flag content that is correctly
-	// authored. ( Two real defects live in that same population — date-stamped section names, and a
-	// `status` restated in the body — but both are CONTRACT violations rather than shape ones, and
-	// catching them here would conflate two different checks. )
+	// OPEN by evidence: the required sections are the real invariant. Date-stamped names and a restated status are
+	// contract checks, not shape checks, and do not belong here.
 	plan: {
 		purpose: 'A durable design artifact: what is being built, in what order, and where it stands now.',
 		open: true,
@@ -133,15 +94,8 @@ export const SHAPES: Record<string, TypeShape> = {
 		],
 	},
 
-	// THE ONE CLOSED TYPE. A lens is information — philosophy + references, and optionally a personality —
-	// and nothing that changes what an agent DOES: habits, tools and contracts belong to the agent ( plan
-	// agents-own-behaviour ). Flat sections; the Know / Care / Do regions are retired. `KcdValidate.checkLens`
-	// enforces the closure, so a lens in the old shape is refused whole.
-	//
-	// PERSONALITY IS OPTIONAL SINCE 2026-09-26, and is no longer read by the compiler at all. An agent's
-	// personality is authored on the AGENT ( `systemPrompt` ); it was required here back when the first lens
-	// in a stack supplied one. The section stays LEGAL so the lenses that carry one still parse — and stays
-	// unrequired so nothing has to write prose nothing consumes.
+	// THE ONE CLOSED TYPE: a lens is information, flat, and `KcdValidate.checkLens` refuses any other shape whole.
+	// Personality is optional and read by no compiler; an agent authors its own on the AGENT ( `systemPrompt` ).
 	lens: {
 		purpose: 'Information for an agent: what it believes, and what it reads.',
 		sections: [
@@ -188,23 +142,16 @@ export const SHAPES: Record<string, TypeShape> = {
 		],
 	},
 
-	// A nav-index carries NO sections at all — its body is `<h2>` status headings over faux-tables of
-	// `link` slot rows, and not one of the eleven in the corpus wraps them in a `data-kcd-section`.
-	// An earlier draft of this table required an `entries` section, copying the template rather than
-	// the corpus, and failed all eleven. The real invariant here — carries at least one `link` row —
-	// is a SLOT axis, not a section one, so it is left unstated rather than faked as a section.
+	// A nav-index has no sections: `<h2>` status headings over `link` slot rows, not wrapped in `data-kcd-section`.
+	// Its one invariant, a `link` row, is a slot axis, so it is not stated here as a section.
 	'nav-index': {
 		purpose: 'The navigable surface over a corpus — one row per artifact, grouped by status.',
 		open: true,
 		sections: [],
 	},
 
-	// Loose by construction. A reference is pointer prose — where a thing lives, how to use it, what
-	// state it is in — and its section vocabulary is deliberately wide ( 58 of 60 in the corpus carry
-	// sections, under no shared vocabulary ). Declaring a required set here would invent a rule the
-	// type never had and light up the largest population in the vault. The one declared section is OPTIONAL
-	// and exists for its slot: an undeclared section's rows had nowhere to land on the content path and were
-	// dropped without a warning — the same defect, and the same fix, as a habit's references.
+	// Loose by construction: a reference is pointer prose with a wide section vocabulary, so nothing is required.
+	// The one declared section is optional and exists for its slot rows.
 	reference: {
 		purpose: 'A pointer to a living artifact: where it lives, how to use it, and its current state.',
 		open: true,
@@ -215,13 +162,10 @@ export const SHAPES: Record<string, TypeShape> = {
 
 	framework:         { purpose: 'Orientation for the substrate itself.',            open: true, sections: [] },
 	'prompt-partial':  { purpose: 'A reusable fragment composed into a prompt.',      open: true, sections: [] },
-	// `audit` had a shape entry here until 2026-10-03, when the type was retired whole ( Bryan ). An
-	// absent entry is the correct state and not a gap: `audit` below reports `known: false` for a type
-	// it does not hold and finds nothing, so nothing throws on the way past.
+	// An absent entry is the correct state, not a gap: `audit` reports `known: false` for an ungoverned type and throws nothing.
 
-	// The task board's vocabulary, not a new one. `queued | working | rejected | verified` is the
-	// task board's `AgentState` verbatim; `needs-human` is the one addition — the escape path, which the
-	// board expresses as an ask raised against the task rather than as a state.
+	// The task board's vocabulary: `queued | working | rejected | verified` is `AgentState` verbatim. `needs-human` is the
+	// escape path, which the board expresses as an ask rather than a state.
 	'bug-report': {
 		purpose: 'A filed defect and the proof of its repair — what broke, what moved, and the evidence that settles it.',
 		open: true,
@@ -297,11 +241,8 @@ export const KcdShapes = new class KcdShapes {
 	}
 
 	/**
-	 * Compare a document's PRESENT section names against its type's shape. Pure, total, and
-	 * non-throwing — this is the read gate, and a read that throws cannot report.
-	 *
-	 * An ungoverned type returns `known: false` and no findings, so a type this table does not yet
-	 * carry is silent rather than wrong.
+	 * Compare a document's present section names against its shape. Pure and non-throwing: a read that throws cannot report.
+	 * An ungoverned type returns `known: false` and no findings.
 	 */
 	audit( type: string, present: string[] ): ShapeAudit {
 		const shape = this.shapeFor( type );
@@ -329,11 +270,7 @@ export const KcdShapes = new class KcdShapes {
 		return this.audit( type, present ).missing.length === 0;
 	}
 
-	/**
-	 * The shape, addressed to an author who has never read a template — served on refusal and by any
-	 * future discovery tool. This is what lets an agent create a conforming artifact knowing only
-	 * that it wants a reference: the tool tells it the rest at the moment it needs it.
-	 */
+	/** The shape, addressed to an author who has never read a template, served on refusal. */
 	describe( type: string ): string {
 		const shape = this.shapeFor( type );
 		if ( !shape ) return `"${ type }" has no declared shape — its body is ungoverned.`;
