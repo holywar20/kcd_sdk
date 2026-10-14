@@ -73,6 +73,16 @@ export interface ServerManifest {
 	installed_at?:    string;             // ISO 8601 — set at installation
 	source_repo?:     string;             // breadcrumb back to the draft folder
 	bundled_kcd_sdk?: string;             // kcd_sdk version inlined at promote — compared against main's for drift
+
+	// ── Security (person-declared, at install time) ─────────────────────────────
+	// Neither the author's identity nor the system's lifecycle stamp: a person categorising an UNTRUSTED
+	// bundle through the install wizard, before the app ever registers it. Mirrors the app's `ToolGateDecl`
+	// shape ( gate id -> subject path | null ) without importing it — kcd_sdk sits below the app and cannot
+	// import its permission types, the same boundary `ServerConfigSurface` already crosses structurally.
+	// Keyed by tool name so one server's tools can carry different declarations. Absent means "a person has
+	// not categorised this server" — read by the app as "warn, do not enforce", same as any other foreign
+	// tool that never declared gates; it is never silently promoted to "no gates apply".
+	toolGates?: Record<string, Record<string, string | null>>;
 }
 
 /**

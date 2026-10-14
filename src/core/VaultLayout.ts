@@ -23,18 +23,17 @@ export interface LayoutEntry {
 	layer: VaultLayer
 	/** Whether the library index descends into it. */
 	indexed: boolean
-	/** Retired content: still shipped and linkable for provenance, but NOT graded. Distinct from `indexed: false`,
-	 *  which means not installed and illegal to link into. LONGEST PREFIX, so a nested bucket can be archival. */
-	archival?: boolean
 	/** Machine state that must SURVIVE a sweep of the directory it sits in. Independent of `indexed`: a durable row is
 	 *  still unindexed and illegal to link, so protecting it from deletion must not make it citable. LONGEST PREFIX. */
 	durable?: boolean
+	/** Whether a deploy CREATES this directory. Absent ⇒ true, so the default is unchanged and a new row scaffolds.
+	 *  `false` is the ON-DEMAND case: the row still CLASSIFIES, so a document that lands here is typed and graded and a
+	 *  link to it is legal — a fresh vault simply does not carry the empty folder. The two are independent questions,
+	 *  and folding them together is what would make an unscaffolded directory's documents classify `unknown`. */
+	scaffold?: boolean
 	/** The document types this directory ACCEPTS on a write, when broader than the type it implies. Absent ⇒ `[ type ]`.
 	 *  "What is here" and "may this land here" are different questions; a write guard has to answer the second. */
 	accepts?: readonly ArtifactType[]
-	/** Where this directory's documents are DRAFTED before landing here: a path under ephemeral space, `*` = one per lens.
-	 *  A draft authorizes nothing and is listed as an ADDRESS only (protocol §1.1). */
-	drafts?: string
 	/** The one-line description the generated reference publishes. */
 	purpose: string
 }
@@ -80,21 +79,21 @@ const LAYOUT: readonly LayoutEntry[] = [
 		purpose: 'The registered tool tier — draft/ (unapproved) and deployed/ (approved), with a registry.'
 	},
 	{
-		dir: 'plans', type: 'plan', layer: 'data', indexed: true, drafts: 'work/*/plans',
-		purpose: 'Promoted plans that authorize action, plus the plans_complete/ and plans_deferred/ buckets beneath.'
+		// NOT SCAFFOLDED, and the row stays for the other reason a row exists. A plan is a RECORD in the database, not a
+		// document — a KCD plan document is only ever what a plan is EXPORTED to — so a fresh vault has nothing to put
+		// here and the empty folder read as an instruction to write plans as documents. The row survives because export
+		// still has to produce a document that VALIDATES: classification is what types it `plan`, what grades it, and what
+		// keeps a plan body out of compiled context when a lens links one ( `LensObject` skips a child typed `plan` ).
+		// Dropping the row would classify an exported plan `unknown` and dredge its whole body into an agent's context.
+		dir: 'plans', type: 'plan', layer: 'data', indexed: true, scaffold: false,
+		purpose: 'Where a plan is EXPORTED to, on demand — not a planning surface. A plan lives in the database and is written in the Plan Studio; this folder holds the documents it exports to, and is created when the first one lands.'
 	},
-	{
-		// Nested and ARCHIVAL, not ephemeral: live artifacts link retired plans for provenance, and ephemeral space
-		// would make every one of those links illegal under §1.1. They ship; they are simply not graded.
-		dir: 'plans/plans_complete', type: 'plan', layer: 'data', indexed: true, archival: true,
-		purpose: 'Retired plans, kept as a historical record. Shipped and linkable, but never graded — the standard they were written against has moved on.'
-	},
-	{
-		// Archival for the OPPOSITE reason to plans_complete: a parked draft is in churn, not yet at standard.
-		// THE WALL IS AT THE EXIT: graded when promoted out, and only an unscoped sweep skips it while it sits.
-		dir: 'plans/plans_deferred', type: 'plan', layer: 'data', indexed: true, archival: true,
-		purpose: 'Parked drafts, kept in case they come back. Shipped and linkable, but never graded — a draft in churn is held to the standard when it is promoted out, not while it sits.'
-	},
+	// THE TWO ARCHIVAL PLAN BUCKETS STOOD HERE — `plans/plans_complete` and `plans/plans_deferred` — and they were
+	// the ONLY rows the `archival` flag ever marked. They held plan documents from the era when a plan WAS a
+	// document: completing or retiring one filed its file into a bucket, and the bucket was its status. A plan is a
+	// database record now, nothing files a document anywhere, and both folders were emptied by hand ( Bryan,
+	// 2026-10-14 ). The `archival` flag and its three readers went with them rather than staying as a mechanism
+	// with no occupant — see the ARCHIVAL note on `isEphemeralHref` for what the concept meant and why it is gone.
 	{
 		// `data`, not `agent`: a partial is never composed INTO an agent. It is appended after context compilation,
 		// as part of the user message.
@@ -107,7 +106,7 @@ const LAYOUT: readonly LayoutEntry[] = [
 	// means unrecognized, which is a different signal.
 	{
 		dir: 'work', type: 'unknown', layer: 'data', indexed: false,
-		purpose: 'Per-lens scratch space (AI/, human/, plans/). Cheap and discardable until something is promoted out of it.'
+		purpose: 'Per-lens scratch space (AI/, human/). Cheap and discardable until something is promoted out of it.'
 	},
 	{
 		dir: 'logs', type: 'unknown', layer: 'data', indexed: false,
@@ -248,29 +247,21 @@ export class VaultLayout {
 		return [ ...out ]
 	}
 
-	/** The directories holding retired content: shipped and linkable, not graded. NOT collapsed to a top segment,
-	 *  unlike `ephemeralDirs`: collapsing would archive `plans/` whole, not just its retired bucket. */
-	static archivalDirs(): string[] {
-		return LAYOUT.filter( e => e.archival ).map( e => e.dir )
-	}
-
-	/** Is this path archival? Segment-boundary prefix match on the doc-root-anchored remainder, so an href and an absolute
-	 *  path answer alike. Never bare `startsWith`: `plans/plans_completed-notes` must not match `plans/plans_complete`. */
-	static isArchivalPath( href: string, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): boolean {
-		const parts  = href.replace( /\\/g, '/' ).replace( /^\.\//, '' ).split( '/' ).filter( p => p !== '' )
-		const anchor = parts.lastIndexOf( docRoot )
-		const rel    = ( anchor >= 0 ? parts.slice( anchor + 1 ) : parts ).join( '/' )
-		return VaultLayout.archivalDirs().some( d => rel === d || rel.startsWith( d + '/' ) )
-	}
-
 	/** The directories holding durable machine state, NOT collapsed to a top segment. THE ONE PLACE TO ASK: anything
 	 *  that cleans or empties part of a vault reads this rather than keeping a second list. */
 	static durableDirs(): string[] {
 		return LAYOUT.filter( e => e.durable ).map( e => e.dir )
 	}
 
-	/** Does this path hold durable state? Same matching as `isArchivalPath`. Segment-boundary, never bare `startsWith`:
-	 *  a sibling `audits/ledgers-old` is a different directory and is NOT protected by the `audits/ledgers` row. */
+	/** The directories a deploy CREATES — every row that has not opted out. Derived, so a new row scaffolds by
+	 *  default and opting out is the deliberate edit. Classification reads `all()`, never this. */
+	static scaffoldDirs(): readonly LayoutEntry[] {
+		return LAYOUT.filter( e => e.scaffold !== false )
+	}
+
+	/** Does this path hold durable state? Segment-boundary prefix match on the doc-root-anchored remainder, so an
+	 *  href and an absolute path answer alike. Never bare `startsWith`: a sibling `audits/ledgers-old` is a
+	 *  different directory and is NOT protected by the `audits/ledgers` row. */
 	static isDurablePath( href: string, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): boolean {
 		const parts  = href.replace( /\\/g, '/' ).replace( /^\.\//, '' ).split( '/' ).filter( p => p !== '' )
 		const anchor = parts.lastIndexOf( docRoot )
@@ -279,7 +270,14 @@ export class VaultLayout {
 	}
 
 	/** Does a project-root-relative href land in ephemeral space? Judged on the element after the doc-root segment.
-	 *  TOP-LEVEL only, deliberately: ephemeral may not be linked into (§1.1), archival must stay linkable. */
+	 *  TOP-LEVEL only, deliberately: ephemeral may not be linked into (§1.1).
+	 *
+	 *  THERE WAS A SECOND EXCLUSION BESIDE THIS ONE, `archival`, and it is gone. It marked retired content that
+	 *  SHIPPED and had to stay linkable, but was no longer held to the current standard — the opposite of ephemeral
+	 *  on the linking axis, which is why folding the two together was pinned by a test as a real regression: it
+	 *  would have made every provenance link into a retired plan an `ephemeral-link` error. Its only occupants were
+	 *  ever the two plan buckets, and when a plan stopped being a document there was nothing left to be archival.
+	 *  Ephemeral is now the only way a directory drops out of a grading sweep. */
 	static isEphemeralHref( href: string, docRoot = VaultLayout.DEFAULT_DOC_ROOT ): boolean {
 		const parts = href.replace( /\\/g, '/' ).replace( /^\.\//, '' ).split( '/' ).filter( p => p !== '' )
 

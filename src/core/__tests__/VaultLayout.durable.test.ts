@@ -50,14 +50,14 @@ describe( 'VaultLayout — a ledger is durable state inside disposable space', (
 		expect( VaultLayout.isDurablePath( '_Claude/audits/ledgers/nested/deep.json' ) ).toBe( true )
 	} )
 
-	/** Segment-boundary matching, never bare `startsWith` — the same rule `isArchivalPath` follows. A
-	 *  sibling whose name merely begins with the declared prefix is a different directory. */
+	/** Segment-boundary matching, never bare `startsWith`. A sibling whose name merely begins with the
+	 *  declared prefix is a different directory. */
 	it( 'does not swallow a sibling with a prefix-colliding name', () => {
 		expect( VaultLayout.isDurablePath( '_Claude/audits/ledgers-old/x.json' ) ).toBe( false )
 		expect( VaultLayout.isDurablePath( '_Claude/audits/ledgers-backup.json' ) ).toBe( false )
 	} )
 
-	/** Same doc-root anchoring the other two predicates use, so every form a caller might hold agrees. */
+	/** Same doc-root anchoring `isEphemeralHref` uses, so every form a caller might hold agrees. */
 	it( 'answers alike for href, vault-relative, and absolute forms', () => {
 		const abs = path.join( PROJECT_ROOT, '_Claude', 'audits', 'ledgers', 'audit-tests.json' )
 		expect( VaultLayout.isDurablePath( LEDGER ) ).toBe( true )
@@ -66,7 +66,7 @@ describe( 'VaultLayout — a ledger is durable state inside disposable space', (
 	} )
 
 	/**
-	 * THE LOAD-BEARING ONE, and it guards the opposite mistake to the archival suite's.
+	 * THE LOAD-BEARING ONE.
 	 *
 	 * The cheap way to make a ledger survive a sweep would have been to flip `indexed` — and that would
 	 * trade a data-loss bug for a validation bug: a ledger would become graded as a KCD document ( it is
@@ -87,9 +87,10 @@ describe( 'VaultLayout — a ledger is durable state inside disposable space', (
 		expect( vault.isLibraryPath( 'audits/ledgers/audit-tests.json' ) ).toBe( false )
 	} )
 
-	/** Durability says nothing about identity or grading, so the two flags it sits beside are untouched. */
-	it( 'is neither archival nor a governed artifact', () => {
-		expect( VaultLayout.isArchivalPath( LEDGER ) ).toBe( false )
+	/** Durability says nothing about identity, so the flag beside it is untouched. ( This also asserted
+	 *  `isArchivalPath( LEDGER ) === false`; that predicate is gone with the plan buckets — see
+	 *  `VaultLayout.exclusions.test.ts`. ) */
+	it( 'is not a governed artifact', () => {
 		expect( VaultLayout.classify( LEDGER ) ).toBe( 'unknown' )
 	} )
 } )

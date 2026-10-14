@@ -24,8 +24,6 @@ export interface NavIndexEntry {
 	lens:   string[]
 	/** The category folder it files under — the first folder below the index, or '' at the top. */
 	group?: string
-	/** Found in the directory's declared drafts location, not under the directory itself. */
-	draft?: boolean
 }
 
 /** What one refresh did. Paths are vault-relative. */
@@ -116,6 +114,12 @@ export class NavIndex {
 	/**
 	 * Every `nav-index.html` in an ancestor folder of each path, nearest first. Never the vault root's own,
 	 * and never one in ephemeral space.
+	 *
+	 * A write in ephemeral space reaches NO index, with no exception. There used to be one: a layout row could
+	 * declare where its documents were DRAFTED, and a write under that glob refreshed the index it was drafted
+	 * for. `plans` was the only row that ever declared one — plan drafts under `work/{lens}/plans/` — and a plan
+	 * is a database record now, authored on the planning surface and only ever EXPORTED to a document, so there
+	 * is no draft stage for a document to sit in. The mechanism went with the thing it existed for.
 	 */
 	affected( absPaths: string[] ): string[] {
 		const ephemeral = new Set( VaultLayout.ephemeralDirs() )
@@ -124,12 +128,6 @@ export class NavIndex {
 		for ( const abs of absPaths ) {
 			const rel = path.relative( this.vault.root, abs ).split( path.sep ).join( '/' )
 			if ( !rel || rel.startsWith( '..' ) || path.isAbsolute( rel ) ) continue
-
-			for ( const entry of VaultLayout.all() ) {
-				if ( !entry.drafts || !NavIndex.underGlob( rel, entry.drafts ) ) continue
-				const index = `${ entry.dir }/${ VaultLayout.NAV_INDEX_FILE }`
-				if ( fs.existsSync( path.join( this.vault.root, index ) ) ) found.add( index )
-			}
 			if ( ephemeral.has( rel.split( '/' )[ 0 ] ) ) continue
 
 			for ( let dir = path.posix.dirname( rel ); dir !== '.' && dir !== ''; dir = path.posix.dirname( dir ) ) {
@@ -144,24 +142,15 @@ export class NavIndex {
 		const dir     = path.posix.dirname( indexRel )
 		const indexAbs = path.join( this.vault.root, indexRel )
 
-		const files     = this.candidates( dir )
-		const draftGlob = VaultLayout.all().find( e => e.dir === dir )?.drafts
-		const drafts    = draftGlob ? this.expandGlob( draftGlob ).map( d => ( { dir: d, files: this.candidates( d ) } ) ) : []
-		const total     = files.length + drafts.reduce( ( n, d ) => n + d.files.length, 0 )
-		if ( total > this.cap )
-			return { skipped: `${ total } files under ${ dir }/${ draftGlob ? ` and ${ draftGlob }/` : '' } exceeds the index cap of ${ this.cap } — left as it stood` }
+		const files = this.candidates( dir )
+		if ( files.length > this.cap )
+			return { skipped: `${ files.length } files under ${ dir }/ exceeds the index cap of ${ this.cap } — left as it stood` }
 
 		const isBundle = this.bundleTest( dir, files )
 		const entries: NavIndexEntry[] = []
 		for ( const rel of this.documents( dir, files, isBundle ) ) {
 			const entry = this.entryFor( rel )
 			if ( entry ) entries.push( { ...entry, group: this.groupOf( dir, rel, isBundle ) } )
-		}
-		for ( const d of drafts ) {
-			for ( const rel of this.documents( d.dir, d.files ) ) {
-				const entry = this.entryFor( rel )
-				if ( entry ) entries.push( { ...entry, draft: true, group: NavIndex.globMatch( rel, draftGlob! ) } )
-			}
 		}
 
 		const own      = this.ownFrontmatter( indexAbs )
@@ -329,8 +318,7 @@ export class NavIndex {
 	// ── Emitting ──────────────────────────────────────────────────────────────
 
 	/**
-	 * The article body: title, the index's own description, the generated notice, then one section per status
-	 * — with the drafts section, when there is one, directly after `active`.
+	 * The article body: title, the index's own description, the generated notice, then one section per status.
 	 */
 	body( dir: string, description: string | undefined, entries: NavIndexEntry[] ): string {
 		const esc      = ( s: string ) => HtmlTree.escapeText( s )
@@ -348,9 +336,7 @@ export class NavIndex {
 
 		const row = ( e: NavIndexEntry ): string => {
 			const stem  = esc( path.posix.basename( e.rel, '.html' ) )
-			const where = e.draft
-				? `<code data-kcd-field="where" data-kcd-type="address" data-kcd-address="${ HtmlTree.escapeAttr( `${ docRoot }/${ e.rel }` ) }">${ stem }</code>`
-				: `<a data-kcd-field="where" data-kcd-type="path" href="${ HtmlTree.escapeAttr( `${ docRoot }/${ e.rel }` ) }">${ stem }</a>`
+			const where = `<a data-kcd-field="where" data-kcd-type="path" href="${ HtmlTree.escapeAttr( `${ docRoot }/${ e.rel }` ) }">${ stem }</a>`
 			return '<div data-kcd-slot="link">'
 				+ `<span data-kcd-field="what" data-kcd-type="text">${ esc( e.what ) }</span>`
 				+ where
@@ -378,20 +364,14 @@ export class NavIndex {
 			return block.join( '\n' )
 		}
 
-		const promoted = entries.filter( e => !e.draft )
-		const drafted  = entries.filter( e => e.draft )
-		const sections: Array<{ status: string; html: string }> = NavIndex.statusOrder( promoted.map( e => e.status ) ).map( status => ( {
-			status,
-			html: section( status || 'no-status', status ? status[ 0 ].toUpperCase() + status.slice( 1 ) : 'No status', '', promoted.filter( e => e.status === status ) ),
-		} ) )
-		if ( drafted.length ) {
-			const at = sections.findIndex( s => s.status === 'active' ) + 1
-			sections.splice( at, 0, {
-				status: '',
-				html:   section( 'drafts', 'Drafts', `Being drafted in <code>${ esc( `${ docRoot }/` ) }work/</code> — scratch that authorizes nothing until it is promoted here. Addresses, not links: ephemeral space is not installed into a vault.`, drafted ),
-			} )
+		for ( const status of NavIndex.statusOrder( entries.map( e => e.status ) ) ) {
+			parts.push( section(
+				status || 'no-status',
+				status ? status[ 0 ].toUpperCase() + status.slice( 1 ) : 'No status',
+				'',
+				entries.filter( e => e.status === status ),
+			) )
 		}
-		for ( const s of sections ) parts.push( s.html )
 		return parts.join( '\n\n' )
 	}
 
@@ -445,40 +425,6 @@ export class NavIndex {
 		}
 		const cut = s.lastIndexOf( ' ', NavIndex.WHY_MAX - 1 )
 		return s.slice( 0, cut > 30 ? cut : NavIndex.WHY_MAX - 1 ).replace( /[\s,;:—–-]+$/, '' ) + '…'
-	}
-
-	/** The folders a drafts glob names — each `*` matches one existing folder. */
-	expandGlob( glob: string ): string[] {
-		let dirs = [ '' ]
-		for ( const seg of glob.split( '/' ) ) {
-			const next: string[] = []
-			for ( const d of dirs ) {
-				if ( seg === '*' ) {
-					let kids: fs.Dirent[] = []
-					try { kids = fs.readdirSync( path.join( this.vault.root, d ), { withFileTypes: true } ) } catch { /* no such folder */ }
-					for ( const k of kids ) {
-						if ( k.isDirectory() && !k.name.startsWith( '.' ) && !SKIP_DIRS.has( k.name ) ) next.push( d ? `${ d }/${ k.name }` : k.name )
-					}
-				} else {
-					const p = d ? `${ d }/${ seg }` : seg
-					if ( fs.existsSync( path.join( this.vault.root, p ) ) ) next.push( p )
-				}
-			}
-			dirs = next
-		}
-		return dirs.sort()
-	}
-
-	/** Does a vault-relative path sit under a drafts glob? */
-	static underGlob( rel: string, glob: string ): boolean {
-		const g = glob.split( '/' ), r = rel.split( '/' )
-		return r.length > g.length && g.every( ( seg, i ) => seg === '*' || seg === r[ i ] )
-	}
-
-	/** What a path's `*` segments matched — a draft's lens, for grouping. */
-	static globMatch( rel: string, glob: string ): string {
-		const r = rel.split( '/' )
-		return glob.split( '/' ).map( ( seg, i ) => seg === '*' ? r[ i ] : '' ).filter( Boolean ).join( '/' )
 	}
 
 	/** Present statuses in section order. */

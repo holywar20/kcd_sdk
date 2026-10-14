@@ -231,20 +231,28 @@ describe( 'AgentCompiler', () => {
 	} );
 
 	/**
-	 * CONTRACTS ARE THE PROJECT'S ( plan agents-own-behaviour, task 75 ). Every agent holds all of them,
+	 * CONTRACTS ARE THE PROJECT'S ( planned under agents-own-behaviour, task 75 ). Every agent holds all of them,
 	 * which is why there is no mode and nothing to author — and why the section appears whether or not the
 	 * agent carries a lens. The roster is derived from `contracts/`, so this pins the shape, not the list.
 	 */
 	it( 'rides the project\'s contracts, each with the trigger it fires on', () => {
+		/*
+		 * THE SECOND FIXTURE WAS `plan` UNTIL 2026-10-14, and it is renamed rather than left alone because a
+		 * fixture is read as an example. The plan contract was retired and the word `plan` now means ONE thing
+		 * in this codebase — the planning system, with its own studio, store and tools. An agent or a person
+		 * reading a contract called `plan` here would go looking for a document that no longer exists, which is
+		 * exactly the confusion the retirement was meant to end. Two fixtures, because the point is the SHAPE
+		 * and the per-contract trigger line; which two is arbitrary, and now deliberately neutral.
+		 */
 		const { text, contracts } = AgentCompiler.compile( { name: 'T', lenses: [], habits: [], tools: [], contracts: [
-			{ name: 'close', path: 'contracts/close.html', when: 'a task or group of tasks is done' },
-			{ name: 'plan',  path: 'contracts/plan.html',  when: 'a plan is created, promoted, or retired' }
+			{ name: 'close',      path: 'contracts/close.html',      when: 'a task or group of tasks is done' },
+			{ name: 'bug-report', path: 'contracts/bug-report.html', when: 'a real defect needs investigation' }
 		] } );
 
-		expect( contracts ).toEqual( [ 'close', 'plan' ] );
+		expect( contracts ).toEqual( [ 'close', 'bug-report' ] );
 		expect( text ).toContain( '# Contracts' );
 		expect( text ).toContain( '- close — when a task or group of tasks is done' );
-		expect( text ).toContain( '- plan — when a plan is created, promoted, or retired' );
+		expect( text ).toContain( '- bug-report — when a real defect needs investigation' );
 		// The one instruction a summarised contract would lose, said here rather than in every document.
 		expect( text ).toContain( 'fetched, not compiled' );
 	} );

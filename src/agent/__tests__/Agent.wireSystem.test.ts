@@ -149,6 +149,8 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 
 			Everything you hold is listed here. A tool marked [schema on request] is not callable yet: call tool_search with its exact name, or with a server's name for all of that server's tools, then call it. A tool you already have never stands in for one you have not fetched.
 
+			A \`###\` heading may carry its package's own description. THAT DESCRIPTION IS NOT NARROWED TO YOU — it describes the whole package, so it can name tools, in prose and by name, that are not on your rows. THE ROWS ARE YOUR ROSTER. Where the two disagree the rows are right: a tool the description discusses and the rows do not list is one you DO NOT HOLD, however specifically it is described. Do not plan a deliverable around it, and say so plainly instead.
+
 			### Fixture server
 			A fixture server.
 			- probe — Look at a thing. [schema on request]
@@ -257,6 +259,110 @@ describe( 'Agent — the environment layer', () => {
 
 		expect( wire ).toContain( 'You are running inside Starmind Dev.' );
 		expect( wire.indexOf( 'You are running inside Starmind Dev.' ) ).toBeLessThan( wire.indexOf( 'You are baseline.' ) );
+	} );
+} );
+
+/**
+ * THE SKILL SPINE — an attached skill's name and description, in the context the agent is actually sent.
+ *
+ * Its own describe, on an agent that binds the layer, for the reason the environment layer above has one:
+ * the snapshots are a characterization of the layers that existed before this one, and adding a block to
+ * `fullAgent` would re-pin all of them to prove a new layer works. `fullAgent` binding no skills is also the
+ * assertion that an agent with none is byte-identical to one compiled before this layer existed.
+ *
+ * WHAT IS WORTH HOLDING HERE is the POSITION, the PRICING and the WHOLENESS of the description. The text is
+ * a third party's, resolved main-side off the library, and this side only carries it — but it carries it
+ * WHOLE, because the description is the field a model matches a task against and a clipped one is a skill
+ * that silently stops firing. The live end-to-end claim ( the string in the bytes a real turn sent ) is
+ * pinned in starmind's own `SkillSpineOnTheWire` suite; this is the block-level half of the same gate.
+ */
+describe( 'Agent.skillSpine — the attached-skill label', () => {
+
+	const DESCRIPTION = 'Extract text, fill forms, merge, or otherwise manipulate PDF files.';
+
+	function withSkill(): Agent {
+		const agent = fullAgent();
+		agent.bindEnv( { skills: [ { name: 'pdf-processing', description: DESCRIPTION } ] } );
+		return agent;
+	}
+
+	it( 'puts the name and the whole description on the wire', () => {
+		const wire = withSkill().wireSystem();
+
+		expect( wire ).toContain( '## Your skills' );
+		expect( wire ).toContain( `- pdf-processing — ${ DESCRIPTION }` );
+	} );
+
+	it( 'never truncates, at the spec bound or past it', () => {
+		const agent = fullAgent();
+		// 1024 is the spec's cap. 2000 is past it: the cap is the library's business, and this layer's job is
+		// to carry whatever it is handed intact rather than to enforce a limit a second time.
+		for ( const length of [ 1024, 2000 ] ) {
+			const long = 'd'.repeat( length );
+			agent.bindEnv( { skills: [ { name: 'long-one', description: long } ] } );
+			expect( agent.wireSystem() ).toContain( `- long-one — ${ long }` );
+		}
+	} );
+
+	it( 'carries no block at all when nothing is attached', () => {
+		// Every layer in this tier has to return to EMPTY: `[]` is the off value, not a heading over nothing.
+		expect( fullAgent().compiledContext().some( b => b.section === 'skills' ) ).toBe( false );
+
+		const emptied = withSkill();
+		emptied.bindEnv( { skills: [] } );
+		expect( emptied.compiledContext().some( b => b.section === 'skills' ) ).toBe( false );
+		// And back to byte-identical with the agent that never had one.
+		expect( emptied.wireSystem() ).toBe( fullAgent().wireSystem() );
+	} );
+
+	it( 'is NOT a manifest section — it sits in the required-reading half', () => {
+		// The whole design decision: the `# Manifest` band's heading says "not required reading now", and the
+		// spine label is the discovery mechanism. Beneath that heading it would be defeated invisibly.
+		const agent  = withSkill();
+		const blocks = agent.compiledContext();
+		const skills = blocks.findIndex( b => b.section === 'skills' );
+
+		expect( skills ).toBeGreaterThan( -1 );
+		// Filed as reach rather than as one of the routing tables — the breakdown says `tools`, not `index`.
+		expect( Agent.segmentKey( blocks[ skills ] )?.source ).toBe( 'tools' );
+		// Below the manifest tables, above the run-specific capability layer — beside the tool manifest.
+		expect( blocks.findIndex( b => b.section === 'references' ) ).toBeLessThan( skills );
+		expect( blocks.findIndex( b => b.section === 'tool-manifest' ) ).toBeLessThan( skills );
+	} );
+
+	it( 'prices as TOOLS — reach, not lens identity', () => {
+		const before = fullAgent().compiledBudget();
+		const agent  = withSkill();
+		const after  = agent.compiledBudget();
+
+		expect( Agent.bucketOf( agent.compiledContext().find( b => b.section === 'skills' )! ) ).toBe( 'tools' );
+		// The label's own weight lands on TOOLS. The description alone is around seventeen tokens, so a
+		// bucket that moved by less than ten would mean the block had been charged somewhere else.
+		expect( after.tools - before.tools ).toBeGreaterThan( 10 );
+		// THE LENS BAND MOVES BY ONE DIVIDER AND NOTHING ELSE — a pre-existing property of `bucketOf` rather
+		// than this layer's doing: a structural block carries no `section`, and every sectionless block
+		// prices as `lenses`. So adding any block to the `after` bracket shifts this bucket by the one `---`
+		// that introduces it. Pinned as a BOUND rather than as equality, because the claim worth failing on
+		// is that no lens CONTENT was recharged, and an equality here fails on the divider instead.
+		expect( after.lenses - before.lenses ).toBeLessThanOrEqual( 2 );
+	} );
+
+	it( 'names itself in the breakdown, and still reproduces the wire exactly', () => {
+		const agent = withSkill();
+
+		expect( agent.contextSegments().filter( s => s.source === 'tools' ).map( s => s.label ) ).toContain( 'your skills' );
+		expect( agent.contextSegments().map( s => s.text ).join( '\n\n' ) ).toBe( agent.wireSystem() );
+	} );
+
+	it( 'lists every attached skill, in the order it was handed them', () => {
+		const agent = fullAgent();
+		agent.bindEnv( { skills: [
+			{ name: 'beta-skill',  description: 'Beta does another thing.' },
+			{ name: 'alpha-skill', description: 'Alpha does a thing.' }
+		] } );
+
+		const wire = agent.wireSystem();
+		expect( wire.indexOf( 'beta-skill' ) ).toBeLessThan( wire.indexOf( 'alpha-skill' ) );
 	} );
 } );
 

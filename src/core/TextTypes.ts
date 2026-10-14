@@ -11,6 +11,10 @@ export const TextTypes = {
 		'txt', 'md', 'markdown', 'mdx', 'rst', 'adoc',
 		// data / config
 		'json', 'jsonc', 'json5', 'yaml', 'yml', 'toml', 'ini', 'cfg', 'conf', 'env', 'properties',
+		// line-delimited JSON — plain UTF-8, one JSON object per line. `jsonl` is what every trace channel is
+		// written as, so without it the app's own flight recorder is unreadable from a file seat ( DEFECT-342 );
+		// `ndjson` is the identical format under its other common name, and omitting it only moves the defect.
+		'jsonl', 'ndjson',
 		// insight documents — JSON under our own extension ( the SIG / starmind_insight substrate )
 		'sig',
 		// web / scripts
@@ -18,6 +22,8 @@ export const TextTypes = {
 		'html', 'htm', 'xml', 'svg', 'css', 'scss', 'sass', 'less',
 		// languages
 		'py', 'rb', 'go', 'rs', 'java', 'kt', 'c', 'h', 'cpp', 'hpp', 'cc', 'cs', 'php', 'swift', 'lua', 'r', 'pl',
+		// godot — scene / resource / script, all plain text in this engine
+		'tscn', 'tres', 'gd', 'gdshader',
 		// shells
 		'sh', 'bash', 'zsh', 'fish', 'ps1', 'bat', 'cmd',
 		// queries / tabular / logs
@@ -26,12 +32,19 @@ export const TextTypes = {
 		'gitignore', 'gitattributes', 'editorconfig', 'dockerfile', 'makefile'
 	] ),
 
+	/** The key `isText` actually looks up — the trailing extension, or the bare name for extensionless config
+	 *  files (`.gitignore`, `Dockerfile`), lowercased. Exposed so a REFUSAL can name the thing that was
+	 *  rejected: "not a known text type" without the key leaves a reader guessing which table to edit, and
+	 *  a second parse at the message site would be a second answer to the same question. */
+	keyOf( path: string ): string {
+		const name = path.replace( /\\/g, '/' ).split( '/' ).pop() ?? ''
+		const dot  = name.lastIndexOf( '.' )
+		return ( dot > 0 ? name.slice( dot + 1 ) : name.replace( /^\./, '' ) ).toLowerCase()
+	},
+
 	/** Is this path a known text type? Reads the trailing extension, or the bare name for
 	 *  extensionless config files (`.gitignore`, `Dockerfile`). */
 	isText( path: string ): boolean {
-		const name = path.replace( /\\/g, '/' ).split( '/' ).pop() ?? ''
-		const dot  = name.lastIndexOf( '.' )
-		const key  = dot > 0 ? name.slice( dot + 1 ) : name.replace( /^\./, '' )
-		return this.extensions.has( key.toLowerCase() )
+		return this.extensions.has( this.keyOf( path ) )
 	}
 }

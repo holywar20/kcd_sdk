@@ -46,6 +46,12 @@ export type GrepCount = {
 	matches: number
 }
 
+/** Why a FILE root was never opened. Each one is already known at the moment the scan gives up, and
+ *  collapsing them into one sentence is what let a 2026-10-13 triage record "binary or oversized" as the
+ *  cause of a plain-text 1.4 MB file it simply had no table entry for ( DEFECT-342 ). The fix a reader needs
+ *  differs per cause — edit a table, raise a cap, widen a root — so the cause travels rather than the prose. */
+export type GrepSkip = 'noise' | 'nontext' | 'protected' | 'empty' | 'oversized' | 'unreadable'
+
 /** What a content search returns. `searched` counts files actually opened: nothing found across 0 files
  *  is meaningless. `capped` (more exist) and `cancelled` (stopped on request) both mark the list partial. */
 export type GrepScan = {
@@ -64,4 +70,9 @@ export type GrepScan = {
 	/** The root was a FILE — a legitimate one-file search. Without this, an empty result for a path that is
 	 *  not a directory reads the same as a directory holding nothing searchable. */
 	rootIsFile: boolean
+	/** WHY that one file was never opened, when it was not. Set only on the `rootIsFile` path and only when
+	 *  `searched` is 0 — on every other shape it is null, because a directory walk skips many files for many
+	 *  reasons and one cause could not honestly stand for them. Null therefore means "no single file was
+	 *  refused", never "refused for an unknown reason". */
+	fileSkip: GrepSkip | null
 }

@@ -102,8 +102,8 @@ describe( 'VaultUtilities.query — the parse-fault advisory', () => {
 		expect( unreadable ).toContain( ORPHAN );
 	} );
 
-	/** The same courtesy the archival rule gets beside it: NAMING the bucket is a caller asking about
-	 *  that space, and a silent drop there would be the original bug wearing different clothes. */
+	/** NAMING the corpus is a caller asking about that space, and a silent drop there would be the
+	 *  original bug wearing different clothes. */
 	it( 'reports the corpus when the glob names it', () => {
 		const { unreadable } = VaultUtilities.query( vaultOf(), { glob: 'research/**' } );
 		expect( unreadable ).toContain( REPORT );

@@ -142,8 +142,8 @@ function _skillLine( s: CompileSkill ): string {
 /** How to invoke one, said once here rather than in every contract document. The fetch-whole rule is the
  *  load-bearing half: a contract summarised on the way in has lost the steps that are the whole point of it. */
 const CONTRACT_NOTE =
-	'A contract is a procedure you follow. Invoke one explicitly as `#name`, or by describing it — "let\'s '
-	+ 'make a plan" invokes plan exactly as `#plan` does. Match the request against the trigger below, then '
+	'A contract is a procedure you follow. Invoke one explicitly as `#name`, or by describing it — "let\'s wrap '
+	+ 'up here" invokes close exactly as `#close` does. Match the request against the trigger below, then '
 	+ 'fetch it whole with `sm_documentation__get_doc { path: "contracts/{name}.html" }` and read it before '
 	+ 'starting: a contract is fetched, not compiled, and one summarised on the way in has lost its steps.';
 
@@ -157,6 +157,9 @@ export const AgentProjection = {
 	/** A contract's line. A contract has no loaded form here on purpose: the compile carries the line and
 	 *  the agent fetches the document whole when it applies. */
 	contractLine: _contractLine,
+	/** One attached skill's SPINE LABEL — the row both compiles draw. `Agent.skillSpine` reads it for the live
+	 *  wire, so the never-truncate rule is kept in one template rather than in two that can drift apart. */
+	skillLine:    _skillLine,
 	/** One lens measured alone: an UPPER BOUND inside a stack, since references an earlier lens claims are dropped.
 	 *  A caller reporting this figure has to say so. */
 	lensSection:  ( lens: LensObject ): string => _lensSection( lens, new Set<string>() )

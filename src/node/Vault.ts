@@ -39,7 +39,8 @@ export interface HealPlan {
 export interface RefIssue {
 	path:     string;
 	/** `warn` is an ordinary dangling link. `error` is a WRONG-VAULT reference, pointing into a different vault
-	 *  rather than at something missing. */
+	 *  rather than at something missing — or a CASE MISMATCH, which is a link that does not resolve and is merely
+	 *  being resolved for you by a case-insensitive filesystem today. */
 	severity: 'warn' | 'error';
 	message:  string;
 	ref:      string;
@@ -129,11 +130,14 @@ export class Vault {
 	}
 
 	/**
-	 * Is this path GRADED by an unscoped sweep? Ephemeral space (`indexed: false`) is neither graded nor legal to link into (§1.1).
-	 * Archival space is not graded either: its standard moved on after it retired. Unindexed does not mean disposable.
+	 * Is this path GRADED by an unscoped sweep? Ephemeral space (`indexed: false`) is neither graded nor legal to link
+	 * into (§1.1), and is now the ONLY exclusion. Unindexed does not mean disposable.
+	 *
+	 * An `&& !isArchivalPath( relPath )` stood here, exempting the two plan buckets. It went with them: a plan is a
+	 * record rather than a document, so nothing is archival any more ( see `VaultLayout.isEphemeralHref` ).
 	 */
 	isLibraryPath( relPath: string ): boolean {
-		return !VaultLayout.isEphemeralHref( relPath ) && !VaultLayout.isArchivalPath( relPath );
+		return !VaultLayout.isEphemeralHref( relPath );
 	}
 
 	/** Is anything on disk at this href/address? A plain fact — never a verdict ( protocol §1.1 ). */
@@ -394,7 +398,7 @@ export class Vault {
 	}
 
 	/** Every file the text sweep opens: the indexed library in raw form, `.md`, `.js`, ruled-in todos and the host entry files.
-	 *  Ephemeral space and archival records are not swept, each ruled out by name. */
+	 *  Ephemeral space is not swept, ruled out by name. */
 	healSweepFiles(): string[] {
 		const out: string[] = [];
 		const walk = ( dir: string ): void => {
@@ -654,7 +658,8 @@ export class Vault {
 	// ── Reference integrity ────────────────────────────────────────────────────
 
 	/**
-	 * Dangling links and identity refs (`base`/`lens`) naming no artifact, both `warn`; `error` is a wrong-vault link or a duplicated id.
+	 * Dangling links and identity refs (`base`/`lens`) naming no artifact, both `warn`; `error` is a wrong-vault link, a
+	 * CASE-MISMATCHED link or a duplicated id.
 	 * Identity refs are read in both the string and list shapes. Known hole, left unfixed: `names` includes scratch `work/`, so a dead ref there looks alive.
 	 */
 	referenceIssues( onlyFile?: string ): RefIssue[] {
@@ -666,13 +671,33 @@ export class Vault {
 			? files.filter( f => f.path === this.toAbs( onlyFile ) )
 			: files.filter( f => this.isLibraryPath( f.relativePath ) );
 		const issues: RefIssue[] = [];
+		// Directory listings, memoized FOR THIS CALL ONLY. The case check reads one listing per path segment and a vault's
+		// links share their segments many times over; a cache outliving the call would answer off a stale directory.
+		const dirs: Map<string, string[]> = new Map();
 
 		for ( const f of targets ) {
 			for ( const link of f.rawLinks ) {
 				const href = link.href;
 				if ( href.startsWith( '#' ) || href.startsWith( 'http://' ) || href.startsWith( 'https://' ) ) continue;
 				if ( href.includes( '{' ) ) continue;
-				if ( fs.existsSync( this.resolveHref( href ) ) ) continue;
+
+				const abs  = this.resolveHref( href );
+				const real = this._onDisk( abs, dirs );
+				if ( real.found ) {
+					if ( real.exact ) continue;
+
+					// A LINK THAT RESOLVES ONLY BECAUSE THE FILESYSTEM IS CASE-INSENSITIVE IS A BROKEN LINK, and an ERROR
+					// rather than a warning: it does not resolve, it is being resolved for you. The failure is invisible on
+					// Windows and macOS and total on Linux or in a container, so it ships. Reported BEFORE the wrong-vault
+					// check, which the same href often also satisfies — the real casing is the repair, and the other message
+					// would send a reader to rewrite the whole leading segment instead of one letter of it.
+					issues.push( {
+						path: f.relativePath, severity: 'error', ref: href,
+						message: `case mismatch: "${ href }" resolves only on a case-insensitive filesystem — on disk it is `
+						       + `"${ this.relToProject( real.cased ) }"`
+					} );
+					continue;
+				}
 
 				// A wrong-vault href is an error, not a dangling link. It is proven on disk: swapping the leading segment must resolve.
 				const elsewhere = this._wrongVaultTarget( href );
@@ -731,6 +756,51 @@ export class Vault {
 			ids.set( id, [ ...( ids.get( id ) ?? [] ), f.relativePath ] );
 		}
 		return ids;
+	}
+
+	/**
+	 * What is ACTUALLY on disk at a resolved href: whether anything is there, and its real spelling. `cased` differs from
+	 * the path asked for only when the link is cased wrong.
+	 *
+	 * `fs.existsSync` could not answer this, which is the whole reason this exists. It reports what the FILESYSTEM is
+	 * willing to open, and on Windows and macOS that is case-insensitive — so a vault whose links were half-migrated from
+	 * `_Context/` to `_context/` validated clean on the machine that broke it and had 108 dead links on every other.
+	 * Reading directory ENTRIES is the only way to learn a real name, and it is case-exact on every platform: the
+	 * case-insensitive comparison below is how the real entry is FOUND, never how a match is judged, so this reports the
+	 * same mismatch on Linux ( where the link also fails to open ) as on Windows ( where it does not ).
+	 *
+	 * Only segments BELOW the project root are graded — a vault does not get to grade the casing of its own ancestors —
+	 * and an unreadable directory falls back to `existsSync`, because a case verdict read off a failed read is a guess.
+	 */
+	private _onDisk( abs: string, dirs: Map<string, string[]> ): { found: boolean; exact: boolean; cased: string } {
+		const rel = path.relative( this.projectRoot, abs );
+		if ( rel === '' || rel.startsWith( '..' ) || path.isAbsolute( rel ) )
+			return { found: fs.existsSync( abs ), exact: true, cased: abs };
+
+		let at    = this.projectRoot;
+		let exact = true;
+
+		for ( const want of rel.split( path.sep ) ) {
+			if ( want === '' || want === '.' ) continue;
+
+			let entries = dirs.get( at );
+			if ( !entries ) {
+				try { entries = fs.readdirSync( at ); }
+				catch { return { found: fs.existsSync( abs ), exact: true, cased: abs }; }
+				dirs.set( at, entries );
+			}
+
+			// Exact first: on a case-sensitive filesystem both spellings can exist, and the one asked for wins.
+			const real = entries.includes( want ) ? want : entries.find( e => e.toLowerCase() === want.toLowerCase() );
+			if ( real === undefined ) return { found: false, exact: true, cased: abs };
+
+			// Judged PER SEGMENT, never by comparing the two whole paths: `cased` is spelled by `path.join` and `abs`
+			// by `PathText`, and a disagreement between those two about a separator or a trailing slash would read as a
+			// case fault on every link in the vault.
+			if ( real !== want ) exact = false;
+			at = path.join( at, real );
+		}
+		return { found: true, exact, cased: at };
 	}
 
 	/** The href with its leading segment swapped for this vault's name, if that resolves on disk; null otherwise. Narrow by design:

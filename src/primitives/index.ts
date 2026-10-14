@@ -4,6 +4,7 @@ export { KCDParseError, KCDValidationError } from './errors';
 export { SLOT_MODES } from './types';
 export { POLICIES, TOOL_MODES, holds, carries, policyForMode } from './ToolAccess';
 export type { Policy, ToolMode } from './ToolAccess';
+export type { RoleGroup } from './RoleGroup';
 export type {
 	ArtifactType,
 	ContextSegment,

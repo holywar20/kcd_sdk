@@ -340,16 +340,13 @@ export class VaultUtilities {
 	}
 
 
-	/** Does this glob name an archival bucket? A prefix test, not a match: `plans/plans_complete/**` reaches, `plans/**` does not. */
-	private static globReachesArchival( pattern: string | undefined ): boolean {
-		if ( !pattern ) return false;
-		const norm = pattern.replace( /\\/g, '/' ).replace( /^\.\//, '' ).replace( /^_Claude\//, '' );
-		return VaultLayout.archivalDirs().some( d => norm === d || norm.startsWith( d + '/' ) );
-	}
-
 	/**
-	 * Does this glob name EPHEMERAL space (`work/`, `logs/`, `reports/`, `audits/`)? A separate predicate from the
-	 * archival one: ephemeral never ships and may not be linked into, archival ships and must stay linkable.
+	 * Does this glob name EPHEMERAL space (`work/`, `logs/`, `reports/`, `audits/`)? Ephemeral never ships and may
+	 * not be linked into.
+	 *
+	 * A `globReachesArchival` twin stood beside this, letting a caller who NAMED an archival bucket reach it. Both
+	 * it and the archival filter in `query` are gone: the only archival dirs were the two plan buckets, and a plan
+	 * is a record now ( see `VaultLayout.isEphemeralHref` ).
 	 */
 	private static globReachesEphemeral( pattern: string | undefined ): boolean {
 		if ( !pattern ) return false;
@@ -359,15 +356,16 @@ export class VaultUtilities {
 
 	/**
 	 * Glob, type and text, AND-combined over one scan; `groupBy: 'type'` returns a census instead of refs.
-	 * Unparseable documents are reported in `unreadable`, not silently absent; archival buckets are excluded unless `glob` names one.
+	 * Unparseable documents are reported in `unreadable`, not silently absent.
+	 *
+	 * NOTHING IS EXCLUDED BY CATEGORY ANY MORE. Archival buckets were filtered out here unless `glob` named one,
+	 * so `type: "plan"` answered the live plans and not the retired ones. Both buckets held plan documents from
+	 * when a plan was a document, and both are gone.
 	 */
 	static query( vault: Vault, opts: QueryOptions = {} ): QueryResult {
 		const needle  = opts.text?.toLowerCase();
 		const report  = vault.scanReport();
-		const inScope = ( relPath: string ): boolean => {
-			if ( opts.glob && !Glob.matches( relPath, opts.glob ) ) return false;
-			return VaultUtilities.globReachesArchival( opts.glob ) || !VaultLayout.isArchivalPath( relPath );
-		};
+		const inScope = ( relPath: string ): boolean => !opts.glob || Glob.matches( relPath, opts.glob );
 
 		let files = report.files.filter( f => inScope( f.relativePath ) );
 		if ( opts.type ) files = files.filter( f => vault.classify( f.path ) === opts.type );

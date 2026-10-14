@@ -534,10 +534,10 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 			'be combined; they AND together. With no filter it returns the whole live vault. Returns an array ' +
 			'of refs ( path + type + name ) — read one with {{get}}, walk its edges with {{links}}. Pass ' +
 			'`groupBy: "type"` to get `{ type, count }[]` ( sorted by count, descending ) instead of refs — ' +
-			'the cheapest orientation call. ARCHIVAL buckets ( plans/plans_complete, plans/plans_deferred ) ' +
-			'are EXCLUDED unless the glob names one — retired and parked plans answer "what did we do", not ' +
-			'"what is true now". So `type: "plan"` returns the live plans, and ' +
-			'`glob: "plans/plans_complete/**"` returns the retired ones. PAGED at 20 refs: when more match, ' +
+			'the cheapest orientation call. NOTHING IS EXCLUDED BY CATEGORY: every document the scan reaches is ' +
+			'in scope, so a filter is the only thing that narrows an answer. `type: "plan"` answers the plan ' +
+			'DOCUMENTS under plans/, which are EXPORTS — a plan itself is a record, read with `sm_plan__read`. ' +
+			'PAGED at 20 refs: when more match, ' +
 			'a note says how many and `page` ( 1-based ) walks them — though narrowing with `glob` / `type` ' +
 			'/ `text` is nearly always the better move. A `groupBy` census is never paged. Read-only.',
 		inputSchema: {
@@ -608,9 +608,12 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 		doc:
 			'Validate artifacts on two axes. STRUCTURAL ( per file ): required frontmatter, sections, ' +
 			'and type rules — a parse failure becomes an error issue rather than aborting the run. ' +
-			'REFERENCE INTEGRITY ( cross-file, advisory warnings ): internal links whose target is missing ' +
+			'REFERENCE INTEGRITY ( cross-file ): internal links whose target is missing ' +
 			'on disk ( code-file links count; external URLs, #anchors, and {placeholder} hrefs are skipped ), ' +
-			'and `base`/`lens` slugs that name no artifact ( the `cross` sentinel is skipped ). Pass `path` ' +
+			'and `base`/`lens` slugs that name no artifact ( the `cross` sentinel is skipped ) — both advisory ' +
+			'warnings. A link cased wrong is an ERROR, not a warning: it is checked against the real on-disk ' +
+			'entry name on every platform, so a link that only resolves because this filesystem is ' +
+			'case-insensitive is reported here rather than on the Linux box it breaks on. Pass `path` ' +
 			'to check one file; omit it to sweep the whole vault. Returns `{ issues, summary }` — each issue ' +
 			'carries its path, severity (error/warn), and message; the summary totals errors vs warnings. ' +
 			'The pre-flight before a save or move sweep, and the observable form of the "always viable" ' +
@@ -697,7 +700,8 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 			'TWO WAYS IN, exactly one per call. Pass `artifact.content` to AUTHOR: give sections as prose ' +
 			'( plus rows for the record-bearing ones ) and the structure — section order, nesting, heading ' +
 			'levels, faux-tables, the whole data-kcd grammar — is DERIVED from that type\'s declared shape, so ' +
-			'you supply content and never markup. Pass `artifact.body` instead to EDIT, where existing ' +
+			'you supply content and never STRUCTURAL markup — a small closed set of inline tags is honoured ' +
+			'inside a section, and `content.sections` names it. Pass `artifact.body` instead to EDIT, where existing ' +
 			'structured HTML is kept — content, structure and attributes ' +
 			'survive, while indentation and line breaks are NORMALIZED to house format, so expect the ' +
 			'file you get back to be formatted rather than byte-identical to what you sent. Supplying both is ' +
@@ -724,7 +728,10 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 							properties: {
 								title:    { type: 'string', description: 'The document\'s <h1>. Defaults to frontmatter.name.' },
 								summary:  { type: 'string', description: 'One line under the title, rendered as a blockquote.' },
-								sections: { type: 'object', additionalProperties: { type: 'string' }, description: 'Section name → prose. Plain text is fine: blank lines become paragraphs, "- " lines a list. MARKDOWN IS NOT INTERPRETED — **bold**, `code` and [text](link) render as literal characters; use <strong>, <code>, <a href> instead, or write the whole section as HTML. HTML comments are stripped. Names and order come from the type\'s shape; a nested child like "phase-2" is placed inside its parent automatically.' },
+								// The inline tag list is GENERATED from `PROSE_INLINE_TAGS` rather than written out
+								// here. This description advertising a vocabulary the synthesizer escaped was the
+								// whole of BUG-74, so the set is named once and every reader of it derives.
+								sections: { type: 'object', additionalProperties: { type: 'string' }, description: 'Section name → prose. Plain text is fine: blank lines become paragraphs, "- " lines a list. MARKDOWN IS NOT INTERPRETED — **bold**, `code` and [text](link) render as literal characters; use ' + KcdSynth.inlineTagList().join( ', ' ) + ' instead — those inline tags are honoured anywhere in a section, and an `href` may be a vault-relative path or an http/https/mailto URL. Anything else, including an unclosed one of those, renders as literal text; write the whole section as HTML if you need structure. HTML comments are stripped. Names and order come from the type\'s shape; a nested child like "phase-2" is placed inside its parent automatically.' },
 								slots: {
 									type:        'array',
 									description: 'Rows for the sections that carry records rather than prose (a lens\'s habits, a nav-index\'s entries).',

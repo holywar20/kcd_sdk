@@ -149,34 +149,41 @@ describe( 'NavIndex — a row is what the document says about itself', () => {
 	} )
 } )
 
-describe( 'NavIndex — drafts, from where the layout says they are drafted', () => {
+/**
+ * THE DRAFTS SECTION IS GONE, and this block is what pinned it. A layout row could declare where its documents
+ * were DRAFTED — a glob under ephemeral space — and the index for that directory grew a Drafts section listing
+ * them as addresses, refreshed by a write anywhere under the glob.
+ *
+ * `plans` was the only row that ever declared one, and a plan is a database record now: it is authored on the
+ * planning surface and a KCD document is only ever what a plan is EXPORTED to, so no document has a draft stage
+ * to be in. Three assertions were deleted rather than rewritten because there is no second row to re-point them
+ * at — the behaviour has no remaining case, not merely no remaining example.
+ *
+ * What replaces the second of them is the rule below: ephemeral space now reaches NO index, with no exception.
+ */
+describe( 'NavIndex — ephemeral space reaches no index at all', () => {
 
 	beforeEach( () => {
 		put( 'plans/nav-index.html', handIndex( 'plans', 'Every plan.' ) )
 		put( 'plans/live.html', doc( 'live', { type: 'plan', lens: [ 'main' ] } ) )
-		put( 'work/render/plans/2026-09-18_idea.html', doc( 'idea', { type: 'plan', status: 'draft', lens: [ 'render' ] } ) )
 	} )
 
-	it( 'lists a draft in its own section, grouped by lens, as an ADDRESS — never a link into ephemeral space', () => {
-		expect( nav().rebuild( 'plans/nav-index.html' ) ).toBe( 'written' )
-		const html = read( 'plans/nav-index.html' )
-		expect( html ).toContain( 'data-kcd-section="drafts"' )
-		expect( html ).toContain( '<h3>render</h3>' )
-		expect( html ).toContain( 'data-kcd-address="_Claude/work/render/plans/2026-09-18_idea.html"' )
-		expect( html ).not.toContain( 'href="_Claude/work/' )
-		expect( html.indexOf( 'data-kcd-section="active"' ) ).toBeLessThan( html.indexOf( 'data-kcd-section="drafts"' ) )
-	} )
-
-	it( 'a write to a draft reaches the index it is drafted for', () => {
+	it( 'refreshes no index for a write under work/, wherever in it the write lands', () => {
 		const v = vault()
-		expect( new NavIndex( v ).affected( [ v.toAbs( 'work/render/plans/2026-09-18_idea.html' ) ] ) ).toEqual( [ 'plans/nav-index.html' ] )
+		expect( new NavIndex( v ).affected( [ v.toAbs( 'work/render/plans/2026-09-18_idea.html' ) ] ) ).toEqual( [] )
 		expect( new NavIndex( v ).affected( [ v.toAbs( 'work/render/AI/note.html' ) ] ) ).toEqual( [] )
 	} )
 
-	it( 'a directory that declares no drafts lists none', () => {
-		put( 'work/render/references/stray.html', doc( 'stray' ) )
-		nav().rebuild( 'references/nav-index.html' )
-		expect( read( 'references/nav-index.html' ) ).not.toContain( 'data-kcd-section="drafts"' )
+	it( 'builds no drafts section, and lists an exported plan as a LINK under its own status', () => {
+		put( 'work/render/plans/2026-09-18_idea.html', doc( 'idea', { type: 'plan', status: 'draft', lens: [ 'render' ] } ) )
+
+		expect( nav().rebuild( 'plans/nav-index.html' ) ).toBe( 'written' )
+		const html = read( 'plans/nav-index.html' )
+
+		expect( html ).not.toContain( 'data-kcd-section="drafts"' )
+		// The document under work/ is not indexed at all — not as an address, not as a link.
+		expect( html ).not.toContain( '2026-09-18_idea' )
+		expect( html ).toContain( 'href="_Claude/plans/live.html"' )
 	} )
 } )
 

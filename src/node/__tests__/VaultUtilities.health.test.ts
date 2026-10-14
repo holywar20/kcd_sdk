@@ -34,17 +34,16 @@ const doc = ( name: string, body: string ) =>
 beforeAll( () => {
 	root = mkdtempSync( join( tmpdir(), 'kcd-health-' ) );
 	mkdirSync( join( root, '_Claude', 'references', 'patterns' ), { recursive: true } );
-	mkdirSync( join( root, '_Claude', 'plans', 'plans_complete' ), { recursive: true } );
 	mkdirSync( join( root, '_Claude', 'work', 'scratch' ), { recursive: true } );
 
 	writeFileSync( join( root, '_Claude', 'references', 'patterns', 'alpha.html' ), doc( 'alpha', '<p>Fine.</p>' ) );
 	writeFileSync( join( root, '_Claude', 'references', 'patterns', 'beta.html' ),  doc( 'beta',  '<p>Also fine.</p>' ) );
 
-	// ARCHIVAL — inside an indexed directory, so the walk reaches it, but excluded from grading
-	// because the standard moved on after it was retired. This is what creates the scanned/checked
-	// gap, and it is the only thing that does: EPHEMERAL space is not walked at all ( the walker
-	// covers indexed dirs only ), and a `.js` file is not a document. Both are below `scanned`.
-	writeFileSync( join( root, '_Claude', 'plans', 'plans_complete', 'retired.html' ), doc( 'retired', '<p>Done.</p>' ) );
+	// A `plans/plans_complete/retired.html` STOOD HERE and was the whole point of the fixture: archival
+	// space sat inside an indexed directory, so the walk reached it and the grader then skipped it, which
+	// is what produced a scanned/checked gap. Archival is gone with the plan buckets, so the document
+	// would now be GRADED — and it would fail, because `doc()` writes `type: reference` while the path
+	// classifies `plan`. Removed rather than re-typed: there is no exclusion left for it to demonstrate.
 	writeFileSync( join( root, '_Claude', 'work', 'scratch', 'notes.html' ), doc( 'notes', '<p>Scratch.</p>' ) );
 	writeFileSync( join( root, '_Claude', 'references', 'patterns', 'tool.js' ), '// not a document\n' );
 } );
@@ -59,11 +58,20 @@ describe( 'VaultUtilities.health — the denominator', () => {
 		expect( summary.total ).toBe( 0 );
 	} );
 
-	// The gap between the two numbers IS the filter, and it should be visible rather than folded away:
-	// an archival document is reached and then deliberately not graded.
-	it( 'counts what the walk reached, so the archival filter shows as a gap', () => {
+	/**
+	 * SCANNED AND CHECKED NOW AGREE, and the two numbers are kept apart anyway.
+	 *
+	 * They diverged while `archival` existed: a retired plan sat inside an indexed directory, so the walk
+	 * reached it and the grader skipped it. Ephemeral is the only exclusion left and ephemeral space is
+	 * not walked at all ( the walker covers indexed dirs only ), so nothing the walk reaches is now
+	 * ungraded. A `.js` file is not a document and falls below `scanned` entirely.
+	 *
+	 * The pair stays in the report rather than collapsing to one number, because the gap is how a future
+	 * exclusion would make itself visible instead of silently shrinking the denominator.
+	 */
+	it( 'grades everything the walk reaches, now that no exclusion sits inside an indexed directory', () => {
 		const { summary } = VaultUtilities.health( vaultOf() );
-		expect( summary.scanned ).toBe( 3 );
+		expect( summary.scanned ).toBe( 2 );
 		expect( summary.checked ).toBe( 2 );
 	} );
 

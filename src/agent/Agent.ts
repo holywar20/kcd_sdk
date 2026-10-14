@@ -6,6 +6,10 @@ import { KcdContext } from '../core/html/KcdContext';
 import type { Command } from '../core/Command';
 import type { SlotRow } from '../core/html/KcdContext';
 import { KCDPrimitive } from '../primitives/framework/KCDPrimitive';
+// ONE RENDERER FOR A SKILL ROW, shared with the record compiler rather than re-typed here. The row is where
+// the never-truncate rule is actually kept, so a second copy of the template is the copy that clips.
+import { AgentProjection } from './AgentCompiler';
+import type { CompileSkill } from './AgentCompiler';
 import type { ArtifactType, ContextSegment, PolicyEntry, SegmentKey, SerializedArtifact, SerializedLens, SlotMode, SourceLayer, TaggedBlock } from '../primitives/types';
 
 /**
@@ -119,6 +123,24 @@ export interface SerializedAgent {
 	 */
 	skills?: string[];
 	/**
+	 * ROLE GROUPS SWITCHED ON FOR THIS AGENT — ids into the install-level role group set, its own, never
+	 * inherited, the same shape of fact `baseHabits` and `skills` already carry.
+	 *
+	 * AN AUTHORING FACT ABOUT HOW `toolModes` GOT WRITTEN, NOT A SECOND SOURCE OF CARRIAGE. Switching a role
+	 * group on for this agent writes into `toolModes` directly; this array only remembers WHICH switches are
+	 * live, so a later edit to the role group's own tool list or to one of the tools it wrote can find every
+	 * agent that still wears it. Nothing here is read by the gate, the mint or the dispatch engine, and no id
+	 * from this array ever rides a `ResolvedCapability`, a passport, or a tool-call path — see `ToolVocabulary`:
+	 * the communication currency is `group.tool`, never a role group id.
+	 *
+	 * PRESENCE IS THE ANSWER, exactly as `toolModes` reads: an id present here means that role group is
+	 * switched on; absent means it is not. Never an id stored with a falsy value and never an off-marker.
+	 *
+	 * A RECORD WRITTEN BEFORE THIS FIELD EXISTED HAS NO `roleGroups` KEY AT ALL, and reads that absence as an
+	 * empty list — the same tolerance `skills` states and for the same reason.
+	 */
+	roleGroups?: string[];
+	/**
 	 * WHAT THIS AGENT CARRIES, and how much of each one is put in front of it — keyed by tool IDENTITY
 	 * ( `group.tool` ).
 	 *
@@ -217,6 +239,8 @@ export interface AgentOptions {
 	loadedHabits?: string[];
 	/** Slugs only — see `SerializedAgent.skills`. Omit for none. */
 	skills?: string[];
+	/** Ids only — see `SerializedAgent.roleGroups`. Omit for none. */
+	roleGroups?: string[];
 	toolModes?: Record<string, ToolMode>;
 	fields?: Record<string, unknown>[];
 	system?: Record<string, unknown>;
@@ -289,6 +313,18 @@ export type AgentEnvironment = {
 	hostManagedTools?: boolean;
 	contributions?:  Contribution[];
 	attachments?:    string;
+	/**
+	 * THE SPINE LABEL for every skill attached to this agent — a name and a WHOLE description each, already
+	 * resolved against the library by the host, because this object holds no disk and no library.
+	 *
+	 * IT IS THE DISCOVERY MECHANISM, not a convenience: the description is the field a model matches a task
+	 * against, so a skill missing from here is a skill the agent does not know exists, and non-use leaves no
+	 * trace. NEVER TRUNCATE ONE — the spec caps a description at 1024 characters, so the cost is bounded.
+	 *
+	 * `[]` is the off value and leaves no block on the wire. A slug the library cannot supply never arrives
+	 * here at all: resolving is the host's job and an unresolvable one is an absence it reports and drops.
+	 */
+	skills?:         readonly CompileSkill[];
 	grants?:         SlotRow[];
 	commands?:       readonly Command[];
 	manifestGroups?: readonly { heading: string; body: string }[];
@@ -333,6 +369,9 @@ export class Agent {
 	/** The skills this agent holds, as slugs (see SerializedAgent.skills). Its own, never inherited; a slug
 	 *  naming no skill is an absence, not a fault. */
 	skills: string[];
+	/** The role groups switched on for this agent, as ids (see SerializedAgent.roleGroups). An authoring
+	 *  fact about how `toolModes` was written, never read by the gate, the mint or the dispatch engine. */
+	roleGroups: string[];
 
 	/** What this agent carries, and how much of each rides — presence IS the answer (see
 	 *  SerializedAgent.toolModes). */
@@ -408,6 +447,9 @@ export class Agent {
 	/** The bound session's PREFILL attachments, already composed to a string. An agent reaching into `session/`
 	 *  for the entry array would invert the layering: a session is a run of an agent, not the reverse. */
 	get attachments(): string { return this._layer( 'attachments' ) ?? ''; }
+	/** The spine labels for this agent's attached skills — see `AgentEnvironment.skills`. NOT `this.skills`,
+	 *  which is the record's slug list: the record says WHICH, the bound layer says what each one IS. */
+	get skillLabels(): readonly CompileSkill[] { return this._layer( 'skills' ) ?? []; }
 	/** The bound session's canonized grants, as STRUCTURED ROWS: the manifest section is merged from `rows` and never
 	 *  re-parsed from text. Only the hoisted set arrives; a grant whose turn still rides is already in the transcript. */
 	get grantRows(): SlotRow[] { return this._layer( 'grants' ) ?? []; }
@@ -462,6 +504,7 @@ export class Agent {
 		baseHabits: string[],
 		loadedHabits: string[],
 		skills: string[],
+		roleGroups: string[],
 		toolModes: Record<string, ToolMode>,
 		fields: Record<string, unknown>[],
 		system: Record<string, unknown>,
@@ -485,6 +528,7 @@ export class Agent {
 		this.baseHabits     = baseHabits;
 		this.loadedHabits   = loadedHabits;
 		this.skills         = skills;
+		this.roleGroups     = roleGroups;
 		this.toolModes      = toolModes;
 		this.fields         = fields;
 		this.system         = system;
@@ -552,6 +596,7 @@ export class Agent {
 			opts.baseHabits ?? [],
 			opts.loadedHabits ?? [],
 			opts.skills ?? [],
+			opts.roleGroups ?? [],
 			opts.toolModes ?? {},
 			opts.fields ?? [],
 			opts.system ?? {},
@@ -580,6 +625,7 @@ export class Agent {
 			json.baseHabits ?? [],
 			json.loadedHabits ?? [],
 			json.skills ?? [],
+			json.roleGroups ?? [],
 			json.toolModes ?? {},
 			json.fields ?? [],
 			json.system ?? {},
@@ -633,6 +679,7 @@ export class Agent {
 			baseHabits:     [ ...this.baseHabits ],
 			loadedHabits:   [ ...this.loadedHabits ],
 			skills:         [ ...this.skills ],
+			roleGroups:     [ ...this.roleGroups ],
 			toolModes:      { ...this.toolModes },
 			fields:         this.fields.map( ( f ) => ( { ...f } ) ),
 			system:         { ...this.system },
@@ -943,6 +990,7 @@ export class Agent {
 	compiledContext(): TaggedBlock[] {
 		const manifest  = this.toolManifest();
 		const bands     = this.manifestBands();
+		const skills    = this.skillSpine();
 		// The host narrows before it calls a contributor; this is the same gate read again on the owning object.
 		const contributed = this.contributions.filter( ( c ) => this.injectionEnabled( c.id ) );
 		// Grants are a manifest section, not a trailing extra, so they sit under the `# Manifest` band.
@@ -967,6 +1015,10 @@ export class Agent {
 				manifest ? [ Agent.extraBlock( 'tool-manifest', manifest ) ] : [],
 				// Authored bands close the manifest as sibling categories, one block for all of them, not subsections of the tool manifest.
 				bands     ? [ Agent.extraBlock( 'manifest-groups', bands ) ] : [],
+				// Skills sit with the tool manifest, not under `# Manifest` — see `skillSpine`. Above capability
+				// because they are an agent-level fact that moves only when somebody attaches or detaches one,
+				// so the churning run-specific layers stay below them in the cached prefix.
+				skills    ? [ Agent.extraBlock( 'skills', skills ) ] : [],
 				// Capability is last of the three: it is the most run-specific, so the churning layer goes below the settled ones.
 				this.capability ? [ Agent.extraBlock( 'capability', this.capability ) ] : [],
 				// Config notice is the most volatile block, so it sits as low as its meaning allows; empty drops it.
@@ -1105,11 +1157,39 @@ export class Agent {
 			: runDeferred
 				? runDeferred.includes( t.id! )
 				: this.toolModeFor( t.id! ) !== 'preload';
-		const sections = Agent.groupByServer( held ).map( g => {
+		const groups = Agent.groupByServer( held );
+		const sections = groups.map( g => {
 			const head = g.doc ? `### ${ g.name }\n${ g.doc }` : `### ${ g.name }`;
 			// Each row names the tool the way the model must CALL it — its wire name, which carries the server.
 			return head + '\n' + g.tools.map( t => `- ${ t.wire ?? t.name } — ${ t.description }${ deferred( t ) ? ' ' + MARK : '' }` ).join( '\n' );
 		} );
+
+		/**
+		 * THE HEADER PROSE IS THE PACKAGE'S, NOT THIS AGENT'S — said out loud because three agents and a
+		 * fourth read it the other way on one afternoon ( BUG-65, DEFECT-317 ).
+		 *
+		 * `g.doc` is the package's own description, carried through `groupByServer` from the server record. The
+		 * ROWS are narrowed to what this run holds; THE DOC IS NOT NARROWED AT ALL, and it describes the whole
+		 * package in prose — so it names tools, by name and in detail, that are not on the rows beneath it. On
+		 * 2026-10-06 the Research lane planned a deliverable around `drop_note` on the strength of that prose
+		 * and could not call it; on 2026-10-13 three lanes did the same with `bug_append`, two of them halting.
+		 *
+		 * THE RULE ABOVE ALREADY SAYS THIS and it was not enough, which is the whole reason for a second line.
+		 * "A name that is not on this list is not a tool you hold" is general, abstract and sits far above; the
+		 * description is specific, confident and sits immediately beside the rows. The specific one wins. So
+		 * this names the exact trap rather than restating the rule: the heading's prose is a package manifest,
+		 * the rows are the roster, and where they disagree the rows are true.
+		 *
+		 * IT CANNOT BE FIXED BY SCOPING THE PROSE. A package description is hand-written paragraphs naming its
+		 * verbs in sentences; there is no mechanical way to narrow it to a subset of a roster, and rewriting
+		 * every description to describe no tool in particular would throw away the context that makes a package
+		 * legible. Telling the reader which half is authoritative is the honest repair available here.
+		 */
+		const DOC_NOTE = 'A `###` heading may carry its package\'s own description. THAT DESCRIPTION IS NOT '
+			+ 'NARROWED TO YOU — it describes the whole package, so it can name tools, in prose and by name, '
+			+ 'that are not on your rows. THE ROWS ARE YOUR ROSTER. Where the two disagree the rows are right: '
+			+ 'a tool the description discusses and the rows do not list is one you DO NOT HOLD, however '
+			+ 'specifically it is described. Do not plan a deliverable around it, and say so plainly instead.';
 
 		// The example is a real row's own name, so the rule never spells the wire separator itself.
 		const example = held[ 0 ].wire ?? held[ 0 ].name;
@@ -1121,8 +1201,41 @@ export class Agent {
 		// One note or the other. The managed note is unconditional: the host may defer something on a later turn.
 		if ( this.hostManagedTools ) parts.push( HOST_NOTE );
 		else if ( held.some( deferred ) ) parts.push( NOTE );
+		// Only when a description is actually present: an agent whose groups carry none is told nothing about
+		// a trap it cannot walk into, which is the same rule every other note here keeps.
+		if ( groups.some( g => !!g.doc ) ) parts.push( DOC_NOTE );
 		parts.push( sections.join( '\n\n' ) );
 		return parts.join( '\n\n' );
+	}
+
+	/**
+	 * THE SPINE LABEL — every skill attached to this agent, one `- name — description` row each. This is the
+	 * second tier of the Agent Skill standard's three, and the only one that costs context unasked: tier one
+	 * is an unattached skill, which costs nothing anywhere, and tier three is the body, fetched on use.
+	 *
+	 * IT IS NOT A MANIFEST SECTION, and that is the whole decision. The `# Manifest` band's own heading reads
+	 * "fetch these on demand; not required reading now" — filing the trigger descriptions under it would put
+	 * the discovery mechanism beneath a line telling the model it need not read now, which defeats the thing
+	 * invisibly and for a second time. It rides as prose in the required-reading half, beside the tool
+	 * manifest, because it is the same kind of fact: what this agent can reach.
+	 *
+	 * The description rides WHOLE. See `AgentEnvironment.skills` — a clipped one is a skill that silently
+	 * stops firing, and the row is drawn by `AgentProjection.skillLine` so there is one template, not two.
+	 * Empty is absent: an agent with nothing attached is told nothing, not told it has nothing.
+	 */
+	skillSpine(): string {
+		const rows = this.skillLabels;
+		if ( !rows.length ) return '';
+
+		// Says what a row IS and what to do when one matches, and says once that the words are the author's.
+		// A skill bundle is third-party content, the same provenance `list_skills` is fenced for, and this is
+		// the one place that text arrives in the system half where no fence can wrap it.
+		const NOTE = 'A skill is a procedure somebody else wrote down, attached to you and sitting on this '
+			+ 'installation. Each row is its name and its author\'s own description of when it applies — match '
+			+ 'your task against those descriptions, and when one fits, read that skill whole before you start '
+			+ 'rather than working from the row. The instructions are not here; only the trigger is.';
+
+		return [ '## Your skills', NOTE, rows.map( AgentProjection.skillLine ).join( '\n' ) ].join( '\n\n' );
 	}
 
 	/**
@@ -1146,8 +1259,10 @@ export class Agent {
 
 	/** Sections that price as SYSTEM, not lens identity. `attachments`, `frame` and `mode-line` are parked here: a fourth bucket is probably right, deferred. */
 	private static readonly SYSTEM_SECTIONS = new Set<string>( [ 'host-prompt', 'host-environment', 'agent-name', 'system-prompt', 'root-context', 'attachments', 'frame', 'mode-line' ] );
-	/** The compiled sections that price as TOOLS — the surface, not the identity that may reach for it. */
-	private static readonly TOOL_SECTIONS = new Set<string>( [ 'tool-manifest' ] );
+	/** The compiled sections that price as TOOLS — the surface, not the identity that may reach for it.
+	 *  `skills` is here on that reading: a spine label is reach, not voice, and it is what a budget reader
+	 *  wants counted beside the manifest when an attachment makes the context bigger. */
+	private static readonly TOOL_SECTIONS = new Set<string>( [ 'tool-manifest', 'skills' ] );
 	/** Every section the bottom manifest emits, so the breakdown files `files` with the routing tables; `MANIFEST_SECTIONS` alone omits it. */
 	private static readonly ROUTING_SECTIONS = new Set<string>( [ 'files', ...MANIFEST_SECTIONS ] );
 
@@ -1169,7 +1284,8 @@ export class Agent {
 		'attachments':     'attachments',
 		'frame':           'caller frame',
 		'mode-line':       'shaping line',
-		'tool-manifest':   'available tools'
+		'tool-manifest':   'available tools',
+		'skills':          'your skills'
 	};
 
 	/** The lowercase canonical name for a synthetic section, or `null` for one that names itself off its artifact. */

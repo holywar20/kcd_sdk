@@ -3,7 +3,9 @@
  * An author supplies content ( section name → prose, plus slot rows ); the markup is derived from `KcdShapes`:
  * section order from the table, heading depth from nesting, a `phase-2` placed inside `phases` by its parent's `nests` glob.
  * This owns SHAPE, not conformance: `KcdValidate` stays the only gate, so synthesis cannot become a second authority.
- * Prose is escaped unless it already opens with a block tag, so unrecognized input is never injected.
+ * Prose is escaped unless it already opens with a block tag, so unrecognized input is never injected — except
+ * for a small closed allowlist of INLINE tags ( `PROSE_INLINE_TAGS` ), which is the one vocabulary authored
+ * prose may carry as real markup, and the one every description of this path is generated from.
  */
 
 import { HtmlTree } from './HtmlTree';
@@ -62,12 +64,78 @@ const AUTHORED_HEADING = /^\s*<h[1-6]\b/i;
  */
 const COMMENT_SYNTAX = /<!--[\s\S]*?-->/g;
 
-/** Markdown an author probably meant to be interpreted, which prose emission renders literally. */
-const MARKDOWN_TELLS: { probe: RegExp; fix: string }[] = [
-	{ probe: /\*\*\S[^*]*\*\*/,        fix: '**bold** → <strong>' },
-	{ probe: /`[^`\n]+`/,              fix: '`code` → <code>' },
-	{ probe: /\[[^\]\n]+\]\([^)\s]+\)/, fix: '[text](target) → <a href>' },
-];
+/**
+ * THE INLINE ALLOWLIST — the one declaration of what authored prose may carry as real markup, and the source
+ * every advertisement of it is built from. The escaper reads it, the markdown advisories below build their
+ * right-hand side from it, and `save_doc`'s own `sections` description is generated from
+ * `KcdSynth.inlineTagList()`. BUG-74 was this file promising a vocabulary a hundred lines from the code that
+ * escaped it, so the set is declared ONCE and nothing restates it in prose.
+ *
+ * TEXT MAKE-UP ONLY — emphasis, code, links. Nothing structural, nothing that can carry script or style,
+ * nothing that opens a block. The four members are exactly what the three markdown advisories promise, which
+ * is the whole point of the set.
+ *
+ * WHAT WAS CONSIDERED AND LEFT OUT, each on its own argument:
+ *  • `<b>` / `<i>` — presentational twins of `strong` / `em` carrying no meaning of their own. Two spellings
+ *    of one thing is the drift this set exists to prevent, and an author told `<strong>` needs nothing else.
+ *  • `<br>` — a void tag, so it cannot be balance-checked the way every other member is, and breaking a line
+ *    is a decision this path already makes from blank lines and `- ` lines. A second, finer line break is a
+ *    structural control wearing inline clothes.
+ *  • `<span>` — carries nothing on its own. It is useful only with `class` or `style`, which is precisely
+ *    what is forbidden here, so admitting it would be either pointless or the hole.
+ *
+ * A MEMBER'S VALUE IS ITS PERMITTED ATTRIBUTES, and an empty list means the tag takes none. `<a>` takes
+ * `href` and nothing else — no `onclick`, no `style`, no `target`. An attribute outside the list refuses the
+ * WHOLE tag, which then goes back to being the text it looks like.
+ */
+export const PROSE_INLINE_TAGS: Readonly<Record<string, readonly string[]>> = {
+	strong: [],
+	em:     [],
+	code:   [],
+	a:      [ 'href' ],
+};
+
+/** The only schemes an allowlisted `href` may NAME. A scheme-less href — a vault-relative path, the common
+ *  case — is fine; one that names a scheme must name one of these, so `javascript:` and `data:` are refused
+ *  by the rule rather than by a list of bad names somebody has to keep current. */
+const HREF_SCHEMES = new Set( [ 'http', 'https', 'mailto' ] );
+
+const INLINE_NAMES = Object.keys( PROSE_INLINE_TAGS ).join( '|' );
+
+/** An allowlisted open tag, and nothing looser: the name, then only double-quoted attributes whose values
+ *  carry no `<`, `>` or `"`, then `>`. Anything else that starts with `<` is not a tag here. */
+const INLINE_OPEN = new RegExp( `^<(${ INLINE_NAMES })((?:\\s+[a-zA-Z-]+\\s*=\\s*"[^"<>]*")*)\\s*>`, 'i' );
+
+const INLINE_CLOSE = new RegExp( `^</(${ INLINE_NAMES })\\s*>`, 'i' );
+
+/** One piece of a block mid-escape. `tag` is `''` for plain text; `html` is the canonical re-emission, built
+ *  from the parsed parts rather than from `raw`, and used only once `keep` is set. */
+interface InlineToken {
+	tag:  string;
+	open: boolean;
+	raw:  string;
+	html: string;
+	keep: boolean;
+}
+
+/** One allowlisted tag as an author is TOLD it — `<strong>`, `<a href>`. The attribute list is part of the
+ *  advertisement, so permitting one shows up in the advice with no second edit. Null for a tag the set does
+ *  not hold, so nothing can advertise what the escaper would refuse. */
+function advertise( tag: string ): string | null {
+	const attrs = PROSE_INLINE_TAGS[ tag ];
+	return attrs ? `<${ [ tag, ...attrs ].join( ' ' ) }>` : null;
+}
+
+/**
+ * Markdown an author probably meant to be interpreted, which prose emission renders literally — paired with
+ * the allowlisted tag that DOES work. `tag` names a member of the set rather than spelling the fix out, so a
+ * row whose tag leaves the allowlist leaves the advice with it.
+ */
+const MARKDOWN_TELLS: { probe: RegExp; from: string; tag: string }[] = [
+	{ probe: /\*\*\S[^*]*\*\*/,         from: '**bold**',       tag: 'strong' },
+	{ probe: /`[^`\n]+`/,               from: '`code`',         tag: 'code' },
+	{ probe: /\[[^\]\n]+\]\([^)\s]+\)/, from: '[text](target)', tag: 'a' },
+].filter( t => t.tag in PROSE_INLINE_TAGS );
 
 export const KcdSynth = new class KcdSynth {
 
@@ -168,11 +236,17 @@ export const KcdSynth = new class KcdSynth {
 
 		for ( const [ name, text ] of Object.entries( input.sections ?? {} ) ) {
 			if ( !text || BLOCK_START.test( text.trim() ) ) continue;
-			const hits = MARKDOWN_TELLS.filter( t => t.probe.test( text ) ).map( t => t.fix );
+			const hits = MARKDOWN_TELLS.filter( t => t.probe.test( text ) ).map( t => `${ t.from } → ${ advertise( t.tag ) }` );
 			if ( hits.length )
-				out.push( `markdown in section "${ name }": ${ hits.join( ', ' ) } — prose is escaped verbatim, so these render as literal characters rather than formatting.` );
+				out.push( `markdown in section "${ name }": ${ hits.join( ', ' ) } — markdown is not interpreted, so these render as literal characters; the tag named beside each is honoured in prose.` );
 		}
 		return out;
+	}
+
+	/** The inline allowlist as an author is told it, in declaration order — what every description of this
+	 *  path renders, so no face writes the list out by hand. */
+	inlineTagList(): string[] {
+		return Object.keys( PROSE_INLINE_TAGS ).map( t => advertise( t ) as string );
 	}
 
 	// ── Rendering ─────────────────────────────────────────────────────────────────
@@ -244,7 +318,8 @@ export const KcdSynth = new class KcdSynth {
 
 	// ── Text ──────────────────────────────────────────────────────────────────────
 
-	/** Plain text → paragraphs and `- ` lists; authored HTML passes through. Anything unrecognized is ESCAPED, so a stray `<` cannot open a tag. */
+	/** Plain text → paragraphs and `- ` lists; authored HTML passes through. Anything outside the inline
+	 *  allowlist is ESCAPED, so a stray `<` cannot open a tag. */
 	proseToHtml( text: string ): string {
 		// Comments come off BEFORE the markup test, so a block that merely opens with one is still
 		// recognized as authored HTML rather than escaped wholesale.
@@ -259,16 +334,148 @@ export const KcdSynth = new class KcdSynth {
 			.join( '\n' );
 	}
 
-	/** One paragraph-or-list block. */
+	/** One paragraph-or-list block. Both paths escape through `escapeInline`, never one through it and the
+	 *  other not: where a run of prose happens to sit decided whether its markup survived, which is the
+	 *  defect ( BUG-74 ) rather than a feature of lists. */
 	blockToHtml( block: string ): string {
 		if ( !block ) return '';
 		const lines = block.split( '\n' ).map( l => l.trim() ).filter( Boolean );
 
 		if ( lines.length && lines.every( l => l.startsWith( '- ' ) ) ) {
-			const items = lines.map( l => `\t<li>${ HtmlTree.escapeText( l.slice( 2 ).trim() ) }</li>` ).join( '\n' );
+			const items = lines.map( l => `\t<li>${ this.escapeInline( l.slice( 2 ).trim() ) }</li>` ).join( '\n' );
 			return `<ul>\n${ items }\n</ul>`;
 		}
-		return `<p>${ HtmlTree.escapeText( lines.join( ' ' ) ) }</p>`;
+		return `<p>${ this.escapeInline( lines.join( ' ' ) ) }</p>`;
+	}
+
+	/**
+	 * Escape a run of prose, letting the inline allowlist through as real markup. ESCAPING IS STILL THE
+	 * DEFAULT and the allowlist is the exception: every character that is not part of an admitted tag goes
+	 * through `escapeText` exactly as before, so a stray `<`, a `<script`, an attribute that was not
+	 * permitted and an unbalanced allowlisted tag all render as the text they are.
+	 *
+	 * Two passes, because balance cannot be judged one tag at a time: tokenize, then pair. A tag is emitted
+	 * only when it is paired, so the output is balanced BY CONSTRUCTION — an unclosed `<strong>` cannot
+	 * escape its paragraph and swallow the document's structure.
+	 */
+	escapeInline( text: string ): string {
+		const tokens = this.inlineTokens( text );
+		this.pairInline( tokens );
+		return tokens.map( t => t.keep ? t.html : HtmlTree.escapeText( t.raw ) ).join( '' );
+	}
+
+	/** Split prose into text and candidate inline tags. A `<` that does not open an admitted tag is consumed
+	 *  as ONE character of text and scanning carries on from the next, so the remainder of a refused tag is
+	 *  escaped as the text it is rather than skipped. */
+	inlineTokens( text: string ): InlineToken[] {
+		const out: InlineToken[] = [];
+		let plain = '';
+		const flush = (): void => {
+			if ( plain ) out.push( { tag: '', open: false, raw: plain, html: '', keep: false } );
+			plain = '';
+		};
+
+		for ( let i = 0; i < text.length; ) {
+			if ( text[ i ] !== '<' ) { plain += text[ i ]; i += 1; continue; }
+
+			const rest  = text.slice( i );
+			const close = INLINE_CLOSE.exec( rest );
+			if ( close ) {
+				const tag = close[ 1 ]!.toLowerCase();
+				flush();
+				out.push( { tag, open: false, raw: close[ 0 ], html: `</${ tag }>`, keep: false } );
+				i += close[ 0 ].length;
+				continue;
+			}
+
+			const open = INLINE_OPEN.exec( rest );
+			const html = open ? this.inlineOpenHtml( open[ 1 ]!.toLowerCase(), open[ 2 ] ?? '' ) : null;
+			if ( open && html !== null ) {
+				flush();
+				out.push( { tag: open[ 1 ]!.toLowerCase(), open: true, raw: open[ 0 ], html, keep: false } );
+				i += open[ 0 ].length;
+				continue;
+			}
+
+			plain += text[ i ];
+			i += 1;
+		}
+		flush();
+		return out;
+	}
+
+	/**
+	 * The canonical form of an allowlisted open tag, or null when it carries anything not permitted — which
+	 * refuses the whole tag rather than stripping the offending part, because a tag an author wrote wrong
+	 * should read back as what they wrote.
+	 *
+	 * RE-EMITTED FROM THE PARSED ATTRIBUTES, never from the author's raw text: the value is decoded and then
+	 * re-escaped through `escapeAttr`, so nothing can break out of a quote it wrote itself.
+	 */
+	inlineOpenHtml( tag: string, attrText: string ): string | null {
+		const permitted = PROSE_INLINE_TAGS[ tag ];
+		if ( !permitted ) return null;
+
+		const seen: string[] = [];
+		const attrs: string[] = [];
+		const re = /([a-zA-Z-]+)\s*=\s*"([^"<>]*)"/g;
+		let m: RegExpExecArray | null;
+		while ( ( m = re.exec( attrText ) ) !== null ) {
+			const name = m[ 1 ]!.toLowerCase();
+			// Not permitted, or said twice — a repeated attribute has two values and no rule about which wins.
+			if ( !permitted.includes( name ) || seen.includes( name ) ) return null;
+			const value = HtmlTree.decode( m[ 2 ]! );
+			if ( name === 'href' && !this.hrefAllowed( value ) ) return null;
+			seen.push( name );
+			attrs.push( `${ name }="${ HtmlTree.escapeAttr( value ) }"` );
+		}
+		// `href` is not optional on an anchor: the advertised form is `<a href>`, and a link with no target is
+		// an empty link the validator flags.
+		if ( tag === 'a' && !seen.includes( 'href' ) ) return null;
+
+		return `<${ [ tag, ...attrs ].join( ' ' ) }>`;
+	}
+
+	/**
+	 * Whether an `href` may be emitted at all. Scheme-less passes — a vault-relative path is the common case
+	 * — and one that NAMES a scheme must name a permitted one, so `javascript:` and `data:` are refused by
+	 * the rule rather than by a blocklist.
+	 *
+	 * The probe is deliberately paranoid, because the browser is: numeric AND hex entities are decoded and
+	 * every space and control character removed before the scheme is read, so `&#x6a;avascript:` and
+	 * `java&#9;script:` refuse exactly as the plain spelling does. The probe only DECIDES; what is emitted is
+	 * the plainly decoded value. A legitimate path loses nothing, and one that reads like a drive letter
+	 * ( `C:/x` ) is refused and renders as text — vault links are vault-relative.
+	 */
+	hrefAllowed( href: string ): boolean {
+		// No vault path carries these, and they are the characters an attribute break-out needs.
+		if ( /[<>"]/.test( href ) ) return false;
+		const probe = href
+			.replace( /&#x([0-9a-f]+);?/gi, ( _, h: string ) => String.fromCharCode( parseInt( h, 16 ) ) )
+			.replace( /&#(\d+);?/g, ( _, d: string ) => String.fromCharCode( Number( d ) ) )
+			.replace( /[\s\u0000-\u001f\u007f]/g, '' )
+			.toLowerCase();
+		const scheme = /^([a-z][a-z0-9+.-]*):/.exec( probe );
+		return !scheme || HREF_SCHEMES.has( scheme[ 1 ]! );
+	}
+
+	/** Mark the tags that may stand: a close pairs with the NEAREST unclosed open of the same name, and an
+	 *  open with no close — or a close with no open, or a mis-nested pair — is not a tag and goes back to
+	 *  being text. Nothing searches deeper than the top of the stack, which is what makes the kept set
+	 *  provably balanced. */
+	pairInline( tokens: InlineToken[] ): void {
+		const open: InlineToken[] = [];
+		for ( const token of tokens ) {
+			if ( !token.tag ) continue;
+			if ( token.open ) { open.push( token ); continue; }
+
+			const opener = open[ open.length - 1 ];
+			if ( !opener || opener.tag !== token.tag ) continue;
+
+			open.pop();
+			opener.keep = true;
+			token.keep  = true;
+		}
 	}
 
 	// ── Helpers ───────────────────────────────────────────────────────────────────

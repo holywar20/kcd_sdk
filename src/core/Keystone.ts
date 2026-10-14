@@ -16,7 +16,7 @@ export type KeystoneGates = Record<string, string | null>;
  * Gate ids that mean the tool changes something; read by `summarize` only. Re-spelled, so a gate missing here
  * silences posture rather than claiming read-only. `browse` and `command` stay off: neither id settles it.
  */
-const MUTATING_GATES = new Set( [ 'write', 'delete', 'starmind_self' ] );
+const MUTATING_GATES = new Set( [ 'write', 'delete', 'starmind_self', 'debug_records' ] );
 
 export interface SerializedKeystone {
 	name:         string;

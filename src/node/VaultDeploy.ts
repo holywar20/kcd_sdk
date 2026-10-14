@@ -88,7 +88,10 @@ export class VaultDeploy {
 		if( write ) fs.mkdirSync( vault, { recursive: true } )
 
 		// Folders for `scaffold: 'copy'` rows belong here too, so an inspect with no substrate still names them.
-		for( const entry of VaultLayout.all() ) {
+		// `scaffoldDirs()` rather than `all()`: a row that classifies is not automatically a row a fresh vault
+		// carries. An unscaffolded directory is absent from the report as well as from disk — reporting it would
+		// make `missing` count a folder nothing intends to create, and a healthy vault would never read as healthy.
+		for( const entry of VaultLayout.scaffoldDirs() ) {
 			const abs     = path.join( vault, entry.dir )
 			const present = fs.existsSync( abs )
 			items.push( { kind: 'dir', path: entry.dir, present, missingFiles: 0, changed: 0, note: entry.purpose } )
@@ -286,13 +289,20 @@ export class VaultDeploy {
 	/**
 	 * The doc root is a parameter, never a literal, and an ephemeral directory is an address rather than a
 	 * link — a link to one fails the validator. Its row still appears, or the map would lie by omission.
+	 *
+	 * AN UNSCAFFOLDED DIRECTORY IS AN ADDRESS FOR THE SAME REASON, and it is the same fault rather than a second
+	 * one: the deploy does not create it, so in a fresh vault there is nothing on the other end of the link. The
+	 * test is therefore "does a deploy create this", not "is it ephemeral" — two different reasons a folder is
+	 * absent, one consequence for the validator.
 	 */
 	private static _navIndexHtml( docRoot: string ): string {
+		const scaffolded = new Set( VaultLayout.scaffoldDirs().map( ( e ) => e.dir ) )
 		const rows = VaultLayout.all()
 			.filter( ( e ) => !e.dir.includes( '/' ) )
 			.map( ( e ) => {
 				const target = `${ docRoot }/${ e.dir }/`
-				const where  = VaultLayout.ephemeralDirs().includes( e.dir )
+				const absent = VaultLayout.ephemeralDirs().includes( e.dir ) || !scaffolded.has( e.dir )
+				const where  = absent
 					? `<span data-kcd-field="where" data-kcd-type="address">${ target }</span>`
 					: `<a    data-kcd-field="where" data-kcd-type="path" href="${ target }">${ e.dir }</a>`
 				return `\t\t\t<div data-kcd-slot="link">

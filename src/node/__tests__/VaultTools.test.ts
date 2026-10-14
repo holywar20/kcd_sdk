@@ -5,6 +5,7 @@ import { join, resolve } from 'path';
 import { Vault } from '../Vault';
 import { VaultTools, VAULT_TOOL_OPS } from '../VaultTools';
 import type { VaultToolNames, VaultToolOp } from '../VaultTools';
+import { KcdSynth, PROSE_INLINE_TAGS } from '../../core';
 import type { ToolResult } from '../../server/McpServer';
 
 /**
@@ -176,8 +177,8 @@ describe( 'VaultTools — reads', () => {
 		} );
 
 		it( 'IS named when the glob reaches into that space — the caller asked about it', () => {
-			// The same courtesy the archival rule carries. A silent drop for a caller who NAMED the bucket
-			// would be the original "the file is there and no query finds it" bug wearing different clothes.
+			// A silent drop for a caller who NAMED the space would be the original "the file is there and
+			// no query finds it" bug wearing different clothes.
 			expect( text( tools().query( { glob: 'work/**' } ) ) ).toContain( 'scratch.html' );
 		} );
 
@@ -496,5 +497,28 @@ describe( 'VaultTools.spec — one copy of the prose, rendered per face', () => 
 	it( 'throws on a token that names no op, so an authoring slip cannot ship as prose', () => {
 		const partial = { ...NAMES, links: '' } as VaultToolNames;
 		expect( () => VaultTools.spec( 'get', partial ) ).toThrow( /has no name on this face/ );
+	} );
+
+	/**
+	 * THE ANTI-DRIFT PIN ( BUG-74 ).
+	 *
+	 * This description used to name `<strong>`, `<code>` and `<a href>` in prose while the synthesizer a
+	 * package away escaped them. The escaping was one defect; the two statements being able to disagree at
+	 * all was the other, and only the second one can come back. So the advertised list is GENERATED from
+	 * `PROSE_INLINE_TAGS`, and this case fails the moment somebody adds a member and writes the sentence by
+	 * hand instead — the new tag is in the constant and missing from the text a model reads.
+	 */
+	it( 'advertises exactly the inline allowlist, generated rather than restated', () => {
+		const spec     = VaultTools.spec( 'save', NAMES );
+		const schema   = spec.inputSchema as any;
+		const sections = schema.properties.artifact.properties.content.properties.sections.description as string;
+
+		// Every member, in the form the synthesizer itself advertises it.
+		for ( const advertised of KcdSynth.inlineTagList() ) expect( sections ).toContain( advertised );
+		// And as one rendered list, so a hand-written sentence that merely happens to name the same four
+		// in another order or another shape does not pass either.
+		expect( sections ).toContain( KcdSynth.inlineTagList().join( ', ' ) );
+		// The members are the constant's own keys — not a second list kept in step with it.
+		expect( KcdSynth.inlineTagList() ).toHaveLength( Object.keys( PROSE_INLINE_TAGS ).length );
 	} );
 } );

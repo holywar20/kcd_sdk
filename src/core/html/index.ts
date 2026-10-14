@@ -12,7 +12,7 @@ export { KcdValidate } from './KcdValidate';
 export type { ValidateReport, ValidateIssue } from './KcdValidate';
 export { KcdShapes, SHAPES } from './KcdShapes';
 export type { TypeShape, RegionSpec, SectionSpec, SectionTier, ShapeAudit } from './KcdShapes';
-export { KcdSynth } from './KcdSynth';
+export { KcdSynth, PROSE_INLINE_TAGS } from './KcdSynth';
 export type { SynthInput, SynthResult, SynthSlots, SynthRow } from './KcdSynth';
 export { KcdParse } from './KcdParse';
 export type { ParsedArtifact, ParsedSlot, ParsedParam } from './KcdParse';

@@ -91,12 +91,13 @@ export const Authorization = {
 		access?:    readonly AccessEntry[],
 		asker?:     AskerRef,
 		steps?:     readonly StepVerdict[],
-		browseAll?: boolean
+		browseAll?: boolean,
+		commands?:  readonly string[]
 	): Record<string, unknown> | null {
 		// Identity makes an asker, not the trace: an all-null identity names nobody. An asker still counts as
 		// something to say, so an ungranted call carries who is behind it and a callee can ask a named person.
 		const named = !!( asker && ( asker.agentId || asker.agentName ) );
-		if ( grants.length === 0 && !projectId && !access && !named && !steps && !browseAll ) return null;
+		if ( grants.length === 0 && !projectId && !access && !named && !steps && !browseAll && !commands ) return null;
 		const own: Record<string, unknown> = {};
 		if ( grants.length ) own[ 'grants' ] = grants;
 		if ( projectId )     own[ 'projectId' ] = projectId;
@@ -104,7 +105,26 @@ export const Authorization = {
 		if ( named )         own[ 'asker' ] = asker;
 		if ( steps )         own[ 'steps' ] = steps;
 		if ( browseAll )     own[ 'browseAll' ] = true;
+		// Emitted whenever the caller supplied one, EMPTY INCLUDED: an empty list is the real answer "you hold none"
+		// and the sentence that answers is different from the one a missing list would get.
+		if ( commands )      own[ 'commands' ] = commands;
 		return { starmind: own };
+	},
+
+	/**
+	 * The receiving end of the command tool's own roster — the NAMES this run may run, narrowed by the gate before it
+	 * was written. NULL when the envelope carries none, which means nothing resolved it rather than that the run holds
+	 * nothing: an empty ARRAY is the second of those, and the two get different sentences.
+	 *
+	 * It exists so the one tool that cannot enumerate its own surface can tell an agent what it holds. Reading it as
+	 * authorization would be a mistake: nothing is permitted by appearing here, and the gate judges the call either
+	 * way. Non-strings are dropped rather than refused, because a malformed entry is our defect and a shorter honest
+	 * list is better than no answer.
+	 */
+	commandsOnCall( meta?: Record<string, unknown> ): string[] | null {
+		const own = ( meta?.[ 'starmind' ] ?? {} ) as { commands?: unknown };
+		if ( !Array.isArray( own.commands ) ) return null;
+		return own.commands.filter( ( n ): n is string => typeof n === 'string' && !!n );
 	},
 
 	/** The receiving end of the holder's web release valve: TRUE only for a literal `true`. Absent, false and

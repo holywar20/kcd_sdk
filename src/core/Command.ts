@@ -1,36 +1,16 @@
-import { partType, isPathAccess, type FillKind, type PathAccess } from './CommandTypes';
+import {
+	partType, isPathAccess, isPathKind, isPathPart, PART_TYPES,
+	type CommandPart, type FillablePart, type CommandFaultCode
+} from './CommandTypes';
 
-export type { FillKind, PartKind, PartType, PathAccess, PathAccessInfo } from './CommandTypes';
-export { PART_TYPES, FILL_KINDS, PATH_ACCESS, PATH_ACCESS_LEVELS, partType, isPathAccess } from './CommandTypes';
-
-/**
- * ONE PART OF A COMMAND LINE. A command is an ARRAY because an argv handed to `spawn` with no shell makes
- * `;` `&&` `|` and `$( )` ordinary letters: chaining is UNREPRESENTABLE, and the guards are defence in depth.
- * A part is a `literal` (fixed text an agent never reaches), a TYPE (a hole the agent fills, validated by its
- * `PART_TYPES` row) or `retired` (blocks the command until re-authored). Every hole declares `access`, never
- * defaulted. The first part is always a literal, so an agent never chooses the program.
- */
-export type CommandPart =
-	| { kind: 'literal'; text: string }
-	| { kind: FillKind;  name: string; access: PathAccess; optional?: boolean }
-	| { kind: 'retired'; was: string };
-
-/** A part an agent fills — every kind that carries a `name`. Named so `fillable` can hand back something
- *  already narrowed rather than making each caller re-establish it. */
-export type FillablePart = Extract<CommandPart, { name: string }>;
-
-/**
- * Inspection reports facts and never refuses: the verdict is the passport's, so an agent meets one gate and
- * one reason code. A fault is a code, a slot name and raw data, never a sentence.
- */
-export type CommandFaultCode =
-	| 'missing_value'      // a required slot got nothing
-	| 'too_many_values'    // more values than the command has slots
-	| 'too_long'           // over the length cap
-	| 'control_character'  // a line break, a NUL, anything in the C0 range
-	| 'flag_like'          // begins with "-" and would pass itself off as a flag
-	| 'not_a_file_path'    // a file slot given something that is not a file path
-	| 'not_a_folder_path'; // a directory slot given something that is not a directory path
+export type {
+	FillKind, PathKind, ValueKind, PartKind, PartType, PathAccess, PathAccessInfo,
+	CommandPart, FillablePart, FillablePathPart, CommandFaultCode
+} from './CommandTypes';
+export {
+	PART_TYPES, FILL_KINDS, PATH_KINDS, PATH_ACCESS, PATH_ACCESS_LEVELS,
+	RES_SCHEME, partType, isPathAccess, isPathKind, isPathPart
+} from './CommandTypes';
 
 export interface CommandFault {
 	code:   CommandFaultCode;
@@ -51,18 +31,73 @@ export type CommandCode =
 	| 'no_fixed_part'
 	| 'duplicate_slot'
 	| 'retired_part'
-	| 'no_access';
+	| 'no_access'
+	| 'bad_bound'
+	| 'no_options'
+	| 'bad_cap'
+	| 'bad_prefix'
+	| 'bad_timeout';
 
 /** One row of the directory. `field` is how a consumer maps a fault it did not detect onto the control showing it. */
 export interface CommandCodeInfo {
 	code:     CommandCode;
 	/** WHICH PART OF THE OBJECT IS AT FAULT — what a surface keys its display off. */
-	field:    'name' | 'intent' | 'parts';
+	field:    'name' | 'intent' | 'parts' | 'timeout';
 	/** What a person reads. Authored here, once, so four surfaces cannot word the same fault four ways. */
 	message:  string;
 	/** Stops it being handed to an agent. A non-blocking code is a remark. */
 	blocking: boolean;
 }
+
+/**
+ * HOW LONG A COMMAND MAY RUN, as an author declares it. Seconds, because that is what a person reads and writes.
+ *
+ * ── FIFTEEN MINUTES, AND IT IS A CHOSEN CEILING RATHER THAN AN INHERITED ONE ── ( Bryan, 2026-10-14 )
+ * "Imports can take a long time. Lets be generous." A headless Godot `--import` over a cold project walks every
+ * asset in it, and on a real game that is minutes rather than seconds. A ceiling sized to a TypeScript typecheck
+ * would make the engine commands this vocabulary exists for report a timeout exactly when they mattered most.
+ *
+ * ── THE ONE ORDERING THAT MUST NEVER FLIP ──
+ * The command tool buys a routed budget derived from this number ( `command_run.budgetMs` ), and that budget must
+ * sit ABOVE the runner's own kill. Under it, the client hangs up first and the agent is told its TOOL timed out
+ * instead of being told what the command said with the partial output on it — DEFECT-082, which ran for weeks on a
+ * 10s wall under a 60s kill. `CommandKeystone.test.ts` pins that direction and only that direction.
+ *
+ * ── NOTHING CAPS IT FROM ABOVE, WHICH IS THE CORRECTION ──
+ * This was 150s on the belief that the budget had to stay under `DEFAULT_TOOL_TIMEOUT_MS` ( 180s ), the house
+ * liveness ceiling. That constant is the ceiling for a server that NAMES NONE: `ServerManifest.timeoutMs` and a
+ * keystone's `budgetMs` both override it, which is the mechanism `sm_file.grep` and `sm_testing` already use, and
+ * above it nothing expires at all — a turn ends when it finishes, when a person stops it, or when the child dies.
+ * So the old comment's "bounded by something further out that nobody chose" named a wall that does not exist.
+ *
+ * ── WHAT IT COSTS, AND THE COST WAS RULED ON RATHER THAN ABSORBED ── ( Bryan, 2026-10-14 )
+ * A budget is published PER SERVER, and `Keystones.budgetFor` takes the LARGEST any member declared. `command_run`
+ * is the only `sm_core` keystone that declares one, so this number is also the liveness wall for `flag`,
+ * `project_status`, `remember` and `recall`. Each of those returns immediately or not at all, so what it buys is
+ * that a genuinely WEDGED one burns fifteen minutes instead of three — `flag` being the honourable exit and so the
+ * member worth the thought. That is the DEFECT-924 hazard the keystone suite warns about, and it was put to Bryan
+ * with the alternative ( move the command tool into a group of its own ) beside it: "Accept the sm_core coupling —
+ * flag can wait 15 min."
+ *
+ * SO THE SPLIT IS NOT OWED, it was declined. If it ever does bite, that is the move — not shrinking this back,
+ * which would trade a capability somebody asked for against a hazard nobody has seen.
+ */
+export const TIMEOUT_MIN_S = 1;
+export const TIMEOUT_MAX_S = 900;
+
+/**
+ * WHETHER A COMMAND PROMPTS, as the author declares it.
+ *
+ * ── IT IS A DEFAULT AND NOT A GATE ──
+ * The `command` permission row fans per command name and a person's answer is stamped on the passport, which is
+ * where the real decision lives and always has. This says what that row answers for a name NOBODY HAS STAMPED. It
+ * exists because the alternative is that every new command starts at `allow` and somebody has to remember to go and
+ * tighten the dangerous ones — running a test suite should be unattended and writing commit history should not, and
+ * which of those a command is, is a fact the author knows at the moment they write it.
+ *
+ * `off` is deliberately not offerable here: a command the author does not want run is a command they do not author.
+ */
+export type CommandPolicy = 'allow' | 'ask';
 
 /**
  * A COMMAND: a command line a person authored, exposed to an agent as a tool. A shell is unauditable, so a
@@ -72,9 +107,10 @@ export interface CommandCodeInfo {
  * Inspection is strict because a false finding costs an author a different type, while a false clean bill
  * costs arbitrary execution.
  *
- * The name is the gate, so there is no gate field: the passport fans per command name. Nor an output format:
- * a command states a template, and what happens to the bytes belongs to the keystone. `on` is absent for the
- * same reason as in `Keystone`: tool modes own whether an agent holds it.
+ * The name is the gate, so there is no gate field — the passport fans per command name, and `policy` here seeds
+ * what that row answers rather than deciding anything. Nor an output format: a command states a template, and what
+ * happens to the bytes belongs to the keystone. `on` is absent for the same reason as in `Keystone`: tool modes own
+ * whether an agent holds it.
  *
  * Substitution lives here and nowhere else: a call site filling parts inline is how a parameterised command
  * decays back into an arbitrary shell.
@@ -85,6 +121,10 @@ export interface SerializedCommand {
 	name:      string;
 	intent?:   string;
 	parts:     CommandPart[];
+	/** Wall-clock seconds before the child is killed. Absent means the house default. */
+	timeout?:  number;
+	/** What the permission row answers for this name when nobody has stamped it. Absent means `allow`. */
+	policy?:   CommandPolicy;
 }
 
 /** Characters that end the call whatever a part's type says, because they break the argv itself. Newline
@@ -92,10 +132,12 @@ export interface SerializedCommand {
 const CONTROL = /[\u0000-\u001F\u007F]/;
 
 /** No argument may pass itself off as a flag. This is the injection that survives having no shell at all:
- *  `-rf`, `--config=…`, `--exec`. An author who genuinely wants a flag writes it as a literal part. */
+ *  `-rf`, `--config=…`, `--exec`. An author who genuinely wants a flag writes it as a literal part, or glues it
+ *  to a hole with that hole's `prefix` — either way the dash is the author's text and never the model's. */
 const FLAGLIKE = /^-/;
 
-/** A cap, because an unbounded argument is a way to make something else fall over. */
+/** A cap, because an unbounded argument is a way to make something else fall over. The HARD ceiling: a `text`
+ *  hole declares its own cap, which this bounds from above. */
 const MAX_LEN = 512;
 
 /**
@@ -138,8 +180,9 @@ export function commandWords( text: string ): string[] {
 }
 
 /** The kinds a stored part may legally claim. Anything else is a part from a retired kind — see
- *  `Command.fromSerialized`. */
-const KNOWN_KINDS: readonly string[] = [ 'literal', 'file_path', 'folder_path', 'retired' ];
+ *  `Command.fromSerialized`. Derived from the type registry rather than hand-listed: a kind added there and
+ *  forgotten here would load back as `retired` and block every command using it. */
+const KNOWN_KINDS: readonly string[] = [ 'literal', 'retired', ...Object.keys( PART_TYPES ) ];
 
 export class Command {
 
@@ -161,7 +204,15 @@ export class Command {
 		 * The command line as parts, never a string. The array a person approves is the one an agent calls.
 		 * A literal splits on whitespace into argv elements; a filled part is always exactly one, whatever it holds.
 		 */
-		readonly parts: readonly CommandPart[] = []
+		readonly parts: readonly CommandPart[] = [],
+		/**
+		 * Wall-clock seconds before the child is killed, or null for the house default. A declared timeout is the
+		 * author's statement about what a reasonable run of THIS command looks like; a headless engine run can hang,
+		 * and a hung command stalls the lane that called it until somebody notices.
+		 */
+		readonly timeout: number | null = null,
+		/** What the permission row answers for this name when nobody has stamped it — see `CommandPolicy`. */
+		readonly policy: CommandPolicy = 'allow'
 	) {
 		this.name = Command.normalizeName( name );
 	}
@@ -185,6 +236,11 @@ export class Command {
 	static readonly DUPLICATE_SLOT: CommandCode = 'duplicate_slot';
 	static readonly RETIRED_PART:   CommandCode = 'retired_part';
 	static readonly NO_ACCESS:      CommandCode = 'no_access';
+	static readonly BAD_BOUND:      CommandCode = 'bad_bound';
+	static readonly NO_OPTIONS:     CommandCode = 'no_options';
+	static readonly BAD_CAP:        CommandCode = 'bad_cap';
+	static readonly BAD_PREFIX:     CommandCode = 'bad_prefix';
+	static readonly BAD_TIMEOUT:    CommandCode = 'bad_timeout';
 
 	/** THE DIRECTORY. One row per code, and the only place any of this is worded. */
 	static readonly CODES: Readonly<Record<CommandCode, CommandCodeInfo>> = {
@@ -221,6 +277,30 @@ export class Command {
 		no_access: {
 			code: 'no_access', field: 'parts', blocking: true,
 			message: 'A path hole does not say what the command DOES with the path. Pick read, write or remove — the reach check is made at that level, and there is deliberately no default.'
+		},
+		/* A bound nobody validates is documentation, so an int hole without a usable one blocks rather than
+		 * silently admitting every number an agent can type. */
+		bad_bound: {
+			code: 'bad_bound', field: 'parts', blocking: true,
+			message: 'A number hole has no usable range. Give a lowest and a highest whole number, lowest first, and not below zero — a negative value is refused as flag-like before any range is consulted, so a negative bound is a hole nothing can fill.'
+		},
+		no_options: {
+			code: 'no_options', field: 'parts', blocking: true,
+			message: 'A choice hole lists no options, or lists the same one twice. The whole value of this type is that the agent picks something you wrote, so an empty list is a hole nothing can satisfy.'
+		},
+		bad_cap: {
+			code: 'bad_cap', field: 'parts', blocking: true,
+			message: `A free-text hole has no usable length cap. Give a whole number from 1 to ${ MAX_LEN }. Keep it as low as the command really needs — the cap is the only bound on this type.`
+		},
+		/* A prefix is glued to the value inside ONE argv element, so whitespace in it would claim a split that
+		 * never happens — the author would read two arguments and the program would receive one. */
+		bad_prefix: {
+			code: 'bad_prefix', field: 'parts', blocking: true,
+			message: 'A hole\'s prefix contains a space or a quote. A prefix is joined to the value inside a single argument, so it cannot split — write it as fixed text instead if you meant two arguments.'
+		},
+		bad_timeout: {
+			code: 'bad_timeout', field: 'timeout', blocking: true,
+			message: `The time limit is not a usable number of seconds. Give a whole number from ${ TIMEOUT_MIN_S } to ${ TIMEOUT_MAX_S }, or leave it off for the house default. A command needing longer than that has outgrown the deck — the agent holds its turn open for the whole run.`
 		}
 	};
 
@@ -231,6 +311,7 @@ export class Command {
 	getErrors(): CommandCode[] {
 		const found: CommandCode[] = [];
 		const names = new Set<string>();
+		const raise = ( code: CommandCode ): void => { if( !found.includes( code ) ) found.push( code ); };
 
 		if( !this.name.trim() )   found.push( Command.NO_NAME );
 		if( !this.intent.trim() ) found.push( Command.NO_INTENT );
@@ -249,12 +330,29 @@ export class Command {
 
 		if( this.parts.some( ( p ) => p.kind === 'retired' ) ) found.push( Command.RETIRED_PART );
 
+		// A declared limit is checked here rather than clamped at the spawn: clamping would run the command under a
+		// limit the author never wrote, and the surface showing their number would be showing a lie.
+		if( this.timeout !== null && !_wholeWithin( this.timeout, TIMEOUT_MIN_S, TIMEOUT_MAX_S ) ) {
+			found.push( Command.BAD_TIMEOUT );
+		}
+
 		for( const p of this.fillable ) {
-			if( names.has( p.name ) && !found.includes( Command.DUPLICATE_SLOT ) ) found.push( Command.DUPLICATE_SLOT );
+			if( names.has( p.name ) ) raise( Command.DUPLICATE_SLOT );
 			names.add( p.name );
 
 			// ONE OF EACH, as above — the surface drawing the holes is the one that knows which of them.
-			if( !isPathAccess( p.access ) && !found.includes( Command.NO_ACCESS ) ) found.push( Command.NO_ACCESS );
+			// ONLY A PATH KIND declares a rung: a value kind reaches no disk, and demanding one of it would make the
+			// required field meaningless everywhere it genuinely is required.
+			if( isPathPart( p ) && !isPathAccess( p.access ) ) raise( Command.NO_ACCESS );
+
+			if( p.kind === 'int' && !( _wholeWithin( p.min, 0, Number.MAX_SAFE_INTEGER )
+				&& _wholeWithin( p.max, 0, Number.MAX_SAFE_INTEGER ) && p.min <= p.max ) ) {
+				raise( Command.BAD_BOUND );
+			}
+			if( p.kind === 'enum' && !_usableOptions( p.options ) ) raise( Command.NO_OPTIONS );
+			if( p.kind === 'text' && !_wholeWithin( p.maxLength, 1, MAX_LEN ) ) raise( Command.BAD_CAP );
+
+			if( p.prefix !== undefined && !_usablePrefix( p.prefix ) ) raise( Command.BAD_PREFIX );
 		}
 		return found;
 	}
@@ -277,13 +375,20 @@ export class Command {
 		return this.parts.filter( ( p ): p is FillablePart => p.kind !== 'literal' && p.kind !== 'retired' );
 	}
 
+	/** The seconds this command is given, declared or house. One expression, so the surface drawing the number and
+	 *  the runner enforcing it cannot disagree about what an absent `timeout` means. */
+	secondsWith( houseDefault: number ): number {
+		return this.timeout ?? houseDefault;
+	}
+
 	/** The command as a person reads it — one line, fixed text plain, holes marked with their TYPE. One
 	 *  place, so no surface re-composes this and gets the spacing different somewhere else. */
 	describe(): string {
 		return this.parts.map( ( p ) => {
 			if( p.kind === 'literal' ) return p.text;
 			if( p.kind === 'retired' ) return `⚠ retired( ${ p.was } )`;
-			return `{ ${ p.name }: ${ p.kind }${ p.optional ? ' | —' : '' } }`;
+			// The prefix is drawn glued on, because that is how it runs — a space here would misreport the split.
+			return `${ p.prefix ?? '' }{ ${ p.name }: ${ p.kind }${ p.optional ? ' | —' : '' } }`;
 		} ).join( ' ' );
 	}
 
@@ -300,7 +405,8 @@ export class Command {
 			}
 			// Marked as a hole so a surface draws it as one, and named so it lines up with the manifest.
 			if( part.kind === 'retired' ) out.push( { text: `⚠ ${ part.was }`, hole: true } );
-			else                          out.push( { text: part.name, hole: true } );
+			// One element, prefix included — the whole point of a prefix is that it does not become a second argument.
+			else                          out.push( { text: `${ part.prefix ?? '' }${ part.name }`, hole: true } );
 		}
 		return out;
 	}
@@ -308,16 +414,30 @@ export class Command {
 	/**
 	 * The block an agent is handed: this command's whole tool description. The judgement is a person's (intent,
 	 * and each hole's type); the call shape is generated from parts, so no parameter can be described that does
-	 * not exist. A hole's description comes from its type, never a free hint. Rendered verbatim in the editor.
+	 * not exist. A hole's description comes from its type AND ITS OWN BOUND, never a free hint — a manifest that
+	 * said "a whole number" where the hole accepts 1..600 would be training an agent to be refused. Rendered
+	 * verbatim in the editor.
 	 */
 	manifest(): string {
 		const slots = this.fillable.map( ( p ) => {
 			const type = partType( p.kind );
-			return `  ${ p.name } — ${ type?.describe ?? p.kind }${ p.optional ? '   ( may be omitted )' : '' }`;
+			return `  ${ p.name } — ${ type ? type.describe( p ) : p.kind }${ p.optional ? '   ( may be omitted )' : '' }`;
 		} );
 
 		/* No intent means no line: a warning here would reach a model as the command's guidance. */
 		const intent = this.intent.trim();
+
+		/* A DECLARED limit is stated and the house default is not. The number is only worth an agent's attention
+		 * when the author chose it — otherwise every command in the manifest would carry the same line. */
+		const limit = this.timeout !== null
+			? [ `Killed if it runs longer than ${ this.timeout }s, reported as a timeout rather than as a failure.` ]
+			: [];
+
+		/* A command that prompts is stated, because it changes what the agent should EXPECT: the call may stop and
+		 * wait on a person rather than returning. One that does not prompt says nothing — silence is the norm. */
+		const prompts = this.policy === 'ask'
+			? [ 'ASKS FIRST — a person is prompted before this runs, so the call may wait or come back declined.' ]
+			: [];
 
 		return [
 			`${ this.name.trim() || '⚠ unnamed' }`,
@@ -325,13 +445,20 @@ export class Command {
 			``,
 			`Runs: ${ this.describe() }`,
 			slots.length ? `Arguments, in order:` : `Takes no arguments.`,
-			...slots
+			...slots,
+			...( limit.length || prompts.length ? [ '' ] : [] ),
+			...limit,
+			...prompts
 		].join( '\n' );
 	}
 
 	/**
 	 * The values as they will run, each through its slot's type. This is the only normalization point: judging
 	 * one string and running another is validate-then-mutate, and that is how a check gets passed by a value it never saw.
+	 *
+	 * THE PREFIX IS NOT PART OF THIS. These are the AGENT's values, and they are what gets judged; the prefix is
+	 * the author's and is joined on in `argv`. Normalizing a prefixed string would mean the leading-dash check met
+	 * the author's dash instead of the model's value, and refused every prefixed hole.
 	 */
 	filled( values: readonly string[] ): string[] {
 		return this.fillable.map( ( part, i ) => {
@@ -370,14 +497,15 @@ export class Command {
 		const type = partType( part.kind );
 		const v    = type ? type.normalize( value ) : value.trim();
 
-		if( !v ) return part.optional ? null : { code: 'missing_value', part: part.name, detail: type?.describe ?? '' };
+		if( !v ) return part.optional ? null : { code: 'missing_value', part: part.name, detail: type ? type.describe( part ) : '' };
 
+		// The HARD ceiling, above whatever a `text` hole declares for itself. A type narrows this and cannot widen it.
 		if( v.length > MAX_LEN ) return { code: 'too_long',          part: part.name, detail: `${ v.length } of ${ MAX_LEN }` };
 		if( CONTROL.test( v ) )  return { code: 'control_character', part: part.name, detail: '' };
 		if( FLAGLIKE.test( v ) ) return { code: 'flag_like',         part: part.name, detail: '-' };
 
 		if( type ) {
-			const detail = type.validate( v );
+			const detail = type.validate( v, part );
 			if( detail !== null ) return { code: type.fault, part: part.name, detail };
 		}
 		return null;
@@ -411,7 +539,9 @@ export class Command {
 			if( part.kind === 'retired' ) continue;
 
 			const value = ready[ i++ ] ?? '';
-			if( value ) out.push( value );
+			// ONE ELEMENT, prefix and value together. An omitted optional hole contributes nothing at all — not an
+			// empty string and not a bare prefix, which would reach the program as a flag with no argument.
+			if( value ) out.push( `${ part.prefix ?? '' }${ value }` );
 		}
 		return out;
 	}
@@ -424,31 +554,78 @@ export class Command {
 		const parts = this.parts.map( ( p ): CommandPart => {
 			if( p.kind === 'literal' ) return { kind: 'literal', text: p.text };
 			if( p.kind === 'retired' ) return { kind: 'retired', was: p.was };
-			// `optional` only when set: an `undefined` key breaks equality against a round-tripped row. `access` is
-			// always written, and `fromSerialized` refuses a stored part that lacks it.
-			return p.optional
-				? { kind: p.kind, name: p.name, access: p.access, optional: true }
-				: { kind: p.kind, name: p.name, access: p.access };
+
+			// Written only when set: an `undefined` key breaks equality against a round-tripped row. Each kind's own
+			// declaration is written unconditionally, and `fromSerialized` refuses a stored part that lacks it.
+			const tail = {
+				...( p.optional ? { optional: true as const } : {} ),
+				...( p.prefix  ? { prefix: p.prefix } : {} )
+			};
+			if( p.kind === 'int' )  return { kind: 'int',  name: p.name, min: p.min, max: p.max, ...tail };
+			if( p.kind === 'enum' ) return { kind: 'enum', name: p.name, options: [ ...p.options ], ...tail };
+			if( p.kind === 'text' ) return { kind: 'text', name: p.name, maxLength: p.maxLength, ...tail };
+			return { kind: p.kind, name: p.name, access: p.access, ...tail };
 		} );
-		return { name: this.name, intent: this.intent, parts };
+		return {
+			name:   this.name,
+			intent: this.intent,
+			parts,
+			...( this.timeout !== null  ? { timeout: this.timeout } : {} ),
+			...( this.policy === 'ask'  ? { policy: 'ask' as const } : {} )
+		};
 	}
 
 	/**
 	 * Rebuild from storage or the wire. A part of a kind that no longer exists is kept visibly broken as `retired`:
 	 * guessing would silently change what a privileged command runs. A path hole with no `access` is the same case;
 	 * defaulting it to `read` would be guessing at a security declaration.
+	 *
+	 * A BROKEN DECLARATION ON A VALUE HOLE IS LEFT INTACT rather than degraded to `retired`, which is the opposite
+	 * choice to `access` and deliberate. A missing bound is not a security declaration — nothing is granted by it
+	 * either way — and `getErrors` already blocks the command and names the actual fault, which is what an author
+	 * has to read in order to fix it. Degrading would replace that with "a kind that no longer exists", which is
+	 * false and tells them nothing.
 	 */
 	static fromSerialized( json: SerializedCommand ): Command {
 		const parts = ( json.parts ?? [] ).map( ( p ): CommandPart => {
 			const kind = ( p as { kind?: string } ).kind ?? '';
 			if( !KNOWN_KINDS.includes( kind ) ) return { kind: 'retired', was: kind || 'unnamed' };
 
-			// A fillable kind is a path kind, and a path kind without a level is not a part this can rebuild.
-			if( kind !== 'literal' && kind !== 'retired' && !isPathAccess( ( p as { access?: unknown } ).access ) ) {
+			// A PATH kind without a rung is not a part this can rebuild: there is no safe level to assume, and
+			// assuming one would be inventing the security declaration the author omitted.
+			if( isPathKind( kind ) && !isPathAccess( ( p as { access?: unknown } ).access ) ) {
 				return { kind: 'retired', was: kind };
 			}
 			return p;
 		} );
-		return new Command( json.name, json.intent ?? '', parts );
+		// A stored timeout is carried through as-is and judged by `getErrors`: coercing a bad one to the default
+		// would run the command under a limit nobody authored, and silently.
+		const timeout = typeof json.timeout === 'number' ? json.timeout : null;
+		const policy  = json.policy === 'ask' ? 'ask' : 'allow';
+		return new Command( json.name, json.intent ?? '', parts, timeout, policy );
 	}
+}
+
+/** A whole number inside a closed range, answered for data that may be anything. */
+function _wholeWithin( value: unknown, min: number, max: number ): boolean {
+	return typeof value === 'number' && Number.isSafeInteger( value ) && value >= min && value <= max;
+}
+
+/** A choice list an agent could actually satisfy: at least one option, each non-empty, and no duplicates — a
+ *  duplicated option would describe one choice twice in the manifest, which is the `duplicate_slot` fault one
+ *  level down. */
+function _usableOptions( options: unknown ): boolean {
+	if( !Array.isArray( options ) || !options.length ) return false;
+	const seen = new Set<string>();
+	for( const o of options ) {
+		if( typeof o !== 'string' || !o.trim() ) return false;
+		if( seen.has( o ) ) return false;
+		seen.add( o );
+	}
+	return true;
+}
+
+/** A prefix that will survive being one argv element: no whitespace, no quotes, and not empty if present. */
+function _usablePrefix( prefix: unknown ): boolean {
+	return typeof prefix === 'string' && !!prefix && !/[\s"']/.test( prefix );
 }

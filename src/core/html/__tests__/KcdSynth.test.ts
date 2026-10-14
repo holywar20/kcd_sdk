@@ -1,5 +1,5 @@
 import { describe as describeProse, it as itProse, expect as expectProse } from 'vitest';
-import { KcdSynth as Synth } from '../KcdSynth';
+import { KcdSynth as Synth, PROSE_INLINE_TAGS } from '../KcdSynth';
 
 /**
  * Prose hygiene ( 2026-08-17 ). Two rules that both answer "what will this document actually SAY".
@@ -34,6 +34,14 @@ describeProse( 'KcdSynth — prose hygiene', () => {
 		expectProse( warn[ 0 ] ).toContain( '<strong>' );
 		expectProse( warn[ 0 ] ).toContain( '<code>' );
 		expectProse( warn[ 0 ] ).toContain( '<a href>' );
+	} );
+
+	// The advice and the escaper used to be a hundred lines apart in one file, saying different things
+	// ( BUG-74 ). Every tag the advice names must be a member of the set the escaper reads, by construction.
+	itProse( 'advises only tags the allowlist actually holds', () => {
+		const warn = Synth.proseWarnings( { sections: { why: 'This is **bold** and `code` and [a link](x.html).' } } );
+		for ( const advertised of ( warn[ 0 ] ?? '' ).matchAll( /<([a-z]+)[^>]*>/g ) )
+			expectProse( Object.keys( PROSE_INLINE_TAGS ) ).toContain( advertised[ 1 ] );
 	} );
 
 	itProse( 'says nothing about prose that carries no markers', () => {
@@ -296,6 +304,177 @@ describe( 'KcdSynth — regions and slot rows', () => {
 			slots:    [ { section: 'notes', kind: 'not-a-kind', rows: [ { what: 'x' } ] } ],
 		} );
 		expect( report.errors ).toEqual( [] );
+	} );
+} );
+
+/**
+ * THE INLINE ALLOWLIST ( BUG-74 ).
+ *
+ * ── THE DEFECT THESE CASES EXIST FOR ───────────────────────────────────────────────────────────────
+ *
+ * Inline markup used to survive by the ACCIDENT OF WHERE IT SAT. A section that happened to open with
+ * `<p>` passed through verbatim and kept its `<strong>`; the identical prose without that wrapper went
+ * through `escapeText` and rendered `&lt;strong&gt;` onto the page — while the tool description and the
+ * authoring advisory both told the author to write exactly that. So the headline case here is not "does
+ * `<strong>` work" but "do the two paths agree", and the list path is tested beside the paragraph path
+ * because they were the two halves that could drift.
+ *
+ * ── AND ESCAPING IS STILL THE DEFAULT ──────────────────────────────────────────────────────────────
+ *
+ * The allowlist is the exception to escaping, not a relaxation of it, so most of what follows is the
+ * REFUSAL surface: a tag outside the set, an attribute outside the set, a stray `<`, an unbalanced tag,
+ * and a scheme that carries script. Each of those has to come back as text, because this is the only
+ * thing standing between authored prose and arbitrary markup at the save path.
+ */
+describe( 'KcdSynth — the inline allowlist', () => {
+
+	it( 'renders the advertised four as real markup mid-paragraph', () => {
+		const html = KcdSynth.proseToHtml(
+			'Plain, then <strong>bold</strong>, <em>emphasis</em>, <code>a span</code> and '
+			+ '<a href="_Claude/references/patterns/x.html">a link</a>.'
+		);
+
+		expect( html ).toBe(
+			'<p>Plain, then <strong>bold</strong>, <em>emphasis</em>, <code>a span</code> and '
+			+ '<a href="_Claude/references/patterns/x.html">a link</a>.</p>'
+		);
+	} );
+
+	// THE HEADLINE. Where the prose happens to sit decided whether its markup survived.
+	it( 'renders identically whether or not the section opens with a block tag', () => {
+		const prose   = 'Text with <strong>bold</strong> and <code>code</code> in it.';
+		const authored = KcdSynth.proseToHtml( `<p>${ prose }</p>` );
+
+		expect( KcdSynth.proseToHtml( prose ) ).toBe( authored );
+	} );
+
+	it( 'gives a list item the same treatment as a paragraph, not a different one', () => {
+		const html = KcdSynth.proseToHtml( '- one with <strong>bold</strong>\n- two with <code>code</code>' );
+
+		expect( html ).toContain( '<li>one with <strong>bold</strong></li>' );
+		expect( html ).toContain( '<li>two with <code>code</code></li>' );
+	} );
+
+	// The behaviour half of the anti-drift pin: a tag advertised but not honoured is the same defect
+	// wearing the other face, so the members are read off the constant rather than listed again here.
+	it( 'honours every member of the allowlist, derived from the constant', () => {
+		for ( const [ tag, attrs ] of Object.entries( PROSE_INLINE_TAGS ) ) {
+			const open = `<${ [ tag, ...attrs.map( a => `${ a }="x.html"` ) ].join( ' ' ) }>`;
+			expect( KcdSynth.proseToHtml( `before ${ open }inside</${ tag }> after` ) )
+				.toBe( `<p>before ${ open }inside</${ tag }> after</p>` );
+		}
+	} );
+
+	it( 'survives the validator the write path actually runs', () => {
+		const { html, report } = build( 'reference', 'synth-inline', {
+			sections: {
+				location:    'It lives <strong>here</strong>, see <a href="_Claude/references/patterns/alpha.html">alpha</a>.',
+				conventions: '- an <em>emphatic</em> rule\n- a <code>literal</code> one',
+			},
+		} );
+
+		expect( report.errors ).toEqual( [] );
+		expect( report.ok ).toBe( true );
+		expect( html ).toContain( '<strong>here</strong>' );
+		expect( html ).toContain( '<em>emphatic</em>' );
+	} );
+
+	describe( 'everything outside the set is still escaped', () => {
+
+		it( 'escapes a tag the allowlist does not hold, script included', () => {
+			for ( const tag of [ 'script', 'style', 'div', 'span', 'b', 'i', 'br', 'img' ] ) {
+				const html = KcdSynth.proseToHtml( `text <${ tag }>x</${ tag }> text` );
+				expect( html ).not.toContain( `<${ tag }` );
+				expect( html ).toContain( `&lt;${ tag }&gt;` );
+			}
+		} );
+
+		it( 'escapes a stray and an unbalanced angle bracket', () => {
+			expect( KcdSynth.proseToHtml( 'A value under 5 < 10.' ) ).toBe( '<p>A value under 5 &lt; 10.</p>' );
+			expect( KcdSynth.proseToHtml( 'An arrow -> and a < b > c.' ) ).toBe( '<p>An arrow -&gt; and a &lt; b &gt; c.</p>' );
+		} );
+
+		it( 'escapes an allowlisted tag that is never closed, rather than letting it run on', () => {
+			expect( KcdSynth.proseToHtml( 'Open <strong>and never shut.' ) ).toBe( '<p>Open &lt;strong&gt;and never shut.</p>' );
+			expect( KcdSynth.proseToHtml( 'A close </em> with no open.' ) ).toBe( '<p>A close &lt;/em&gt; with no open.</p>' );
+		} );
+
+		it( 'keeps the well-nested pair and escapes the mis-nested one', () => {
+			// `</strong>` does not match the open `em` on top of the stack, so neither strong tag stands —
+			// and the kept set is balanced, which is the property that matters.
+			const html = KcdSynth.proseToHtml( 'Mixed <strong><em>up</strong></em> here.' );
+			expect( html ).toBe( '<p>Mixed &lt;strong&gt;<em>up&lt;/strong&gt;</em> here.</p>' );
+		} );
+
+		it( 'escapes a tag inside <code>, so a tag can be shown as text', () => {
+			expect( KcdSynth.proseToHtml( 'Write <code><p></code> for a paragraph.' ) )
+				.toBe( '<p>Write <code>&lt;p&gt;</code> for a paragraph.</p>' );
+		} );
+
+		it( 'escapes a comment-looking opener rather than treating it as a tag', () => {
+			// Comments are stripped before this path, so what is left cannot reach the emitter as markup.
+			expect( KcdSynth.proseToHtml( 'A <!doctype html> in prose.' ) ).toContain( '&lt;!doctype' );
+		} );
+	} );
+
+	describe( 'an attribute it has not permitted refuses the whole tag', () => {
+
+		it( 'refuses an event handler, a style and a target on an anchor', () => {
+			for ( const attr of [ 'onclick="steal()"', 'style="position:fixed"', 'target="_blank"', 'class="x"' ] ) {
+				const html = KcdSynth.proseToHtml( `See <a href="x.html" ${ attr }>this</a>.` );
+				expect( html ).not.toContain( '<a ' );
+				expect( html ).toContain( '&lt;a href=' );
+			}
+		} );
+
+		it( 'refuses an attribute on a tag that takes none', () => {
+			expect( KcdSynth.proseToHtml( 'A <strong class="x">word</strong>.' ) ).toContain( '&lt;strong class=' );
+		} );
+
+		it( 'refuses an anchor with no href, since the advertised form is <a href>', () => {
+			expect( KcdSynth.proseToHtml( 'A <a>bare</a> anchor.' ) ).toBe( '<p>A &lt;a&gt;bare&lt;/a&gt; anchor.</p>' );
+		} );
+
+		it( 'refuses the same attribute said twice, which has no rule about which wins', () => {
+			expect( KcdSynth.proseToHtml( 'A <a href="a.html" href="b.html">link</a>.' ) ).toContain( '&lt;a href=' );
+		} );
+
+		it( 'refuses an unquoted or single-quoted attribute rather than guessing its end', () => {
+			expect( KcdSynth.proseToHtml( 'A <a href=x.html>link</a>.' ) ).toContain( '&lt;a href=x.html&gt;' );
+			expect( KcdSynth.proseToHtml( "A <a href='x.html'>link</a>." ) ).toContain( '&lt;a href=' );
+		} );
+
+		it( 'refuses a quote smuggled in as an entity, rather than letting it break out of the value', () => {
+			// The sharpest attempt available: the value carries no raw `"`, so it parses as ONE attribute, and
+			// only decoding it reveals the second one hiding inside. Decoding is exactly what the browser would
+			// do, which is why the check runs on the decoded value.
+			const html = KcdSynth.proseToHtml( 'A <a href="x.html&quot; onclick=&quot;y">link</a>.' );
+			expect( html ).not.toContain( '<a ' );
+			expect( html ).not.toContain( 'onclick="y"' );
+		} );
+	} );
+
+	describe( 'an href that carries script', () => {
+
+		it( 'refuses a scheme that is not http, https or mailto', () => {
+			for ( const href of [ 'javascript:alert(1)', 'data:text/html;base64,PHNjcmlwdD4=', 'vbscript:x', 'file:///etc/passwd' ] ) {
+				const html = KcdSynth.proseToHtml( `Click <a href="${ href }">here</a>.` );
+				expect( html ).not.toContain( '<a ' );
+				expect( html ).toContain( '&lt;a href=' );
+			}
+		} );
+
+		it( 'refuses an obfuscated scheme — entities and control characters decode before the check', () => {
+			for ( const href of [ '&#x6a;avascript:alert(1)', '&#106;avascript:alert(1)', 'java&#9;script:alert(1)', ' javascript:alert(1)' ] ) {
+				expect( KcdSynth.proseToHtml( `Click <a href="${ href }">here</a>.` ) ).not.toContain( '<a ' );
+			}
+		} );
+
+		it( 'admits a vault-relative path and an http, https or mailto URL', () => {
+			for ( const href of [ '_Claude/references/patterns/alpha.html', '../sibling.html', 'https://example.com/a?b=1&c=2', 'mailto:someone@example.com' ] ) {
+				expect( KcdSynth.proseToHtml( `Click <a href="${ href }">here</a>.` ) ).toContain( '<a href=' );
+			}
+		} );
 	} );
 } );
 

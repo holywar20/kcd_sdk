@@ -1,8 +1,9 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'fs'
-import { join } from 'path'
+import { join, basename } from 'path'
 import { tmpdir } from 'os'
 import { SdkFileAccess, SEARCH_MATCH_CAP, SEARCH_YIELD_EVERY, type SearchToken } from '../SdkFileAccess'
+import type { FileEntry } from '../../core/FileTypes'
 
 // search() touches real disk ( it's the shared core's own contract — raw fs, no mocking ) so every
 // test works against throwaway dirs under the OS temp folder, cleaned up after each test.
@@ -159,6 +160,67 @@ describe( 'SdkFileAccess.grepText with a FILE as the root', () => {
 		expect( scan.rootIsFile ).toBe( false )
 		expect( scan.candidates ).toBe( 0 )
 		expect( scan.rows ).toEqual( [] )
+	} )
+
+	/**
+	 * WHY it was skipped, not merely that it was. The refusal above this layer used to name four possible
+	 * causes in one sentence and a 2026-10-13 triage recorded the wrong one as fact ( DEFECT-342 ). Each
+	 * cause carries a DIFFERENT fix, so each is pinned separately here rather than as one truthy check.
+	 */
+	it( 'names which cause skipped a single file, and distinguishes the ones that look alike', async () => {
+		const root = tmpDir()
+		const fs   = new SdkFileAccess()
+
+		// EMPTY vs OVERSIZED — both are "nothing came back", and only one of them is a cap to raise.
+		const empty = join( root, 'empty.md' )
+		writeFileSync( empty, '' )
+		expect( ( await fs.grepText( empty, 'anything' ) ).fileSkip ).toBe( 'empty' )
+
+		const big = join( root, 'big.md' )
+		writeFileSync( big, 'x'.repeat( 4096 ) )
+		expect( ( await fs.grepText( big, 'x', { maxBytes: 16 } ) ).fileSkip ).toBe( 'oversized' )
+
+		// NONTEXT — the cause behind DEFECT-342, and the one that was being read as "binary or oversized".
+		const blob = join( root, 'blob.png' )
+		writeFileSync( blob, Buffer.from( [ 0x89, 0x50, 0x4e, 0x47 ] ) )
+		expect( ( await fs.grepText( blob, 'PNG' ) ).fileSkip ).toBe( 'nontext' )
+
+		// PROTECTED is a different refusal from unreadable, and must not borrow its wording.
+		const secret = join( root, 'secret.md' )
+		writeFileSync( secret, 'alpha\n' )
+		expect( ( await fs.grepText( secret, 'alpha', { deny: [ '**/secret.md' ] } ) ).fileSkip ).toBe( 'protected' )
+
+		// A FILE THAT WAS ACTUALLY SEARCHED REPORTS NULL, so null never has to stand in for a cause.
+		const fine = join( root, 'fine.md' )
+		writeFileSync( fine, 'beta\n' )
+		const read = await fs.grepText( fine, 'beta' )
+		expect( read.fileSkip ).toBeNull()
+		expect( read.searched ).toBe( 1 )
+
+		// A MISS IS NOT A SKIP EITHER — it was opened and read, and the query simply was not in it.
+		expect( ( await fs.grepText( fine, 'nowhere' ) ).fileSkip ).toBeNull()
+	} )
+
+	/** DEFECT-342 — the table entry itself, at the layer that gates every door onto a file. */
+	it( 'opens a .jsonl now, and still will not open a real binary', async () => {
+		const root = tmpDir()
+		const fs   = new SdkFileAccess()
+
+		const jsonl = join( root, 'trace-perf.jsonl' )
+		writeFileSync( jsonl, '{"verb":"PERF.LOOP.DONE"}\n{"verb":"BOOT.SERVICE.DONE"}\n', 'utf-8' )
+		const scan = await fs.grepText( jsonl, 'PERF.LOOP.DONE' )
+		expect( scan.searched ).toBe( 1 )
+		expect( scan.fileSkip ).toBeNull()
+		expect( scan.rows ).toHaveLength( 1 )
+
+		const nd = join( root, 'stream.ndjson' )
+		writeFileSync( nd, '{"a":1}\n', 'utf-8' )
+		expect( ( await fs.grepText( nd, '"a"' ) ).searched ).toBe( 1 )
+
+		// The whitelist is still a whitelist: widening it did not turn it into a sniff of the bytes.
+		const blob = join( root, 'icon.png' )
+		writeFileSync( blob, Buffer.from( [ 0x89, 0x50, 0x4e, 0x47 ] ) )
+		expect( ( await fs.grepText( blob, 'PNG' ) ).searched ).toBe( 0 )
 	} )
 } )
 
@@ -381,5 +443,50 @@ describe( 'SdkFileAccess.search — ES fast path fallback', () => {
 		const out = await fs.search( [ rootA, rootB ], 'match' )
 
 		expect( out.map( ( e ) => e.name ).sort() ).toEqual( [ 'alpha-match.txt', 'bravo-match.txt' ] )
+	} )
+} )
+
+// ── the index is a MIRROR, and it lags in both directions ──────────────────────────────────────
+// _esLive is the whole staleness policy, split off the spawn so it can be judged against real files
+// with no live Everything — the same reason _esArgs and EsCsv are pure. `null` out of it means the
+// index gave no usable answer, which search() reads as fall through to the walk.
+
+describe( 'SdkFileAccess._esLive', () => {
+
+	/** One row shaped the way EsCsv.parse emits them; only `path` is read here. */
+	function row( path: string ): FileEntry {
+		return { name: basename( path ), path, isDir: false, size: 0, ext: 'txt', mtime: 0 }
+	}
+
+	it( 'drops a row the index still holds for a path that is gone', () => {
+		const root = tmpDir()
+		const here = join( root, 'still-here.txt' )
+		writeFileSync( here, '' )
+
+		const live = SdkFileAccess._esLive( [ row( here ), row( join( root, 'deleted.txt' ) ) ] )
+
+		// A hit that cannot be opened is worse than no hit: the survivor is the one on disk.
+		expect( live?.map( ( e ) => e.path ) ).toEqual( [ here ] )
+	} )
+
+	it( 'reads an EMPTY answer as no answer, so search walks rather than reporting absence', () => {
+		// The folder made seconds ago that the index has not caught up with yet. Zero rows and "nothing
+		// exists" are the same shape, and only the walk can tell them apart.
+		expect( SdkFileAccess._esLive( [] ) ).toBeNull()
+	} )
+
+	it( 'reads an answer whose every row is gone as no answer too', () => {
+		const root = tmpDir()
+		expect( SdkFileAccess._esLive( [ row( join( root, 'a.txt' ) ), row( join( root, 'b.txt' ) ) ] ) ).toBeNull()
+	} )
+
+	it( 'trusts a non-empty answer — the index knew about this query', () => {
+		const root = tmpDir()
+		const a = join( root, 'a.txt' )
+		const b = join( root, 'b.txt' )
+		writeFileSync( a, '' )
+		writeFileSync( b, '' )
+
+		expect( SdkFileAccess._esLive( [ row( a ), row( b ) ] )?.map( ( e ) => e.path ) ).toEqual( [ a, b ] )
 	} )
 } )

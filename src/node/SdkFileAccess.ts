@@ -9,7 +9,7 @@ import { NameMatch } from '../core/NameMatch'
 import { Noise } from '../core/Noise'
 import { Blacklist } from '../core/Blacklist'
 import { EsCsv } from '../core/EsCsv'
-import type { FileEntry, FileStat, FileRoots, GrepRow, GrepCount, GrepScan } from '../core/FileTypes'
+import type { FileEntry, FileStat, FileRoots, GrepRow, GrepCount, GrepScan, GrepSkip } from '../core/FileTypes'
 import { higherLevel, operationsFor, verbFor, type AccessEntry } from '../core/AccessPolicy'
 import { accessRank, type AccessLevel } from '../session/InjectedItem'
 import type { GrantRef } from '../session/InjectedItem'
@@ -243,8 +243,9 @@ export class SdkFileAccess {
 	}
 
 	/** Entries whose NAME contains `query` (case-insensitive, via NameMatch). `roots` is one folder, or [] for the whole computer.
-	 *  A blank query returns [] and never lists the machine. Tries the Everything fast path first; any failure falls through to the walk,
-	 *  which yields the event loop so a cancel can land. */
+	 *  A blank query returns [] and never lists the machine. Tries the Everything fast path first; any failure — AND an empty
+	 *  answer, which from an index is not evidence of absence — falls through to the walk, which yields the event loop so a
+	 *  cancel can land. */
 	async search( roots: string[], query: string, token: SearchToken = { cancelled: false } ): Promise<FileEntry[]> {
 		const q = query.trim()
 		if( !q || token.cancelled ) return []
@@ -308,7 +309,7 @@ export class SdkFileAccess {
 	async grepText( root: string, query: string, opts: GrepScanOptions = {}, token: SearchToken = { cancelled: false } ): Promise<GrepScan> {
 		const rows:   GrepRow[]   = []
 		const counts: GrepCount[] = []
-		if( !query || token.cancelled ) return { rows, searched: 0, capped: false, cancelled: token.cancelled, counts, candidates: 0, nearMisses: 0, rootIsFile: false }
+		if( !query || token.cancelled ) return { rows, searched: 0, capped: false, cancelled: token.cancelled, counts, candidates: 0, nearMisses: 0, rootIsFile: false, fileSkip: null }
 
 		const fold     = opts.caseInsensitive === true
 		const needle   = fold ? query.toLowerCase() : query
@@ -337,17 +338,24 @@ export class SdkFileAccess {
 		// Weighted yield budget: a file open costs GREP_READ_COST against a directory entry's 1, or the walk blocks once reads begin.
 		let budget = 0
 
+		// WHY one file was skipped, written by `scanFile` and read ONLY on the single-file path below. The walk
+		// overwrites it freely and that is harmless: the walk's returns all carry null, because one cause cannot
+		// honestly speak for a tree full of skipped files.
+		let skip: GrepSkip | null = null
+
 		/** Open one candidate and take its matching lines. TRUE only when actually read: skips are not searches. Sets `capped` on an
 		 *  early stop. A closure, because every ceiling it honours is already in scope. */
 		const scanFile = ( full: string ): boolean => {
 			let size: number
 			try { size = statSync( full ).size }
-			catch( err ) { this._warn( 'grep_stat_failed', { path: full, message: this._msg( err ) } ); return false }
-			if( size === 0 || size > maxBytes ) return false
+			catch( err ) { this._warn( 'grep_stat_failed', { path: full, message: this._msg( err ) } ); skip = 'unreadable'; return false }
+			// The two are separated because the fix differs: an empty file is the answer, an oversized one is a cap.
+			if( size === 0 )        { skip = 'empty';     return false }
+			if( size > maxBytes )   { skip = 'oversized'; return false }
 
 			let body: string
 			try { body = String( readFileSync( full, 'utf-8' ) ) }
-			catch( err ) { this._warn( 'grep_read_failed', { path: full, message: this._msg( err ) } ); return false }
+			catch( err ) { this._warn( 'grep_read_failed', { path: full, message: this._msg( err ) } ); skip = 'unreadable'; return false }
 
 			const lines = body.split( /\r?\n/ )
 
@@ -392,12 +400,16 @@ export class SdkFileAccess {
 		let rootIsFile = false
 		try { rootIsFile = !statSync( root ).isDirectory() } catch { /* missing or unreadable — the walk says so */ }
 		if( rootIsFile ) {
-			const searchable = ( !noise || !Noise.skipsFile( basename( root ) ) )
-				&& TextTypes.isText( root )
-				&& !Blacklist.excludes( root, deny )
-			if( !searchable ) return { rows, searched: 0, capped: false, cancelled: false, counts, candidates: 0, nearMisses: 0, rootIsFile: true }
+			// Asked in refusal order rather than as one boolean, so the cause that applied is the cause reported.
+			// Noise first and protection last matches the walk's own order, where the cheapest refusal runs first.
+			const refused: GrepSkip | null =
+				  noise && Noise.skipsFile( basename( root ) ) ? 'noise'
+				: !TextTypes.isText( root )                    ? 'nontext'
+				: Blacklist.excludes( root, deny )             ? 'protected'
+				: null
+			if( refused ) return { rows, searched: 0, capped: false, cancelled: false, counts, candidates: 0, nearMisses: 0, rootIsFile: true, fileSkip: refused }
 			const read = scanFile( root )
-			return { rows, searched: read ? 1 : 0, capped, cancelled: false, counts, candidates: 1, nearMisses: 0, rootIsFile: true }
+			return { rows, searched: read ? 1 : 0, capped, cancelled: false, counts, candidates: 1, nearMisses: 0, rootIsFile: true, fileSkip: read ? null : skip }
 		}
 
 		while( stack.length > 0 ) {
@@ -416,7 +428,7 @@ export class SdkFileAccess {
 				budget  += 1
 				if( visited > GREP_WALK_CAP ) {
 					this._warn( 'grep_walk_capped', { root, query, cap: GREP_WALK_CAP } )
-					return { rows, searched, capped: true, cancelled: false, counts, candidates, nearMisses, rootIsFile: false }
+					return { rows, searched, capped: true, cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
 				}
 
 				const full = join( dir, d.name )
@@ -452,22 +464,25 @@ export class SdkFileAccess {
 				// The budget ends the walk, not just this file: a partial answer gains nothing from more opens.
 				if( spent() ) {
 					this._warn( 'grep_truncated', { root, query, cap: maxRows, mode } )
-					return { rows, searched, capped: true, cancelled: false, counts, candidates, nearMisses, rootIsFile: false }
+					return { rows, searched, capped: true, cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
 				}
 
 				if( budget >= GREP_YIELD_BUDGET ) {
 					budget = 0
 					await _tick()
-					if( token.cancelled ) return { rows, searched, capped, cancelled: true, counts, candidates, nearMisses, rootIsFile: false }
+					if( token.cancelled ) return { rows, searched, capped, cancelled: true, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
 				}
 			}
 		}
 
-		return { rows, searched, capped, cancelled: false, counts, candidates, nearMisses, rootIsFile: false }
+		return { rows, searched, capped, cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
 	}
 
 	/** Asks a live Everything instance instead of walking. Returns `null`, never throws, on any failure, which search() reads
-	 *  as fall through to the walk. Engages for zero or one root only: es.exe's `-path` takes one directory. */
+	 *  as fall through to the walk. Engages for zero or one root only: es.exe's `-path` takes one directory.
+	 *
+	 *  THE INDEX IS A MIRROR, AND A MIRROR LAGS IN BOTH DIRECTIONS. It can still hold a path that is gone, and it can
+	 *  not yet hold one that exists. Both are handled below, and only one of them can be handled by filtering. */
 	private async _esSearch( roots: string[], query: string ): Promise<FileEntry[] | null> {
 		if( !this.esBin || roots.length > 1 ) return null
 
@@ -479,12 +494,41 @@ export class SdkFileAccess {
 			return null
 		}
 
+		let rows: FileEntry[]
 		try {
-			return EsCsv.parse( stdout )
+			rows = EsCsv.parse( stdout )
 		} catch( err ) {
 			this._warn( 'search_es_parse_failed', { message: this._msg( err ) } )
 			return null
 		}
+
+		const live = SdkFileAccess._esLive( rows )
+		if( ( live?.length ?? 0 ) < rows.length ) this._warn( 'search_es_stale_rows', { query, dropped: rows.length - ( live?.length ?? 0 ) } )
+		if( live === null ) this._warn( 'search_es_empty', { query } )
+
+		return live
+	}
+
+	/**
+	 * The index's rows judged against the disk — the whole of this fast path's staleness policy, in one place.
+	 * `null` means the index gave NO USABLE ANSWER, which search() reads as fall through to the walk.
+	 *
+	 * Deleted-but-indexed is the direction a filter CAN fix: one existsSync a row, and a hit that cannot be opened
+	 * is worse than no hit at all. The rows are bounded by `-max-results`, so this is SEARCH_MATCH_CAP stats at worst.
+	 *
+	 * NOTHING FROM THE INDEX IS NOT EVIDENCE OF ABSENCE, and that direction no filter reaches. Everything knows a
+	 * volume it is monitoring; a folder made seconds ago, or anything on a volume it does not watch at all, is simply
+	 * not in it — and that answer is shaped exactly like "no such file". So an empty answer is read as no answer and
+	 * the walk runs: the walk is what every query did before this fast path existed, with the same cap, the same
+	 * yielding and the same cancel token, so the cost is the old one and it is now paid only when the index said
+	 * nothing. A NON-empty answer is trusted — the index knew about this query.
+	 *
+	 * Split from the spawn so it is testable against real files with no live Everything, which is the same reason
+	 * _esArgs and EsCsv are pure.
+	 */
+	static _esLive( rows: FileEntry[] ): FileEntry[] | null {
+		const live = rows.filter( ( e ) => existsSync( e.path ) )
+		return live.length > 0 ? live : null
 	}
 
 	/** Pure argv builder, testable without a process. Column order is FIXED by these flags: EsCsv.parse reads it positionally.
