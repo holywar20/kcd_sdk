@@ -111,4 +111,12 @@ export interface ServerConfigField {
 	min?:         number;                 // for 'number'
 	max?:         number;                 // for 'number'
 	placeholder?: string;
+	/** Two or three sentences shown behind a `?` beside the field — mirrors `ConfigField.help`. The declaring
+	 *  server is the only thing that knows what its own setting means, and a vendored server's field is exactly
+	 *  where a person has no other source for it. */
+	help?:        string;
+	/** For `type: 'path'`: whether the editor's Browse button picks a FILE or a FOLDER. Defaults to 'folder'.
+	 *  A two-member union rather than a bare string like `type` above, because the app CASTS this shape onto its
+	 *  own `SettingField` and a widened member would not survive the cast. */
+	pick?:        'file' | 'folder';
 }
