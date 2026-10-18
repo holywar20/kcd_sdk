@@ -2,16 +2,11 @@ import { describe as describeProse, it as itProse, expect as expectProse } from 
 import { KcdSynth as Synth, PROSE_INLINE_TAGS } from '../KcdSynth';
 
 /**
- * Prose hygiene ( 2026-08-17 ). Two rules that both answer "what will this document actually SAY".
+ * Prose hygiene. Two rules that both answer "what will this document actually SAY".
  *
- * Comments are stripped because they are a HUMAN channel ( ruling: Bryan ) — an agent has the body
- * for anything it needs to say, and a side channel it can write but a reader does not expect is a
- * contamination surface. Before this, the two input paths disagreed: a comment in an authored `body`
- * was dropped by the parser, and the same comment in `content` prose was ESCAPED and rendered a
- * literal `<!-- … -->` onto the page.
- *
- * Markdown is advised rather than converted, because interpreting it would mint a dialect this
- * project then owns forever, in a corpus that is HTML by deliberate choice.
+ * Comments are stripped, not escaped: they are a human channel, and an agent has the body for anything it
+ * needs to say. Markdown is advised rather than converted, because interpreting it would mint a dialect this
+ * project then owns, in a corpus that is HTML by deliberate choice.
  */
 describeProse( 'KcdSynth — prose hygiene', () => {
 
@@ -36,8 +31,7 @@ describeProse( 'KcdSynth — prose hygiene', () => {
 		expectProse( warn[ 0 ] ).toContain( '<a href>' );
 	} );
 
-	// The advice and the escaper used to be a hundred lines apart in one file, saying different things
-	// ( BUG-74 ). Every tag the advice names must be a member of the set the escaper reads, by construction.
+	// Advice and escaper read one set, so the advice cannot name a tag the escaper refuses.
 	itProse( 'advises only tags the allowlist actually holds', () => {
 		const warn = Synth.proseWarnings( { sections: { why: 'This is **bold** and `code` and [a link](x.html).' } } );
 		for ( const advertised of ( warn[ 0 ] ?? '' ).matchAll( /<([a-z]+)[^>]*>/g ) )
@@ -62,10 +56,8 @@ import { KcdValidate } from '../KcdValidate';
 import { KcdShapes } from '../KcdShapes';
 
 /**
- * The acceptance question for synthesis is not "does it emit HTML" but "does the HTML it emits
- * survive the gate the write path actually runs". So every case here goes the full distance —
- * synthesize → emit → validate — because a body that parses but fails validation is exactly the
- * defect this module exists to prevent, and only the last step can see it.
+ * The acceptance question is whether the emitted HTML survives the write path's gate, so every case runs
+ * synthesize → emit → validate: only the last step can see a body that parses and still fails.
  */
 function build( type: string, name: string, input: Parameters<typeof KcdSynth.synthesize>[ 1 ] ) {
 	const { body, undeclared } = KcdSynth.synthesize( type, input );
@@ -177,12 +169,11 @@ describe( 'KcdSynth — declared shape drives placement', () => {
 		expect( phases ).toBeLessThan( one );
 		expect( one ).toBeLessThan( state );
 
-		// …and a nested child is never reported as undeclared.
 		const { undeclared } = KcdSynth.synthesize( 'plan', { sections: { 'phase-1': 'x' } } );
 		expect( undeclared ).toEqual( [] );
 	} );
 
-	// A title written into a phase's own HTML used to sit under a bare auto `Phase N` heading.
+	// An authored heading stands in for the automatic one; a section with no heading still gets one.
 	it( 'lets a section\'s authored heading stand instead of adding a second one', () => {
 		const { html, report } = build( 'plan', 'synth-titled', {
 			sections: {
@@ -196,13 +187,11 @@ describe( 'KcdSynth — declared shape drives placement', () => {
 		const one = html.slice( html.indexOf( 'data-kcd-section="phase-1"' ), html.indexOf( 'data-kcd-section="phase-2"' ) );
 		expect( one.match( /<h[1-6]\b/g ) ).toHaveLength( 1 );
 		expect( one ).toContain( 'Phase 1 — Publish' );
-		// A section with no heading of its own still gets one.
 		const two = html.slice( html.indexOf( 'data-kcd-section="phase-2"' ) );
 		expect( two ).toMatch( /<h[1-6] data-kcd-heading>/ );
 	} );
 
-	// Found on the first live drive: phases supplied 2-then-1 were emitted 2-then-1. Numbered siblings
-	// carry their sequence in their names, and ordering is this module's job, not the caller's.
+	// Numbered siblings carry their sequence in their names, so ordering is this module's job, not the caller's.
 	it( 'orders nested children numerically, not in the order supplied', () => {
 		const { html } = build( 'plan', 'synth-child-order', {
 			sections: {
@@ -216,8 +205,7 @@ describe( 'KcdSynth — declared shape drives placement', () => {
 	} );
 
 	it( 'counts a slot-supplied section as supplied, not as missing', () => {
-		// Also found live: the advisory audited prose keys only, so a lens whose `references` arrived as
-		// ROWS was reported missing `references`.
+		// A section supplied as slot rows counts as supplied, not missing.
 		const supplied = KcdSynth.suppliedSections( {
 			sections: { personality: 'p', philosophy: 'q' },
 			slots:    [ { section: 'references', rows: [ { what: 'protocol' } ] } ],
@@ -266,8 +254,7 @@ describe( 'KcdSynth — regions and slot rows', () => {
 		expect( html ).not.toContain( '<table' );                      // never a real table
 	} );
 
-	// A habit's References rows were silently dropped: the shape did not list the section, so the content
-	// path had nowhere to place them. The fix is the list, not a bespoke pass-through.
+	// The shape lists the references section, so the content path places it; no bespoke pass-through.
 	it( 'keeps a habit\'s references rows', () => {
 		const { html, report } = build( 'habit', 'synth-habit-refs', {
 			sections: { why: 'a trigger', action: 'an act' },
@@ -308,23 +295,9 @@ describe( 'KcdSynth — regions and slot rows', () => {
 } );
 
 /**
- * THE INLINE ALLOWLIST ( BUG-74 ).
- *
- * ── THE DEFECT THESE CASES EXIST FOR ───────────────────────────────────────────────────────────────
- *
- * Inline markup used to survive by the ACCIDENT OF WHERE IT SAT. A section that happened to open with
- * `<p>` passed through verbatim and kept its `<strong>`; the identical prose without that wrapper went
- * through `escapeText` and rendered `&lt;strong&gt;` onto the page — while the tool description and the
- * authoring advisory both told the author to write exactly that. So the headline case here is not "does
- * `<strong>` work" but "do the two paths agree", and the list path is tested beside the paragraph path
- * because they were the two halves that could drift.
- *
- * ── AND ESCAPING IS STILL THE DEFAULT ──────────────────────────────────────────────────────────────
- *
- * The allowlist is the exception to escaping, not a relaxation of it, so most of what follows is the
- * REFUSAL surface: a tag outside the set, an attribute outside the set, a stray `<`, an unbalanced tag,
- * and a scheme that carries script. Each of those has to come back as text, because this is the only
- * thing standing between authored prose and arbitrary markup at the save path.
+ * THE INLINE ALLOWLIST. Escaping is the default; the four advertised tags are the only exception, and every
+ * refusal below (a tag or attribute outside the set, a stray `<`, an unbalanced tag, a script scheme) must
+ * come back as text, not as markup.
  */
 describe( 'KcdSynth — the inline allowlist', () => {
 
@@ -340,7 +313,6 @@ describe( 'KcdSynth — the inline allowlist', () => {
 		);
 	} );
 
-	// THE HEADLINE. Where the prose happens to sit decided whether its markup survived.
 	it( 'renders identically whether or not the section opens with a block tag', () => {
 		const prose   = 'Text with <strong>bold</strong> and <code>code</code> in it.';
 		const authored = KcdSynth.proseToHtml( `<p>${ prose }</p>` );
@@ -445,9 +417,7 @@ describe( 'KcdSynth — the inline allowlist', () => {
 		} );
 
 		it( 'refuses a quote smuggled in as an entity, rather than letting it break out of the value', () => {
-			// The sharpest attempt available: the value carries no raw `"`, so it parses as ONE attribute, and
-			// only decoding it reveals the second one hiding inside. Decoding is exactly what the browser would
-			// do, which is why the check runs on the decoded value.
+			// No raw quote, so it parses as one attribute until decoded; the check runs on the decoded value.
 			const html = KcdSynth.proseToHtml( 'A <a href="x.html&quot; onclick=&quot;y">link</a>.' );
 			expect( html ).not.toContain( '<a ' );
 			expect( html ).not.toContain( 'onclick="y"' );

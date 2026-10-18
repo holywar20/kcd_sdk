@@ -11,10 +11,7 @@ import { VaultUtilities } from '../VaultUtilities'
  * carries a real cost, inheritance is visible, and the rows still reconcile against the compile.
  */
 
-// PINNED TO A LIVE LENS, and it has to be one that exists on disk today. It was `render` until 2026-09-25,
-// when the package realignment renamed every superseded lens to `retire-*` and this suite failed as a block.
-// A PACKAGE lens is the stable choice now — the roster is one-per-package and a rename would be a package
-// rename — but the dependency is real: renaming this lens breaks this file, and the error says so plainly.
+// Pinned to a package lens on disk: renaming it breaks this file, and the error says so plainly.
 const PROJECT_ROOT = path.resolve( __dirname, '../../../..' )
 
 const vault = (): Vault => new Vault( PROJECT_ROOT )
@@ -33,9 +30,7 @@ describe( 'VaultUtilities.lensView — the composition of a compiled object', ()
 	} )
 
 	it( 'prices an `on` file by its real routing row, not zero', () => {
-		// THE point of the composition view. An `on` file contributes a pointer rather than a body, and that
-		// row is real text in the compiled output — so it has a cost. Pooling those weights into an aggregate
-		// manifest row would make every `on` file read as free.
+		// An `on` file's pointer row is real text, so it costs something; an aggregate row would make it read free.
 		const on = view().slots.filter( s => s.state === 'on' )
 
 		expect( on.length ).toBeGreaterThan( 0 )
@@ -54,9 +49,7 @@ describe( 'VaultUtilities.lensView — the composition of a compiled object', ()
 	} )
 
 	it( 'lists the WHOLE declared inventory — one row per policy entry, plus the lens itself', () => {
-		// No lens in this vault currently declares an `off` slot or an unfilled placeholder, so asserting such
-		// a row EXISTS would only test the corpus. What matters is that nothing gets dropped: every policy
-		// entry a lens declares reaches the chart, whatever its mode.
+		// Every policy entry a lens declares must reach the chart, whatever its mode; nothing is dropped.
 		const lens = vault().buildAgent( [ 'starmind-studio' ] ).lenses[ 0 ]
 		const own  = view().slots.filter( s => s.source === 'starmind-studio' )
 
@@ -79,8 +72,7 @@ describe( 'VaultUtilities.lensView — the composition of a compiled object', ()
 	} )
 
 	it( 'reports a mutual-exclusion slot only on a habit — and a lens brings no habits now', () => {
-		// Habits are what use slots, and habits belong to the agent ( plan agents-own-behaviour ): a lens view
-		// carries none, so nothing in it is slotted.
+		// Only habits use slots, and a lens view carries none: habits belong to the agent.
 		for ( const s of view().slots.filter( s => s.slot !== '' ) ) expect( s.kind ).toBe( 'habit' )
 		expect( view().slots.some( s => s.kind === 'habit' ) ).toBe( false )
 	} )

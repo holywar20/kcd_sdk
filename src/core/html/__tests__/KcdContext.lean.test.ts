@@ -1,12 +1,7 @@
 /**
- * KcdContext.lean — the READ projection ( `get_doc` ), which differs from the compile projection on
- * exactly one axis: air between blocks.
- *
- * What is locked here is the CONTRACT, not the prettiness: that NO tag survives ( markdown carries
- * the structure for a fraction of the tokens ), that the two whitespace exemptions hold ( a `pre`
- * and a real table keep their own ), that a slot row is never flattened into welded text, and — the
- * one with teeth — that `leanArtifact` drops `body` rather than shrinking it, because a stripped
- * body fed back to `save_doc` would gut the document it claims to edit.
+ * KcdContext.lean is the READ projection (`get_doc`). It differs from the compile projection only in air between blocks.
+ * The contract: no tag survives, `pre` and tables keep their own whitespace, and `leanArtifact` drops `body` rather
+ * than shrinking it, since a stripped body fed back to `save_doc` would gut the document.
  */
 
 import { describe, it, expect } from 'vitest';

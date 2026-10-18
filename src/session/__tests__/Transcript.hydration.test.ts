@@ -2,18 +2,10 @@ import { describe, it, expect } from 'vitest';
 import { Transcript, type TurnEntry } from '../TurnEntry';
 
 /**
- * Hydration — parsing a stored payload, and the tool-pair invariant the projection enforces.
- *
- * Two properties, both of which used to hold only by luck:
- *
- *   1. `parseEntry` is TOTAL. It returns a typed entry or an `unreadable` one, never nothing. The version
- *      it replaced returned `[]` on any failure and said nothing, so a corrupt row — or a kind written by
- *      a newer build, which is what branch-switching produces — silently shortened the conversation. The
- *      transcript is the account of what happened; a load path that drops rows makes it disagree.
- *   2. Orphaned tool entries never reach the wire. An orphaned `tool_result` is not a smaller request, it
- *      is an INVALID one, and turn atomicity does not prevent it: that protects pairs against WINDOWING,
- *      where a whole turn rides or does not, and says nothing about an entry going missing from inside a
- *      turn that rides. Hydration does exactly that whenever a payload lands unreadable.
+ * Hydration: `parseEntry` is total, returning a typed entry or an `unreadable` one, never nothing, since a
+ * load path that drops rows makes the transcript disagree with what happened. Orphaned tool entries never
+ * reach the wire: an orphaned `tool_result` is an invalid request, and turn atomicity does not prevent it,
+ * because that guards whole turns against windowing, not an entry missing from inside a riding turn.
  */
 
 const AT = 1234;
@@ -86,7 +78,7 @@ describe( 'Transcript.parseEntry — never returns nothing', () => {
 	it( 'lands unreadable on a REQUIRED field of the wrong type, and says which', () => {
 		const entry = parse( { kind: 'tool-call', name: 'read' } ) as Extract<TurnEntry, { kind: 'unreadable' }>;
 
-		// The exact case that used to reach the provider as a 400 with nothing pointing back at the row.
+		// Names the field so the row can be repaired.
 		expect( entry.kind ).toBe( 'unreadable' );
 		expect( entry.originalKind ).toBe( 'tool-call' );
 		expect( entry.reason ).toContain( 'id' );
@@ -135,8 +127,7 @@ describe( 'the unreadable contract — recorded, displayed, never ridden', () =>
 	} );
 
 	it( 'does not take the whole projection down with it', () => {
-		// The reason this kind exists rather than a skip: Assert.never THROWS, so an uninterpretable entry
-		// reaching a projection would cost the entire wire rather than one row.
+		// Assert.never throws, so an uninterpretable entry must be a kind of its own, or it costs the whole wire.
 		const t = turnOf( { at: 0, kind: 'user', text: 'hi' }, bad(), { at: 2, kind: 'assistant', text: 'bye' } );
 
 		expect( () => t.wireMessages() ).not.toThrow();
@@ -170,8 +161,7 @@ describe( 'Transcript.reconcilePairs', () => {
 	} );
 
 	it( 'reconciles per turn at the PROJECTION — an unreadable call takes its result off the wire', () => {
-		// The end-to-end case this exists for: the call hydrated unreadable, so its result would otherwise
-		// answer a tool_use that is not in the request.
+		// An unreadable call must take its result off the wire, or the result answers a tool_use the request lacks.
 		const t = turnOf(
 			{ at: 0, kind: 'user', text: 'hi' },
 			parse( { kind: 'tool-call', name: 'read' }, 412 ),
@@ -184,8 +174,7 @@ describe( 'Transcript.reconcilePairs', () => {
 	it( 'does NOT reconcile what is stored — the failed turn keeps its trailing call', () => {
 		const t = turnOf( { at: 0, kind: 'user', text: 'hi' }, call( 'a' ) );
 
-		// The trailing tool-call of a turn that died mid-loop IS the diagnosis. It must stay in the
-		// itinerary while never reaching a provider — which is why reconciliation runs at the projection.
+		// A failed turn's trailing call is the diagnosis: it stays in the itinerary but never reaches a provider.
 		expect( t.turnRows()[ 0 ].rows.map( ( r ) => r.kind ) ).toContain( 'tool-call' );
 		expect( JSON.stringify( t.wireMessages() ) ).not.toContain( 'tool_use' );
 	} );

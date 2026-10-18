@@ -2,20 +2,12 @@ import { describe, it, expect } from 'vitest';
 import { contextTrim, fitToWindow, pointResults, KEEP_TOOL_RESULT_LAPS, TRIM_AT_WINDOW_FRACTION, type TrimMessage, type TrimSource } from '../ContextTrim';
 
 /**
- * THE TRIM RULE — which tool results ride as pointers when a conversation has outgrown its model.
- *
- * The rule is pure, so these are the whole of its contract; nothing downstream can make it behave
- * differently. Four of the cases below are the ones a conversation would never think to try:
- *
- *  - NOTHING TO MEASURE AGAINST. A model that declares no window trims nothing, however large the
- *    conversation. The alternative is inventing a window, which is a confident wrong answer.
- *  - THE LAP IS THE UNIT. A lap rides or points as one. Half a lap left whole hands the model one answer and
- *    a pointer to its sibling, which buys nothing and reads as a bug in the tool loop.
- *  - MONOTONIC. What is pointed stays pointed as the conversation grows. This is the cache: the prefix ahead
- *    of the cut has to be byte-identical lap after lap, and a rule that let a result come back whole would
- *    reprice everything behind it — while looking, from the outside, like it was working.
- *  - THE NEWEST LAP SURVIVES ANY SETTING. `keepLaps: 0` is a caller asking for a model that cannot see the
- *    results of the calls it just made.
+ * The trim rule: which tool results ride as pointers once a conversation outgrows its model. Pure, so these
+ * cases are its whole contract.
+ *  - No declared window, no trim: inventing one would be a confident wrong answer.
+ *  - A lap is the unit: half a lap left whole reads as a bug in the tool loop.
+ *  - Monotonic: what is pointed stays pointed, or the cached prefix ahead of the cut reprices.
+ *  - The newest lap survives any setting; `keepLaps: 0` must still show the model its last call.
  */
 
 const WINDOW = 200_000;
@@ -51,7 +43,6 @@ describe( 'the trim rule', () => {
 	it( 'points every result but the last three laps once the conversation is over the line', () => {
 		const trim = contextTrim( conversation( 6 ), { estimated: LINE, window: WINDOW } );
 
-		// Six laps, three kept: the first three point, and the ones the model is still working from do not.
 		expect( [ ...trim.pointed ] ).toEqual( [ 'call-1', 'call-2', 'call-3' ] );
 		expect( KEEP_TOOL_RESULT_LAPS ).toBe( 3 );
 	} );
@@ -66,9 +57,8 @@ describe( 'the trim rule', () => {
 		];
 		const trim = contextTrim( messages, { estimated: LINE * 2, window: WINDOW } );
 
-		// FOUR laps, three kept, so only the opening one points. Counted per RESULT the fanned lap would be
-		// three of them — pushing the count to six, pointing two of its own three, and handing the model one
-		// answer beside a pointer to its sibling.
+		// Four laps, three kept: only the opening one points. Counted per result, the fanned lap would point two
+		// of its own three and leave one answer beside a pointer to its sibling.
 		expect( [ ...trim.pointed ] ).toEqual( [ 'first' ] );
 	} );
 
@@ -95,9 +85,8 @@ describe( 'the trim rule', () => {
 	} );
 
 	it( 'reads a provider-shaped message as readily as the neutral one', () => {
-		// The SAME rule serves both sides of the connector seam. Written as a provider would send it — string
-		// content on the result block, no import of either type — because that is the shape the wire holds
-		// and a rule that needed it mapped first would be a second place the mapping could be wrong.
+		// Written as a provider sends it, so one rule serves both sides of the connector seam.
+		// A mapping step would be a second place to go wrong.
 		const messages = [
 			{ role: 'user',      content: 'do the thing' },
 			{ role: 'assistant', content: [ { type: 'tool_use', id: 'a', name: 'read_thing', input: {} } ] },
@@ -133,8 +122,7 @@ describe( 'applying the answer', () => {
 
 		const out = pointResults( messages, stubs );
 
-		// The one message that changed is a new object; every other is the same one. The prefix ahead of a
-		// cut has to be byte-identical lap after lap, and identity is the cheapest way to see that it is.
+		// Identity, not equality: the prefix ahead of a cut must stay byte-identical lap after lap.
 		const changed = out.filter( ( m, i ) => m !== messages[ i ] );
 		expect( changed ).toHaveLength( 1 );
 		expect( changed[ 0 ]!.content ).toEqual( [ { type: 'tool_result', tool_use_id: 'call-1', content: '[pointer]' } ] );
@@ -158,7 +146,6 @@ describe( 'the whole fit', () => {
 
 		expect( fit ).toMatchObject( { estimated: LINE, line: LINE } );
 		expect( [ ...fit.pointed ] ).toEqual( [ 'call-1', 'call-2', 'call-3' ] );
-		// The three oldest laps carry a pointer; the three the model is working from carry their results.
 		const results = fit.messages.flatMap( ( m ) => typeof m.content === 'string' ? [] : m.content )
 			.filter( ( b ) => b.type === 'tool_result' );
 		expect( results.filter( ( b ) => String( ( b as { content?: string } ).content ).startsWith( '[pointer' ) ) ).toHaveLength( 3 );
@@ -179,8 +166,7 @@ describe( 'the whole fit', () => {
 
 		const fit = fitToWindow( source( LINE, false ), messages, 0, WINDOW );
 
-		// Over the line, and every message back by identity. A source with no result log cannot point
-		// anywhere, and a pointer at nowhere is worse than the result it replaced.
+		// A source with no result log cannot point anywhere, and a pointer at nowhere is worse than the result it replaced.
 		expect( fit.pointed.size ).toBe( 0 );
 		for ( const [ i, message ] of fit.messages.entries() ) expect( message ).toBe( messages[ i ] );
 	} );

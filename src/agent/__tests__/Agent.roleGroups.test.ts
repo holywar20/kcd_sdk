@@ -2,9 +2,8 @@ import { describe, it, expect } from 'vitest'
 import { Agent, type SerializedAgent } from '../Agent'
 
 /**
- * The roleGroups field on an agent record ( TASK-271 ) — ids only, the agent's own, never inherited. No
- * projection happens yet ( the next step ); this file proves only the record shape: it holds, it defaults,
- * and it round-trips through both wire forms. Mirrors Agent.skills.test.ts, which this field is modelled on.
+ * The roleGroups field on an agent record — ids only, the agent's own, never inherited. This file proves
+ * only the record shape: it holds, it defaults, and it round-trips through both wire forms.
  */
 
 describe( 'Agent.roleGroups', () => {
@@ -36,9 +35,7 @@ describe( 'Agent.roleGroups', () => {
 	} )
 
 	it( 'an id naming no role group is held harmlessly — the record does not resolve it', () => {
-		// This step makes no claim about role group definitions at all: the record is a dumb-string
-		// inventory, exactly like `baseHabits` and `skills`, and an id that resolves to nothing in the
-		// install-level set is an absence for the next card ( the projection ) to handle, not a fault here.
+		// The record stores ids without resolving them; resolving is not this record's job.
 		const agent = Agent.create( { id: 'a5', name: 'Five', roleGroups: [ 'no-such-group' ] } )
 		expect( agent.roleGroups ).toEqual( [ 'no-such-group' ] )
 		expect( Agent.fromSerialized( agent.serializeForWire() ).roleGroups ).toEqual( [ 'no-such-group' ] )

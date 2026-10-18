@@ -2,13 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { frameSig, projectSig } from '../TurnEntry';
 
 /**
- * THE `.sig` PROJECTION, and the split between it and its frame.
- *
- * `projectSig` was carved out of `frameSig` on 2026-09-22 so the agent's own read path could reach the same
- * body the context gutter already got ( `sm_file.read` ). Two things have to stay true and neither is
- * visible from one side alone: the projection answers WHY it declined, because a caller words "not JSON"
- * and "a schema I do not speak" differently and both must keep the bytes; and the gutter's framing did not
- * move while the body was lifted out from under it.
+ * The `.sig` projection and its gutter framing. Two rules: the projection answers WHY it declined, and the
+ * framing does not move when the body is lifted out from under it.
  */
 
 const graph = ( over: Record<string, unknown> = {} ): string => JSON.stringify( {
@@ -34,9 +29,7 @@ describe( 'projectSig — the lean view of an insight graph', () => {
 			+ '- (risk) Habituation\n'
 			+ '- Reach is the fourth axis --[guards against]--> Habituation'
 		);
-		// THE WHOLE POINT, asserted rather than assumed: every drawing VALUE is gone. Asserted on the values
-		// rather than the field names, because `x` / `y` / `w` / `h` are single letters that occur in
-		// ordinary English — an assertion on those names passes or fails on the prose, not on the geometry.
+		// Every drawing VALUE is gone. Asserted on values, not field names: x/y/w/h are letters that occur in English.
 		for( const drawn of [ '401', '474', '200', '96', 'ellipse', 'curved', 'square', 'layout' ] ) {
 			expect( seen.body ).not.toContain( drawn );
 		}
@@ -63,10 +56,8 @@ describe( 'projectSig — the lean view of an insight graph', () => {
 	} );
 
 	/**
-	 * THE TWO DECLINES ARE DIFFERENT FACTS and every caller words them apart, which is why the cause travels
-	 * instead of collapsing into a null. A file that is not JSON is just a file. A file that IS an insight
-	 * document of a schema we do not speak has to keep its bytes AND say so, because a projection built on
-	 * moved field names returns a confidently empty graph — a document that looks like it says nothing.
+	 * The two declines are different facts, so the cause travels. A foreign insight schema keeps its bytes and
+	 * says so, since a projection on moved field names would read as a confidently empty graph.
 	 */
 	it( 'declines a non-JSON body and a foreign schema for different stated reasons', () => {
 		expect( projectSig( 'plainly not json' ) ).toEqual( { ok: false, why: 'not-json' } );
@@ -92,8 +83,7 @@ describe( 'frameSig — the gutter framing over that body', () => {
 		expect( framed ).toContain( 'insight schema insight/2 is not insight/1' );
 		expect( framed ).toContain( foreign );                 // the bytes survive, which is the safe direction
 
-		// Not JSON at all falls back to the ORDINARY file frame — it was never an insight document, so
-		// explaining insight schemas to the model would be noise about a file that is just a file.
+		// Not JSON falls back to the ordinary file frame: it was never an insight document.
 		expect( frameSig( 'notes.sig', 'hello' ) ).toBe( '[injected file — notes.sig]\nhello' );
 	} );
 

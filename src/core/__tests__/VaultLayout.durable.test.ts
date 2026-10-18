@@ -9,21 +9,9 @@ import { VaultDeploy } from '../../node/VaultDeploy'
 const PROJECT_ROOT = path.resolve( __dirname, '../../../..' )   // kcd_sdk/src/core/__tests__ → repo root
 
 /**
- * DURABLE vs EPHEMERAL — a third exclusion axis, and the one nothing was tracking ( TASK-732 ).
- *
- * Seven analyzers ( audit-backlog, audit-dead-code, audit-defects, audit-doc-truth,
- * audit-renderer-defects, audit-renderer-perf, audit-tests ) each declare a ledger under
- * `audits/ledgers` as a durable Input/Output, loaded in Phase 1 and rewritten as each unit finishes.
- * `audits/` is `indexed: false`, and `VaultLayout.ephemeralDirs()` DERIVES ephemeral from `indexed` —
- * so the vault said "disposable" about a directory holding durable coverage state, and nothing
- * distinguished a ledger from scratch to whoever cleaned up next. `audit-doc-truth.json` went missing
- * between a 2026-09-22 run and the next one.
- *
- * THE PAIR OF CLAIMS IS THE WHOLE POINT, and these tests exist to stop them collapsing in either
- * direction. *Nothing validates links into here* and *this may be deleted at will* are independent:
- * a ledger wants the first and emphatically not the second. So the fix had to protect it from deletion
- * WITHOUT making it indexed, graded or citable — and the second half is the easier one to break while
- * believing you have fixed the first, which is why it is asserted as loudly as the protection is.
+ * DURABLE vs EPHEMERAL — a third exclusion axis. A ledger is durable state inside disposable space, and the
+ * pair of claims must not collapse: nothing may link into it, and nothing may delete it. Durability is its own
+ * flag, not `indexed`, so the ledger stays uncitable and ungraded.
  */
 describe( 'VaultLayout — a ledger is durable state inside disposable space', () => {
 
@@ -65,15 +53,7 @@ describe( 'VaultLayout — a ledger is durable state inside disposable space', (
 		expect( VaultLayout.isDurablePath( abs ) ).toBe( true )
 	} )
 
-	/**
-	 * THE LOAD-BEARING ONE.
-	 *
-	 * The cheap way to make a ledger survive a sweep would have been to flip `indexed` — and that would
-	 * trade a data-loss bug for a validation bug: a ledger would become graded as a KCD document ( it is
-	 * machine-written JSON and would fail ), and linking into it would become legal, which §1.1 forbids
-	 * because nothing can promise occupancy in there. Durability is a SEPARATE flag precisely so this
-	 * stays false.
-	 */
+	/** Flipping `indexed` would trade a deletion bug for a grading and citation bug, so durability stays a separate flag. */
 	it( 'is still ephemeral on the link axis — durable did not make it citable', () => {
 		expect( VaultLayout.isEphemeralHref( LEDGER ) ).toBe( true )
 		expect( VaultLayout.ephemeralDirs() ).toContain( 'audits' )
@@ -87,23 +67,14 @@ describe( 'VaultLayout — a ledger is durable state inside disposable space', (
 		expect( vault.isLibraryPath( 'audits/ledgers/audit-tests.json' ) ).toBe( false )
 	} )
 
-	/** Durability says nothing about identity, so the flag beside it is untouched. ( This also asserted
-	 *  `isArchivalPath( LEDGER ) === false`; that predicate is gone with the plan buckets — see
-	 *  `VaultLayout.exclusions.test.ts`. ) */
+	/** Durability says nothing about identity, so the ledger stays unclassified. */
 	it( 'is not a governed artifact', () => {
 		expect( VaultLayout.classify( LEDGER ) ).toBe( 'unknown' )
 	} )
 } )
 
 /**
- * THE THING THAT ACTUALLY FAILED, fenced. `audit-doc-truth.json` disappeared with no test under it,
- * which is why nobody knew until a run came back with no history.
- *
- * `VaultDeploy.apply` is the live deploy-and-repair path and it FILLS: `force: false`, an existing file
- * is never overwritten, and there is no `rmSync`, `unlinkSync` or `rm` anywhere in it. So this passes
- * today without any change to that file, and that is the honest statement of it — the test is a FENCE
- * against a future reset path, not the proof of a repair. It is worth its six seconds because the whole
- * failure mode here is a cleanup that nobody wrote a test for.
+ * A FENCE against a future reset path, not a proof of a repair: `VaultDeploy.apply` fills and never removes.
  */
 describe( 'VaultDeploy.apply — the live path does not remove a ledger', () => {
 
@@ -121,9 +92,7 @@ describe( 'VaultDeploy.apply — the live path does not remove a ledger', () => 
 		mkdirSync( path.join( root, DOC_ROOT, 'audits', 'ledgers' ), { recursive: true } )
 		writeFileSync( path.join( root, DOC_ROOT, LEDGER ), BODY, 'utf-8' )
 
-		// And a genuine scratch file beside it, so the case can tell "nothing was deleted" apart from
-		// "the ledger specifically was spared" — today both survive, and if a sweep ever lands only the
-		// first assertion below may change.
+		// A scratch file beside the ledger tells "nothing deleted" apart from "ledger spared".
 		writeFileSync( path.join( root, DOC_ROOT, 'audits', 'stale-backup.html' ), '<p>scratch</p>', 'utf-8' )
 
 		VaultDeploy.apply( root, { docRoot: DOC_ROOT } )
@@ -137,10 +106,7 @@ describe( 'VaultDeploy.apply — the live path does not remove a ledger', () => 
 		expect( existsSync( path.join( root, DOC_ROOT, LEDGER ) ) ).toBe( true )
 	} )
 
-	/** BYTE-IDENTICAL, not merely present. A deploy that re-created the file empty would satisfy an
-	 *  existence check and still have destroyed every row of coverage the ledger carried — which is
-	 *  exactly the shape of the 2026-09-22 loss as it was experienced: a run that came back with no
-	 *  history. */
+	/** Byte-identical, not merely present: a file re-created empty would pass an existence check and lose its rows. */
 	it( 'leaves the ledger\'s contents untouched', () => {
 		expect( readFileSync( path.join( root, DOC_ROOT, LEDGER ), 'utf-8' ) ).toBe( BODY )
 	} )

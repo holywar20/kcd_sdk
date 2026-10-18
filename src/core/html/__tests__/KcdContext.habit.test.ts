@@ -60,9 +60,7 @@ describe( 'KcdContext.projectHabit — the dense four-field directive', () => {
 		expect( out ).not.toContain( 'human-only noise' );
 	} );
 
-	// Params were a document convention with no consumer from 2026-08-17 to 2026-08-18: a habit could
-	// point at a whitelist that no projection carried, so it read as populated on disk while behaving,
-	// to the agent, as though the section were empty. These cases pin the injection that closed it.
+	// Params rows must reach the agent: a whitelist no projection carries is invisible to it.
 	it( 'params rows ride the dense form as a labelled third block', () => {
 		const out = KcdContext.projectHabit( habit( 'params-habit', WITH_PARAMS ) );
 

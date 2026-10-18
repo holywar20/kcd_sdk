@@ -3,12 +3,8 @@ import { Session } from '../Session';
 import { isGrant, type Attachment, type TurnEntry } from '../TurnEntry';
 
 /**
- * `forkFromLane()` — a child session, written as though somebody had opened it fresh.
- *
- * THE CASES THAT MATTER ARE ABOUT WHAT IT REFUSES TO CARRY. A duplicate is easy; what makes this a
- * re-authoring rather than a copy is that the parent's HISTORY OF BECOMING — the injection events, the
- * revocations, the compaction state — does not come along, while the FACTS those events established do.
- * Every case below is one half of that trade.
+ * `forkFromLane()` opens a child as though fresh: the parent's history of becoming (injections,
+ * revocations, compaction state) stays behind, while the facts those events established come along.
  */
 
 function file( name: string, removed?: boolean ): Attachment {
@@ -77,11 +73,7 @@ describe( 'what it deliberately leaves behind', () => {
 		expect( texts( src.forkFromLane( { keepTurns: 5 } ) ) ).toEqual( [ 'message 1', 'message 3' ] );
 	} );
 
-	/**
-	 * THE RE-AUTHORING, in one case. The parent learned about `kept.ts` as an EVENT on turn 1; the child
-	 * is told it as a FACT, once, with no story about when it arrived — which is what stops it learning
-	 * the same thing several times and the wrong one last.
-	 */
+	/** The child is told each grant once, as a fact with no story about when it arrived, so it cannot learn the same grant several times or the wrong one last. */
 	it( 'strips grant events from the history and states the grant once instead', () => {
 		const child = parent( 3, { 1: [ file( 'kept.ts' ) ] } ).forkFromLane();
 
@@ -95,11 +87,7 @@ describe( 'what it deliberately leaves behind', () => {
 		expect( subjects( child.pendingEntries ) ).toEqual( [ 'same.ts' ] );
 	} );
 
-	/**
-	 * NOT-PROMOTING IS THE EXECUTION — the same rule the compactor uses, applied at the other moment a
-	 * prefix gets rewritten. A revoked grant still shows and still authorizes on the PARENT until its
-	 * compaction; on a child being written fresh there is nothing for it to survive into.
-	 */
+	/** Not-promoting executes a revocation, as the compactor does: a revoked grant still authorizes on the parent, and a fresh child has nothing for it to survive into. */
 	it( 'drops a revoked grant rather than carrying the revocation', () => {
 		const child = parent( 3, { 1: [ file( 'gone.ts' ) ], 2: [ file( 'gone.ts', true ) ], 3: [ file( 'stays.ts' ) ] } ).forkFromLane();
 		expect( subjects( child.pendingEntries ) ).toEqual( [ 'stays.ts' ] );

@@ -5,8 +5,8 @@ import { KcdValidate } from '../KcdValidate';
 import { VaultLayout } from '../../VaultLayout';
 
 /**
- * The hard cut ( plan agents-own-behaviour, tasks 63 and 66 ): a Know / Care / Do lens is refused, and
- * `LensMigration.flatten` rewrites one into personality + philosophy + references with its prose untouched.
+ * The hard cut: a Know / Care / Do lens is refused, and `LensMigration.flatten` rewrites one into
+ * personality + philosophy + references with its prose untouched.
  */
 
 const validate = ( html: string ) => KcdValidate.validate( html, { docRoot: VaultLayout.DEFAULT_DOC_ROOT } );
@@ -91,12 +91,8 @@ describe( 'LensMigration.flatten', () => {
 		expect( errors ).toContain( 'region-retired' );
 		expect( errors ).toContain( 'lens-behaviour-slot' );
 		expect( errors ).toContain( 'base-retired' );
-		// `bad-lens-section`, where this asserted `lens-no-personality` until 2026-09-26. Personality stopped
-		// being a required section that day — an agent authors its own — so its absence is legal and can no
-		// longer be what refuses the old shape. The substituted code is the one that actually bites on this
-		// fixture: `purpose`, `domains`, `open-questions` and `habits` are not lens sections, and the closed
-		// section list is what makes the cut hard. NOT `lens-no-philosophy` — the old shape carries a
-		// philosophy section inside its Care region, and `checkLens` counts it, so that code never fires here.
+		// `bad-lens-section` because `purpose`, `domains`, `open-questions` and `habits` are not lens sections.
+		// Not `lens-no-philosophy`: checkLens counts the Care region's philosophy section, so that code never fires.
 		expect( errors ).toContain( 'bad-lens-section' );
 	} );
 

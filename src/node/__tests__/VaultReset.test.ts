@@ -7,16 +7,8 @@ import { VaultSnapshot } from '../VaultSnapshot';
 import { InstallManifest } from '../../core';
 
 /**
- * RESET, REMOVE, AND THE ONE COPY THAT MAKES THEM OFFERABLE.
- *
- * A repair fills gaps and is safe by construction. A reset overwrites, and a remove deletes — both
- * reach real work, so what they must NOT reach is the thing worth proving here:
- *
- *   - a reset writes over a framework file that drifted, and leaves a file the project wrote itself
- *     alone even when it sits in the same folder as the ones being overwritten;
- *   - a clear empties the vault and never touches `.git`, because a vault is very often its own
- *     repository and that repository outweighs any copy this module could make of it;
- *   - a restore is a RETURN, not a merge — a file made after the snapshot is gone afterwards.
+ * Reset overwrites only manifest files and leaves the project's own files alone. Clear never touches
+ * `.git`, the better undo. Restore is a return, not a merge: a file made after the snapshot is removed.
  */
 
 const DOC_ROOT = '_Claude';
@@ -36,9 +28,7 @@ beforeEach( () => {
 	substrate = mkdtempSync( join( tmpdir(), 'kcd-reset-sub-' ) );
 	slot      = join( mkdtempSync( join( tmpdir(), 'kcd-reset-slot-' ) ), 'snapshot' );
 
-	// A COMPLETE substrate, built from the manifest itself rather than a hand-listed few. Half a bundle
-	// would make `missing` permanently non-zero and every assertion here relative to an arbitrary floor;
-	// generating it from the table also means a row added later cannot quietly fall out of this fixture.
+	// Built from the manifest, so a row added later cannot fall out of the fixture; a partial bundle would make `missing` non-zero.
 	for ( const entry of InstallManifest.all() ) {
 		const at = join( substrate, entry.bundleSource );
 		if ( entry.bundleSource.endsWith( '.html' ) || entry.bundleSource.endsWith( '.css' ) ) {

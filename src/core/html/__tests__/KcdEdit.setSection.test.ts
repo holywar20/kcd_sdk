@@ -5,16 +5,9 @@ import { KcdEdit } from '../KcdEdit';
 /**
  * `sectionProse` / `setSection` — the read-write pair behind every prose editor in the app.
  *
- * WHY THIS SUITE EXISTS AT ALL. It did not until 2026-09-26, the day `setSection` learned to CREATE a
- * section the document does not carry. Until then it only ever rewrote the inside of a section that was
- * already there, which is a small enough act to have survived untested; creating one MOVES STRUCTURE, and
- * structure is the thing a document protocol cannot afford to get wrong quietly.
- *
  * THE LOAD-BEARING PROPERTY IS THE ROUND TRIP. `sectionProse` hands out a section's inner markup and
- * `setSection` takes it back, so read-then-write with no change must be an identity — that is what makes
- * an editor on this pair safe, and it is the first thing that would break if either side started
- * normalising. The buffer is MARKUP rather than flattened text for the same reason: a table or an anchor
- * inside a philosophy paragraph would survive being read and vanish on being written.
+ * `setSection` takes it back, so read-then-write with no change must be an identity. The buffer is markup
+ * rather than flattened text, so a table or an anchor survives being read and written back.
  */
 
 const BODY =
@@ -24,15 +17,13 @@ const BODY =
 	+ '<section data-kcd-section="philosophy"><h3 data-kcd-heading>Philosophy</h3><p>What alpha defends.</p><p>And a second line.</p></section>'
 	+ '<section data-kcd-section="references"><h3 data-kcd-heading>References</h3><div data-kcd-table></div></section>';
 
-/** The same document with no `philosophy` — the shape a lens written before that section existed has, and
- *  the case that had no repair path until creation landed. */
+/** The same document with no `philosophy` — the shape a lens written before that section existed has. */
 const NO_PHILOSOPHY =
 	'<dl data-kcd-frontmatter><dt>name</dt><dd data-kcd-field="name" data-kcd-type="slug">alpha</dd></dl>'
 	+ '<h1>alpha</h1>'
 	+ '<section data-kcd-section="personality"><h3 data-kcd-heading>Personality</h3><p>Who alpha is.</p></section>'
 	+ '<section data-kcd-section="references"><h3 data-kcd-heading>References</h3><div data-kcd-table></div></section>';
 
-/** Section names in document order — the cheapest way to assert WHERE a created section landed. */
 const order = ( html: string ): string[] =>
 	[ ...html.matchAll( /data-kcd-section="([^"]+)"/g ) ].map( m => m[ 1 ]! );
 
@@ -76,11 +67,7 @@ describe( 'KcdEdit.setSection — rewriting a section that exists', () => {
 		expect( typed ).toBe( authored );
 	} );
 
-	/**
-	 * THE ROUND TRIP IS AN IDENTITY. Read a section, write it straight back, and the document is
-	 * unchanged — the property every editor built on this pair depends on, since opening a buffer and
-	 * closing it without typing must not be an edit.
-	 */
+	/** Opening a buffer and closing it without typing must not be an edit. */
 	it( 'is a no-op when the prose read back out is written back in', () => {
 		const held = KcdEdit.sectionProse( BODY, 'philosophy' )!;
 		const next = KcdEdit.setSection( BODY, 'philosophy', held )!;
@@ -88,9 +75,7 @@ describe( 'KcdEdit.setSection — rewriting a section that exists', () => {
 		expect( KcdEdit.sectionProse( next, 'philosophy' ) ).toBe( held );
 	} );
 
-	/** BLANK IS A REFUSAL, NOT A CLEAR: an empty section trips the validator's own `empty-section` rule,
-	 *  so writing one would produce a draft that cannot be saved — a failure found at Save, far from the
-	 *  keystroke that caused it. Removing a section is a different act and does not belong on this op. */
+	/** Blank is a refusal, not a clear: an empty section trips the validator's `empty-section` rule. Removing a section is a different act. */
 	it( 'refuses a blank buffer rather than emptying the section', () => {
 		expect( KcdEdit.setSection( BODY, 'philosophy', '   ' ) ).toBeNull();
 	} );
@@ -98,8 +83,7 @@ describe( 'KcdEdit.setSection — rewriting a section that exists', () => {
 
 describe( 'KcdEdit.setSection — creating a section the document does not carry', () => {
 
-	/** The old behaviour, kept: a machine caller editing an existing section cannot start authoring new
-	 *  ones by accident, because creation costs a `title` it would have to pass on purpose. */
+	/** Creation costs a `title`, so a machine caller editing an existing section cannot start authoring new ones by accident. */
 	it( 'still refuses a missing section when no title is given', () => {
 		expect( KcdEdit.setSection( NO_PHILOSOPHY, 'philosophy', 'Some stance.' ) ).toBeNull();
 	} );
@@ -128,14 +112,11 @@ describe( 'KcdEdit.setSection — creating a section the document does not carry
 		expect( order( next ) ).toEqual( [ 'personality', 'philosophy' ] );
 	} );
 
-	/** A blank buffer is refused BEFORE anything is built, so a stray change event on an empty editor
-	 *  cannot mint an empty section — which would be a section the validator then refuses to save. */
+	/** Refused before anything is built, so a stray change event on an empty editor cannot mint an empty section. */
 	it( 'creates nothing for a blank buffer, even with a title', () => {
 		expect( KcdEdit.setSection( NO_PHILOSOPHY, 'philosophy', '  ', 'Philosophy' ) ).toBeNull();
 	} );
 
-	/** Created once, then edited like any other: the second write finds the section and rewrites it
-	 *  rather than adding a second one of the same name. */
 	it( 'does not create a second section on the next write', () => {
 		const made = KcdEdit.setSection( NO_PHILOSOPHY, 'philosophy', 'First.', 'Philosophy' )!;
 		const next = KcdEdit.setSection( made, 'philosophy', 'Second.', 'Philosophy' )!;

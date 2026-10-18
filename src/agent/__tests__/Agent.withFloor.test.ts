@@ -3,9 +3,8 @@ import { Agent } from '../Agent'
 import { LensObject } from '../../primitives/framework/LensObject'
 
 /**
- * No base floor ( plan agents-own-behaviour, "Retire _lens-base" ). An agent wears exactly the lenses it was
- * given: nothing is appended under them, and a lens that happens to be called `_lens-base` is an ordinary lens.
- * What the floor used to carry is the shipped agents' system prompt now.
+ * No base floor. An agent wears exactly the lenses it was given: nothing is appended under them, and a lens
+ * that happens to be called `_lens-base` is an ordinary lens.
  */
 
 function lens( name: string, path: string ): LensObject {

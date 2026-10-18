@@ -94,10 +94,8 @@ describe( 'containment through links', () => {
 } )
 
 /**
- * A FILE IS A ROOT. The walk used to be the only shape: `readdirSync` on a file throws ENOTDIR, the
- * throw was swallowed as an unreadable directory, and the scan came back with zero candidates — which
- * every caller above reads as "this root holds nothing searchable" and reports as a bad path.
- * `rootIsFile` is what lets them tell the two apart.
+ * A file is a root too. `readdirSync` throws ENOTDIR on a file, and a swallowed throw reads as a root holding
+ * nothing; `rootIsFile` lets callers tell the two apart.
  */
 describe( 'SdkFileAccess.grepText with a FILE as the root', () => {
 
@@ -163,9 +161,7 @@ describe( 'SdkFileAccess.grepText with a FILE as the root', () => {
 	} )
 
 	/**
-	 * WHY it was skipped, not merely that it was. The refusal above this layer used to name four possible
-	 * causes in one sentence and a 2026-10-13 triage recorded the wrong one as fact ( DEFECT-342 ). Each
-	 * cause carries a DIFFERENT fix, so each is pinned separately here rather than as one truthy check.
+	 * Each skip cause carries a different fix, so each is pinned separately rather than as one truthy check.
 	 */
 	it( 'names which cause skipped a single file, and distinguishes the ones that look alike', async () => {
 		const root = tmpDir()
@@ -180,7 +176,7 @@ describe( 'SdkFileAccess.grepText with a FILE as the root', () => {
 		writeFileSync( big, 'x'.repeat( 4096 ) )
 		expect( ( await fs.grepText( big, 'x', { maxBytes: 16 } ) ).fileSkip ).toBe( 'oversized' )
 
-		// NONTEXT — the cause behind DEFECT-342, and the one that was being read as "binary or oversized".
+		// NONTEXT: a binary file, which must not read as merely oversized.
 		const blob = join( root, 'blob.png' )
 		writeFileSync( blob, Buffer.from( [ 0x89, 0x50, 0x4e, 0x47 ] ) )
 		expect( ( await fs.grepText( blob, 'PNG' ) ).fileSkip ).toBe( 'nontext' )
@@ -201,7 +197,7 @@ describe( 'SdkFileAccess.grepText with a FILE as the root', () => {
 		expect( ( await fs.grepText( fine, 'nowhere' ) ).fileSkip ).toBeNull()
 	} )
 
-	/** DEFECT-342 — the table entry itself, at the layer that gates every door onto a file. */
+	/** The extension whitelist, at the layer that gates every door onto a file. */
 	it( 'opens a .jsonl now, and still will not open a real binary', async () => {
 		const root = tmpDir()
 		const fs   = new SdkFileAccess()
@@ -225,9 +221,8 @@ describe( 'SdkFileAccess.grepText with a FILE as the root', () => {
 } )
 
 /**
- * CONTEXT AND THE TWO CHEAP MODES. What is under test is not that the lines come back — it is that a
- * caller can always tell a hit from its neighbours, and that a mode returning no rows is still bounded
- * and still says when it stopped early.
+ * Context and the cheap modes: a caller must tell a hit from its neighbours, and a mode returning no rows
+ * must still be bounded and say when it stopped early.
  */
 describe( 'SdkFileAccess.grepText context and modes', () => {
 
@@ -349,9 +344,7 @@ describe( 'SdkFileAccess.search', () => {
 		}
 
 		const token: SearchToken = { cancelled: false }
-		// Queued BEFORE the search call — setImmediate callbacks fire in registration order, so this
-		// flips the token before the walk's OWN first yield point ( SEARCH_YIELD_EVERY entries in )
-		// checks it. Deterministic: the walk always processes exactly one batch, never more.
+		// Queued before the search: the flip lands before the walk's first yield check, so exactly one batch runs.
 		setImmediate( () => { token.cancelled = true } )
 
 		const fs  = new SdkFileAccess()
@@ -395,11 +388,7 @@ describe( 'SdkFileAccess.search', () => {
 } )
 
 // ── the ES ( voidtools Everything CLI ) fast path — see search-all-files.html Phase 5 ──────────
-// The argv builder and the CSV parser (EsCsv, tested separately in EsCsv.test.ts) are both pure —
-// no process spawn, no fs — specifically so the logic that matters most (arg shape, quoted-CSV
-// parsing) is testable without depending on a real es.exe or a live Everything instance. What's
-// left to verify HERE is the spawn/fallback wiring itself, which a real (failing) spawn attempt
-// exercises perfectly well without needing a working fake binary.
+// The argv builder and CSV parser are pure and tested in EsCsv.test.ts; what is left here is spawn and fallback wiring.
 
 describe( 'SdkFileAccess._esArgs', () => {
 	it( 'omits -path for whole-computer scope ( empty roots )', () => {
@@ -447,9 +436,8 @@ describe( 'SdkFileAccess.search — ES fast path fallback', () => {
 } )
 
 // ── the index is a MIRROR, and it lags in both directions ──────────────────────────────────────
-// _esLive is the whole staleness policy, split off the spawn so it can be judged against real files
-// with no live Everything — the same reason _esArgs and EsCsv are pure. `null` out of it means the
-// index gave no usable answer, which search() reads as fall through to the walk.
+// _esLive is the staleness policy, split off the spawn so it can be judged against real files.
+// `null` means the index gave no usable answer, and search() falls through to the walk.
 
 describe( 'SdkFileAccess._esLive', () => {
 

@@ -3,16 +3,9 @@ import { describe, expect, it } from 'vitest';
 import { Blacklist, DEFAULT_BLACKLIST, foldsCase } from '../Blacklist';
 
 /**
- * The deny-list's matching rule and its defaults.
- *
- * TWO PROPERTIES ARE THE DELIVERABLE HERE, and neither is about any one pattern. First, the defaults are
- * UNCONDITIONAL — `patterns` merges them ahead of a caller's list and offers no way to remove one, so a
- * configuration that omits an entry still refuses. Second, matching is SUBTREE-shaped and PURE: the path
- * or any ancestor, by pattern alone, never a stat, which is what lets a refusal disclose the rule without
- * disclosing whether the file exists.
- *
- * NO DISK, deliberately — every path below is a string. A test that created files would be testing
- * something this module does not do.
+ * The deny-list's matching rule and its defaults. The defaults are UNCONDITIONAL (a config can add patterns,
+ * never drop one), and matching is SUBTREE-shaped and PURE: by pattern alone, never a stat, so a refusal can
+ * name the rule without revealing whether the file exists. No disk here; every path is a string.
  */
 describe( 'Blacklist.patterns — defaults are unconditional', () => {
 
@@ -25,8 +18,8 @@ describe( 'Blacklist.patterns — defaults are unconditional', () => {
 	} );
 
 	it( 'still refuses a default-listed path when the config omits it entirely', () => {
-		// THE PROPERTY, stated as the attack it stops. A config is the one input a caller controls; if
-		// supplying one could drop a default, every protection here would be one setting away from gone.
+		// A config is the one input a caller controls. If it could drop a default,
+		// every protection here would be one setting away from gone.
 		const config = Blacklist.patterns( [ '**/something-else/**' ] );
 
 		expect( Blacklist.excludes( 'C:/proj/.env', config ) ).toBe( true );
@@ -39,6 +32,7 @@ describe( 'Blacklist.patterns — defaults are unconditional', () => {
 		expect( Blacklist.patterns( junk ) ).toEqual( [ ...DEFAULT_BLACKLIST, '**/vault/**' ] );
 	} );
 } );
+
 
 describe( 'Blacklist.excludes — subtree semantics', () => {
 
@@ -63,10 +57,8 @@ describe( 'case folding — the filesystem decides, not the pattern', () => {
 
 	const deny = Blacklist.patterns();
 
-	/** The hole as it was found: a secret whose real name on disk carries capitals. Every one of these
-	 *  was listed by glob, found by search and readable by a lane agent on Windows while this list
-	 *  said otherwise. `fold` is passed explicitly so the test pins a PLATFORM, not the host it runs
-	 *  on — a suite that only ever ran on Windows would otherwise prove nothing about either branch. */
+	/** Secrets whose real names carry capitals. `fold` is passed explicitly, so the test pins a
+	 *  platform rather than the host it runs on. */
 	const capitalised = [
 		'C:/proj/.ENV',
 		'C:/proj/.Env.local',
@@ -148,11 +140,8 @@ describe( 'the Command Deck roster — the one entry protecting an instruction',
 	} );
 
 	it( 'does NOT deny the dev-utilities folder itself, nor the scripts in it', () => {
-		// BRYAN'S SCOPE, 2026-09-30, pinned so a later reader does not mistake it for a gap in the pattern.
-		// He ruled the roster only and not the tree, keeping the dev scripts a surface an agent can help
-		// with. The consequence is deliberate and known: poisoning `git-ops.js` while leaving its card
-		// alone gets the same execution from an unchanged button. If this ever becomes the tree, this test
-		// is the one that must change, and it should change loudly.
+		// Scope ruling (Bryan): the roster only, not the dev-utilities tree.
+		// Poisoning a script still runs through an unchanged button; if the tree is ever covered, change this loudly.
 		expect( Blacklist.excludes( 'C:/starmind_root/_Claude/dev-utilities', deny ) ).toBe( false );
 		expect( Blacklist.excludes( 'C:/starmind_root/_Claude/dev-utilities/git-ops.js', deny ) ).toBe( false );
 		expect( Blacklist.excludes( 'C:/starmind_root/_Claude/dev-utilities/registry.json', deny ) ).toBe( false );
@@ -171,14 +160,59 @@ describe( 'the Command Deck roster — the one entry protecting an instruction',
 	} );
 } );
 
+describe( 'the skill manifest — the other entry protecting an instruction', () => {
+
+	const deny = Blacklist.patterns();
+
+	it( 'denies a manifest on the shelf, wherever the shelf happens to sit', () => {
+		// Anchored on the filename, not the shelf path: the same file also lives in project trees and copies.
+		expect( Blacklist.excludes( 'C:/Users/b/AppData/Roaming/Starmind/skills/some-skill/SKILL.md', deny ) ).toBe( true );
+		expect( Blacklist.excludes( '/home/b/.claude/skills/some-skill/SKILL.md', deny ) ).toBe( true );
+		expect( Blacklist.excludes( 'C:/starmind_root/odysseus/integrations/claude/skills/odysseus/SKILL.md', deny ) ).toBe( true );
+	} );
+
+	it( 'denies it case-folded on a folding host, since `skill.md` is the same file there', () => {
+		expect( Blacklist.excludes( 'C:/skills/s/skill.md', deny, true ) ).toBe( true );
+		expect( Blacklist.excludes( 'C:/skills/s/skill.md', deny, false ) ).toBe( false );
+	} );
+
+	it( 'does NOT deny the skill FOLDER, nor the prose and scripts inside it', () => {
+		// Scope is the manifest, not the folder: a skill must be able to tidy its own artifacts.
+		// Accepted residual: a `references/` file the skill body tells an agent to read is still poisonable.
+		const skill = 'C:/Users/b/AppData/Roaming/Starmind/skills/some-skill';
+		expect( Blacklist.excludes( skill, deny ) ).toBe( false );
+		expect( Blacklist.excludes( `${ skill }/references/api.md`, deny ) ).toBe( false );
+		expect( Blacklist.excludes( `${ skill }/scripts/run.js`, deny ) ).toBe( false );
+		expect( Blacklist.excludes( `${ skill }/output/draft.md`, deny ) ).toBe( false );
+	} );
+
+	it( 'does not deny a differently named markdown file beside it', () => {
+		// One filename, not every manifest-ish name. `README.md` in a skill folder is ordinary prose.
+		expect( Blacklist.excludes( 'C:/skills/some-skill/README.md', deny ) ).toBe( false );
+		expect( Blacklist.excludes( 'C:/skills/some-skill/SKILLS.md', deny ) ).toBe( false );
+	} );
+
+	it( 'still refuses when a configured blacklist omits it — the default is unconditional', () => {
+		// Same property the roster entry rests on, asserted for this entry too: a config is additive, so
+		// supplying one cannot drop this and cannot drop the eight credential patterns beside it.
+		const config = Blacklist.patterns( [ '**/something-else/**' ] );
+		expect( Blacklist.excludes( 'C:/skills/s/SKILL.md', config ) ).toBe( true );
+	} );
+
+	it( 'leaves the skill READER itself readable and writable', () => {
+		// The roster entry's ruling, applied here: what is protected is the DATA, never the mechanism. An
+		// agent maintaining `SkillFolder.ts` must be able to read and write it.
+		expect( Blacklist.excludes( 'C:/starmind_root/starmind/src/main/services/SkillFolder.ts', deny ) ).toBe( false );
+	} );
+} );
+
 describe( 'the credential patterns', () => {
 
 	const deny = Blacklist.patterns();
 
-	it( 'holds all eight, unreordered, with the roster entry added after them', () => {
-		// FENCE. These eight hold with zero config and predate the roster entry; nothing about adding one
-		// should narrow or reorder them. Pinned as a literal so a reshuffle is a failing test rather than a
-		// silent change to what a fresh install protects.
+	it( 'holds all eight, unreordered, with the two instruction entries added after them', () => {
+		// FENCE: these eight hold with zero config. Pinned as a literal so a reshuffle fails the test
+		// rather than silently changing what a fresh install protects.
 		expect( DEFAULT_BLACKLIST ).toEqual( [
 			'**/.env*',
 			'**/*.pem',
@@ -189,6 +223,7 @@ describe( 'the credential patterns', () => {
 			'**/.ssh',
 			'**/.git',
 			'**/dev-utilities/**/commands.json',
+			'**/SKILL.md',
 		] );
 	} );
 

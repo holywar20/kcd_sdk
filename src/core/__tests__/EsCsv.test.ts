@@ -21,9 +21,7 @@ describe( 'EsCsv.parse', () => {
 	} )
 
 	it( 'survives a comma embedded INSIDE a quoted field — the exact shape seen live on the dev machine', () => {
-		// Real example: C:\ProgramData\Microsoft\VisualStudio\Packages\CoreEditorFonts,version=17.7.40001.1,productarch=neutral\_package.json
-		// A naive split(',') would shred this path across several bogus columns; es.exe correctly
-		// double-quotes it as ONE field, which is exactly what this test locks in.
+		// A naive split(',') would shred this path; es.exe double-quotes it as ONE field, and this locks that in.
 		const line = '"_package.json","C:\\ProgramData\\Packages\\CoreEditorFonts,version=17.7.40001.1,productarch=neutral","A",1466,2026-06-18T21:43:00Z'
 		const out = EsCsv.parse( line )
 		expect( out ).toHaveLength( 1 )

@@ -6,16 +6,8 @@ import { Vault } from '../Vault';
 import { VaultUtilities } from '../VaultUtilities';
 
 /**
- * The denominator ( 2026-08-17 ).
- *
- * `health` reported `{ total: 0 }` for both *I examined 314 documents and found nothing* and *I
- * examined nothing* — on the one command a person runs to prove a vault is sound. That is this
- * project's dominant failure class exactly: the check never returned a WRONG answer, it returned the
- * right answer for an empty input, which is why every existing assertion passed it.
- *
- * THE POINT OF THESE CASES is that the empty-vault one asserts the report does NOT read as success.
- * Asserting absence is the weakest assertion available, so each case here pins a POSITIVE number —
- * the count that makes a clean tally meaningful.
+ * The denominator. `total: 0` reads the same for an empty vault as for a healthy one, so each case
+ * pins a positive count (`checked`) rather than asserting absence, which is the weakest assertion.
  */
 
 let root = '';
@@ -39,11 +31,7 @@ beforeAll( () => {
 	writeFileSync( join( root, '_Claude', 'references', 'patterns', 'alpha.html' ), doc( 'alpha', '<p>Fine.</p>' ) );
 	writeFileSync( join( root, '_Claude', 'references', 'patterns', 'beta.html' ),  doc( 'beta',  '<p>Also fine.</p>' ) );
 
-	// A `plans/plans_complete/retired.html` STOOD HERE and was the whole point of the fixture: archival
-	// space sat inside an indexed directory, so the walk reached it and the grader then skipped it, which
-	// is what produced a scanned/checked gap. Archival is gone with the plan buckets, so the document
-	// would now be GRADED — and it would fail, because `doc()` writes `type: reference` while the path
-	// classifies `plan`. Removed rather than re-typed: there is no exclusion left for it to demonstrate.
+	// Nothing inside an indexed directory is excluded, so this document is graded.
 	writeFileSync( join( root, '_Claude', 'work', 'scratch', 'notes.html' ), doc( 'notes', '<p>Scratch.</p>' ) );
 	writeFileSync( join( root, '_Claude', 'references', 'patterns', 'tool.js' ), '// not a document\n' );
 } );
@@ -59,15 +47,8 @@ describe( 'VaultUtilities.health — the denominator', () => {
 	} );
 
 	/**
-	 * SCANNED AND CHECKED NOW AGREE, and the two numbers are kept apart anyway.
-	 *
-	 * They diverged while `archival` existed: a retired plan sat inside an indexed directory, so the walk
-	 * reached it and the grader skipped it. Ephemeral is the only exclusion left and ephemeral space is
-	 * not walked at all ( the walker covers indexed dirs only ), so nothing the walk reaches is now
-	 * ungraded. A `.js` file is not a document and falls below `scanned` entirely.
-	 *
-	 * The pair stays in the report rather than collapsing to one number, because the gap is how a future
-	 * exclusion would make itself visible instead of silently shrinking the denominator.
+	 * Kept as two numbers on purpose: a future exclusion would show as a gap between them rather than
+	 * silently shrinking the denominator. A non-document file falls below `scanned` entirely.
 	 */
 	it( 'grades everything the walk reaches, now that no exclusion sits inside an indexed directory', () => {
 		const { summary } = VaultUtilities.health( vaultOf() );
@@ -75,12 +56,7 @@ describe( 'VaultUtilities.health — the denominator', () => {
 		expect( summary.checked ).toBe( 2 );
 	} );
 
-	/**
-	 * THE FINDING THIS SWEEP EXISTS FOR, pinned as its own case. `health` used to enumerate via
-	 * `vault.scan()`, which PARSES each file and drops whatever fails — so the malformed document was
-	 * absent from its own report and the whole-vault summary read clean. Reproduced live on
-	 * 2026-08-17: an unparseable file surfaced only in a per-path check, never in a sweep.
-	 */
+	/** A parse-based scan drops a malformed document and the sweep reads clean; the walk must reach it. */
 	it( 'reaches a malformed document that a parse-based scan would have dropped', () => {
 		const bad = join( root, '_Claude', 'references', 'patterns', 'unparseable.html' );
 		writeFileSync( bad, '<!DOCTYPE html><html><body><p>no article root</p></body></html>\n' );
@@ -93,10 +69,7 @@ describe( 'VaultUtilities.health — the denominator', () => {
 		}
 	} );
 
-	/**
-	 * THE CASE THE WHOLE FILE EXISTS FOR. An empty vault must not be indistinguishable from a clean
-	 * one. `total: 0` is identical across both; `checked: 0` is what separates them.
-	 */
+	/** `total: 0` is identical for an empty vault and a healthy one; `checked: 0` is what separates them. */
 	it( 'a vault with nothing in it reports checked:0 rather than a clean bill', () => {
 		const empty = mkdtempSync( join( tmpdir(), 'kcd-health-empty-' ) );
 		mkdirSync( join( empty, '_Claude' ), { recursive: true } );

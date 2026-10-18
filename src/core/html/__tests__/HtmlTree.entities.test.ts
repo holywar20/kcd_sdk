@@ -3,15 +3,8 @@ import { HtmlTree, type HtmlEl } from '../HtmlTree';
 import { KcdEmit } from '../KcdEmit';
 
 /**
- * The entity seam — `decode` and `escapeText`/`escapeAttr` are two halves of ONE round trip, and the
- * defect this file locks down was them disagreeing. `decode` knows a handful of entities and passes
- * every other one through as literal text; escaping used to add `&amp;` to every `&` unconditionally,
- * so `&mdash;` came back out of a parse → serialize pass as `&amp;mdash;` and rendered as literal text
- * to the reader. Every `save_doc` runs that pass ( `KcdEmit.spliceFrontmatter` ), so any edit to a
- * document corroded the entities it never touched.
- *
- * The acceptance question is therefore not "does escaping work" but "do the two halves agree" — which
- * only a round trip can answer. Hence `trip()` rather than assertions on either half alone.
+ * `decode` and `escapeText`/`escapeAttr` are one round trip. Escaping must not add a layer to entities `decode`
+ * does not own (`&mdash;` would come back as `&amp;mdash;` on every save), so the test is the round trip, not either half alone.
  */
 function trip( html: string ): string {
 	return HtmlTree.innerHtml( HtmlTree.parse( html ) );
@@ -52,18 +45,9 @@ describe( 'HtmlTree — entity round trip', () => {
 	} );
 
 	/**
-	 * KNOWN LIMITATION, pinned deliberately — the cost side of the trade above.
-	 *
-	 * `decode` is PARTIAL, and that makes it non-injective: source `&mdash;` and source `&amp;mdash;`
-	 * both decode to the same text, so NO stateless escape can restore both. The information is gone
-	 * before escaping is reached. Some direction must lose, and the chosen one is this: a DOUBLE-escaped
-	 * entity ( text that means to display `&lt;` to the reader ) loses one layer on the first save, then
-	 * holds. It is the rarer loss — it only reaches text shaped like `&word;`, in practice a `<pre>` code
-	 * sample about escaping — where the old behaviour corroded ordinary prose typography on every save.
-	 *
-	 * Closing this properly means an injective decode ( a full named-entity table ) or `<pre>` treated as
-	 * raw and spliced verbatim. Both are their own pass. Until then this test is the honest record: if it
-	 * starts failing, someone changed the trade, and that should be on purpose.
+	 * KNOWN LIMITATION, pinned on purpose. `decode` is partial, so `&mdash;` and `&amp;mdash;` decode to the same
+	 * text and no stateless escape restores both. A double-escaped entity loses one layer on the first save, then holds.
+	 * If this starts failing, the trade changed and it should be deliberate.
 	 */
 	it( 'loses one layer from a double-escaped entity — the accepted trade, stable after', () => {
 		expect( trip( '<p>&amp;amp;</p>' ) ).toBe( '<p>&amp;</p>' );
@@ -89,9 +73,7 @@ describe( 'HtmlTree — entity round trip', () => {
 } );
 
 /**
- * The defect's real blast radius: `KcdEmit.emit` is what every `save_doc` runs, and it re-parses and
- * re-serializes the whole body to splice fresh frontmatter in. Both save paths — body passthrough and
- * content synthesis — land here, so this is the assertion that matters to a reader of the corpus.
+ * Every `save_doc` runs `KcdEmit.emit`, which re-serializes the whole body, so this is the corpus-facing assertion.
  */
 describe( 'KcdEmit — entities survive a save', () => {
 
@@ -135,19 +117,8 @@ describe( 'KcdEmit — entities survive a save', () => {
 } );
 
 /**
- * RAW content ( <script> / <style> ) — the other half of the same seam, and the half that was missing.
- *
- * `parse` has a RAW branch that slices these elements' contents out VERBATIM; it is the single text path
- * that skips `decode`. `serialize` had no matching branch until 2026-08-13, so raw text went through
- * `escapeText` like ordinary prose and `a > b` became `a &gt; b` on the first save. One-time and then
- * stable — the negative lookahead protects `&gt;` on every later pass — which is worse than compounding:
- * nothing ever gets visibly worse, so nothing prompts anyone to look.
- *
- * The blast radius is not cosmetic. Protocol §10 seed payloads are MARKDOWN inside
- * `<script type="text/kcd-md">`, `>` is markdown's blockquote character, and the seed emit extracts
- * those payloads with a regex straight off disk — so an escape written here lands verbatim in a real
- * project's CLAUDE.md. Worse, the WHOLE BODY is re-serialized on every save, so corrupting the payloads
- * never required touching them: editing a neighbouring table was enough.
+ * Raw text (`<script>`, `<style>`) is the other half of the seam: `parse` slices it verbatim, so `serialize` must too.
+ * Escaping it once corrupted `a > b` on the first save; §10 seed payloads are markdown that land verbatim in a project's CLAUDE.md.
  */
 describe( 'HtmlTree — raw content round-trips verbatim', () => {
 
@@ -185,16 +156,8 @@ describe( 'HtmlTree — raw content round-trips verbatim', () => {
 } );
 
 /**
- * The breakout guard — the reason verbatim emission is safe rather than merely correct.
- *
- * Raw text has no entity escaping ( `&lt;` is not decoded there ), so content carrying its own end tag is
- * UNREPRESENTABLE, not awkward: writing `&lt;/script` would leave those literal characters in the payload
- * while making the document look repaired. Emitting it raw is worse — the element ends early on the next
- * read and everything after it re-tokenizes as markup, so what comes back is a different tree from what
- * was written. That is the shape every raw-text injection takes.
- *
- * `parse` cannot produce such a node. Only a hand-built or DOM-sourced one can, which makes it a caller
- * bug, which is exactly what should fail loudly.
+ * Raw content cannot carry its own end tag: no entity escaping exists there, and emitting it raw ends the element early.
+ * `serialize` refuses it, so a hand-built node fails loudly as a caller bug.
  */
 describe( 'HtmlTree — raw breakout is refused, not repaired', () => {
 
@@ -219,12 +182,7 @@ describe( 'HtmlTree — raw breakout is refused, not repaired', () => {
 		expect( () => HtmlTree.serialize( rawEl( 'script', 'var a = "<\\/script>"' ) ) ).not.toThrow();
 	} );
 
-	/**
-	 * Guard and lexer must agree. Anything `parse` would end the element at, `serialize` must refuse to
-	 * emit — a gap between what the writer permits and what the reader stops at is the affordance a
-	 * breakout needs. This asserts the property directly: whatever survives serialization re-parses to
-	 * one element with its payload intact, and nothing leaks out beside it.
-	 */
+	/** The writer and the reader must agree on the end tag, or a gap between them is the breakout. */
 	it( 'nothing that survives serialize can terminate its own element on a re-parse', () => {
 		const payload = 'plain content with < and > and & but no end tag';
 		const html    = HtmlTree.serialize( rawEl( 'script', payload ) );

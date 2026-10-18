@@ -53,9 +53,48 @@ export interface ServerManifest {
 	id:           string;                 // slug; matches the server's folder name
 	name:         string;                 // display name
 	version:      string;                 // semver
-	entryPoint:   string;                 // relative to the folder, e.g. "dist/index.js"
-	transport:    'stdio';                // SSE/HTTP reserved for the future
-	credentials:  string[];               // vault key names injected as env
+	/**
+	 * Relative to the folder, e.g. "dist/index.js". OPTIONAL SINCE 2026-10-17 ( TASK-504 ), and the option is
+	 * the whole point: an `http` server is HOSTED, so it has no entry point, nothing is spawned and there is no
+	 * file whose absence could mean "not built". Required on a `stdio` manifest and FORBIDDEN on an `http` one —
+	 * `MCPService._manifestShapeFaults` enforces both directions, because a downloaded manifest is untrusted
+	 * text on disk rather than a value the compiler already checked.
+	 */
+	entryPoint?:  string;
+	/**
+	 * HOW THIS SERVER IS REACHED. `stdio` spawns a child and speaks NDJSON-RPC down its pipes; `http` dials a
+	 * URL and speaks JSON-RPC over streamable HTTP. One protocol, two transports — see `HttpConnector`, which
+	 * is a sibling of `StdioConnector` and not a second way of speaking MCP.
+	 */
+	transport:    'stdio' | 'http';
+	/**
+	 * For `transport: 'http'` — the endpoint to dial, and the one field that replaces `entryPoint`. Required on
+	 * an `http` manifest and meaningless on a `stdio` one.
+	 */
+	url?:         string;
+	/**
+	 * For `transport: 'http'` — the headers to send, with `${VAR}` references resolved against the SAME
+	 * three-layer resolution a stdio child's environment is built from ( `MCPService.resolveServerEnv` ). So a
+	 * secret is named here and never written here: `{ "Authorization": "Basic ${ATLASSIAN_MCP_BASIC}" }` with
+	 * the key listed in `credentials`, exactly the convention `CapabilityRouter.specs()` already uses outbound.
+	 * A LITERAL SECRET WRITTEN HERE WOULD BE PLAINTEXT ON DISK — the manifest ships inside the plugin folder.
+	 */
+	headers?:     Record<string, string>;
+	/**
+	 * HOW A CREDENTIAL IS ENCODED ON ITS WAY INTO A HEADER, declared per vault key — `{ "ATLASSIAN_MCP_BASIC":
+	 * "basic" }`. Absent means the value is substituted verbatim, which is the common case.
+	 *
+	 * `basic` is RFC 7617: the value is `user:pass` in the vault, and the base64 of it reaches the header. So a
+	 * person stores `email@example.com:api_token` — a thing they can read back and check — rather than a base64
+	 * blob nobody can tell apart from a bare token with the user half missing.
+	 *
+	 * DECLARED, NEVER INFERRED ( Bryan, 2026-10-17 ). Nothing sniffs whether a stored value already looks
+	 * base64-encoded: a guess that is right nine times in ten is the worst available behaviour for an auth
+	 * header, because the tenth failure is a 401 that looks exactly like an empty vault. The manifest states
+	 * what the value IS; `MCPService._encodeCredential` applies it and refuses a value the encoding cannot use.
+	 */
+	encode?:      Record<string, 'basic'>;
+	credentials:  string[];               // vault key names injected as env, and substituted into `headers`
 	env?:         Record<string, string>;
 	doc?:         string;                 // the server's own doc-block: its account of itself, parent of its tools' docs
 	config?:      ServerConfigSurface;    // self-declared config surface the app's config screen renders (see below)

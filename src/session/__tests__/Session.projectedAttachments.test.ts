@@ -3,21 +3,10 @@ import { Session } from '../Session';
 import { Transcript, type Attachment } from '../TurnEntry';
 
 /**
- * `projectedAttachments()` — what RIDES, as distinct from what is attached.
- *
- * The pair it belongs to is deliberately asymmetric and the asymmetry is the whole point:
- * `attachments()` answers "what is attached" for the gutter and includes everything, while this answers
- * "what rides" and obeys the window. A caller that reached for the wrong one either shows a file that
- * cannot be turned back on, or pays twice for history a compaction already summarised.
- *
- * It exists for the NON-REPLAYING tier. Every other caller gets attachments inside `wireMessages()`,
- * which projects the whole window; the harness tier is exempt from replaying that window and so asks for
- * this one part of it by name.
- *
- * The regression under it is real and shipped: the harness tier first rode only NEWLY-attached files, so
- * an attachment reached the model exactly once and nothing could reach it afterwards — no pointer, no
- * handle, no way for the agent to find the file again. The case that catches it is "a file attached on
- * turn one still rides on turn two", which nothing covered.
+ * `projectedAttachments()` is what RIDES, as distinct from `attachments()`, which is what is attached and
+ * includes everything. A caller reaching for the wrong one shows a file that cannot be turned back on, or
+ * pays twice for history a compaction already summarised. It serves the non-replaying harness tier, which
+ * asks for the window's attachments by name. A file attached on turn one must still ride on turn two.
  */
 
 function fileEntry( name: string, removed?: boolean ): Attachment {
@@ -35,10 +24,7 @@ function sessionWith( ...attachments: Attachment[] ): Session {
 	return session;
 }
 
-/** What the harness tier actually sends — the same TWO-turn throwaway projection it composes with. The
- *  split matters: everything already attached goes on a prior turn ( pointers ), and only what is being
- *  injected right now goes on the live one ( bodies ). Flattening both onto one turn would make every
- *  past attachment claim to be an injection, which is the bug this shape exists to avoid. */
+/** The harness's two-turn projection: prior attachments ride a past turn as pointers, and only what is injected now rides the live one. Flattening both would make every past attachment look like an injection. */
 function projectedText( session: Session ): string {
 	const only = new Transcript();
 	const past = only.openTurn( 'attached', 0 );
@@ -54,8 +40,7 @@ describe( 'Session.projectedAttachments', () => {
 		const later = session.transcript.openTurn( 'turn-2', 2 );
 		session.transcript.append( { at: 2, kind: 'user', text: 'follow-up' }, later );
 
-		// THE regression. Riding only what was newly attached made this empty, so a file the user attached
-		// three turns ago became unreachable — the agent was never told it existed.
+		// Riding only newly attached files would empty this, leaving an earlier attachment unreachable.
 		expect( session.projectedAttachments().map( ( a ) => a.name ) ).toEqual( [ 'a.ts' ] );
 	} );
 
@@ -63,9 +48,7 @@ describe( 'Session.projectedAttachments', () => {
 		const session = sessionWith( fileEntry( 'a.ts' ) );
 		session.pendingEntries.push( fileEntry( 'b.ts' ) );
 
-		// Pending lives outside the transcript until a turn drains it. The harness drains BEFORE projecting,
-		// so this asserts the pre-drain state is not silently counted twice — `projectedAttachments` reads
-		// the transcript only.
+		// Pending sits outside the transcript until a turn drains it; pre-drain state must not be counted twice.
 		expect( session.projectedAttachments().map( ( a ) => a.name ) ).toEqual( [ 'a.ts' ] );
 		expect( session.attachments().map( ( a ) => a.name ) ).toEqual( [ 'a.ts', 'b.ts' ] );
 	} );
@@ -73,16 +56,12 @@ describe( 'Session.projectedAttachments', () => {
 	it( 'returns REMOVED entries, which are still riding', () => {
 		const session = sessionWith( fileEntry( 'a.ts', true ) );
 
-		// Filtering here would be a second copy of a rule that lives at compaction. A removal is an intent
-		// until the pass that executes it, and until then the file rides exactly as it rode before — so this
-		// tier must keep carrying it, or the two tiers disagree about what the model can see.
+		// Removal is an intent until the compaction that executes it; filtering here would copy that rule and split the tiers.
 		expect( session.projectedAttachments() ).toHaveLength( 1 );
 		expect( projectedText( session ) ).toContain( 'a.ts' );
 	} );
 
-	// Re-pointed from the retention window to a FAILED turn ( 2026-09-16 ): the turn window was removed,
-	// and a failed turn is now the only thing that drops a turn out of `windowed()`. The property under
-	// test is unchanged — a file on a turn that does not ride is still attached.
+	// A failed turn is the only thing that drops a turn out of `windowed()`; a file on it stays attached.
 	it( 'drops a file whose turn does not ride, because that turn FAILED', () => {
 		const session = sessionWith( fileEntry( 'a.ts' ), fileEntry( 'b.ts' ) );
 		session.transcript.failTurn( 'turn-1' );
@@ -108,11 +87,9 @@ describe( 'Session.projectedAttachments', () => {
 		} ] );
 		session.transcript.compactThrough( 'turn-1' );
 
-		// The summary stands in for that turn now. Re-sending its file would pay for the same history
-		// twice — the exact double-count the single-home attachment model exists to make impossible.
+		// The summary stands in for that turn; re-sending its file would pay for the same history twice.
 		expect( session.projectedAttachments().map( ( a ) => a.name ) ).toEqual( [ 'b.ts' ] );
-		// And here the two lists AGREE, unlike the failed-turn case above: a compacted turn is one-way, so its
-		// chip leaves the gutter too rather than advertising context the model no longer has.
+		// Unlike the failed-turn case, a compacted turn is one-way, so its chip leaves the gutter too.
 		expect( session.attachments().map( ( a ) => a.name ) ).toEqual( [ 'b.ts' ] );
 	} );
 
@@ -120,8 +97,7 @@ describe( 'Session.projectedAttachments', () => {
 		const session = sessionWith( fileEntry( 'a.ts' ), fileEntry( 'b.ts', true ) );
 		const wire = JSON.stringify( session.wireMessages() );
 
-		// The two tiers must not disagree about which files ride — including the removed one, whose intent
-		// neither tier acts on. This is what keeps ONE definition of an attachment across the whole app.
+		// The two tiers must agree on which files ride, including a removed one whose intent neither acts on.
 		expect( session.projectedAttachments().some( ( a ) => a.name === 'a.ts' ) ).toBe( true );
 		expect( wire ).toContain( 'C:/repo/a.ts' );
 		expect( wire ).toContain( 'C:/repo/b.ts' );

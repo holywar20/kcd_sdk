@@ -3,7 +3,7 @@ import { describe, expect, it } from 'vitest';
 import { KcdEdit } from '../KcdEdit';
 import { KcdContext } from '../KcdContext';
 
-/** A habit's default why-text, rewritten in its document ( plan agents-own-behaviour, task 61 ). */
+/** A habit's default why-text, rewritten in its document. */
 
 const BODY = '<dl data-kcd-frontmatter><dt>name</dt><dd data-kcd-field="name" data-kcd-type="slug">kept</dd></dl>'
 	+ '<h1>kept</h1>'

@@ -6,24 +6,9 @@ import { Vault } from '../Vault';
 import { VaultUtilities } from '../VaultUtilities';
 
 /**
- * WHO THE PARSE-FAULT ADVISORY IS ALLOWED TO NAME ( DEFECT-173 ).
- *
- * `query` rides a fault list on every call, and that list is a tax on every documentation call in the
- * project. It exists for one genuinely hard failure — a document that IS on disk and that no query
- * returns, because it failed to parse and absence looks identical to "no such document". That case is
- * worth every token it costs.
- *
- * What it must never do is cry wolf. The research corpus under `research/` is plain HTML by design,
- * carries no `data-kcd-*` root, and is never meant to parse as an artifact; naming all of it on every
- * call is advice nobody can act on, and an advisory a reader learns to skip is one that will not be
- * read on the day it is telling the truth. The gate is the EPHEMERAL rule — `indexed: false` space —
- * which `research` is declared into.
- *
- * THE OPPOSITE ERROR IS WORSE, and the last two cases here are what stand against it. Silencing the
- * advisory for "anything in no `VaultLayout` row" would convert a loud *your document is broken* into
- * a silent *your document is not checked* for any folder somebody forgot to register — absence wearing
- * failure's clothes, the confusion this codebase rules against everywhere else. An unregistered folder
- * stays noisy on purpose.
+ * The parse-fault advisory names a document that fails to parse, but never one in declared unindexed space:
+ * the research corpus is plain HTML by design. The exclusion is declared by path, never inferred from a
+ * missing row, so a folder nobody registered stays noisy on purpose.
  */
 
 let root = '';
@@ -40,9 +25,8 @@ const doc = ( name: string ) =>
 	+ `<dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>`
 	+ `</dl>\n<h1>${ name }</h1>\n<p>Fine.</p>\n</article>\n</body></html>\n`;
 
-/** Plain HTML with no `data-kcd` root — what a research report deliberately is, and what a broken
- *  library document accidentally is. The scan cannot tell them apart, which is exactly why the
- *  advisory has to be scoped by PATH rather than by content. */
+/** Plain HTML with no `data-kcd` root: what a research report is by design, and what a broken document
+ *  accidentally is. The scan cannot tell them apart, so the advisory is scoped by PATH. */
 const plain = ( title: string ) =>
 	`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${ title }</title></head><body>\n`
 	+ `<h1>${ title }</h1>\n<p>Human reading. Not an artifact.</p>\n</body></html>\n`;
@@ -51,11 +35,7 @@ const BROKEN  = 'references/patterns/broken.html';
 const REPORT  = 'research/academic/some-report.html';
 const ORPHAN  = 'unregistered-folder/orphan.html';
 
-/** The constants above are forward-slash by convention — they double as the fixture WRITER via
- *  `.split( '/' )`. A value read back out of a sweep is whatever its producer spells it as, so it is
- *  normalized HERE, at the assertion, the way `Vault.documentPaths.test.ts` beside this file does.
- *  The fact under test is always WHICH document, never the separator; comparing a forward-slash literal
- *  to a native-separator value is a Windows-only failure that says nothing about grading. */
+/** Fixture paths are forward-slash; values read back from a sweep are normalized here, so the assertion checks WHICH document, not the separator. */
 const fwd = ( p: string ) => p.replace( /\\/g, '/' );
 
 beforeAll( () => {
@@ -94,16 +74,13 @@ describe( 'VaultUtilities.query — the parse-fault advisory', () => {
 		expect( unreadable ).toContain( BROKEN );
 	} );
 
-	/** THE TRAP. `unknown ⇒ ungraded` as a general rule would silence any folder nobody added to
-	 *  `VaultLayout` — including a folder of real artifacts somebody forgot to register. The
-	 *  exclusion is DECLARED, never inferred from the absence of a declaration. */
+	/** `unknown ⇒ ungraded` would silence any folder nobody registered. The exclusion is DECLARED, never inferred from a missing row. */
 	it( 'still names a fault in a folder nobody registered — absence of a row is not permission', () => {
 		const { unreadable } = VaultUtilities.query( vaultOf() );
 		expect( unreadable ).toContain( ORPHAN );
 	} );
 
-	/** NAMING the corpus is a caller asking about that space, and a silent drop there would be the
-	 *  original bug wearing different clothes. */
+	/** Naming the corpus is a caller asking about that space; silence there would hide the file. */
 	it( 'reports the corpus when the glob names it', () => {
 		const { unreadable } = VaultUtilities.query( vaultOf(), { glob: 'research/**' } );
 		expect( unreadable ).toContain( REPORT );
@@ -117,10 +94,8 @@ describe( 'VaultUtilities.query — the parse-fault advisory', () => {
 } )
 
 /**
- * THE COUNT THAT MUST NOT MOVE. Grading is `documentPaths()` — indexed directories plus root files —
- * filtered through `isLibraryPath`. Quieting the advisory may not quieten the sweep, so this pins the
- * graded set independently: a widened exclusion that bought silence by dropping a real document out of
- * validation fails here rather than passing unnoticed.
+ * Quieting the advisory must not quieten the sweep: grading is `documentPaths()` filtered through
+ * `isLibraryPath`, and a widened exclusion that drops a document out of validation fails here.
  */
 describe( 'what a whole-vault sweep grades — unchanged by the advisory rule', () => {
 

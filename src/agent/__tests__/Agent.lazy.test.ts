@@ -9,23 +9,15 @@ import { loadLensFromDisk } from '../../node/io'
 import type { ReaderFn } from '../../primitives/types'
 
 /**
- * A lens that reads on access must compile EXACTLY as a lens loaded whole, once nothing is pending.
- *
- * The renderer's agent compiles itself, but it cannot read disk: its reader fetches, answers "not yet" for what
- * has not arrived, and fills in over a round or two. Main's agent reads disk and is complete at once. The two
- * are one compiler over one vault, so any difference in the text they produce is the renderer's preview lying
- * about what the model will receive.
- *
- * Run against the REAL vault rather than a fixture: the habits with their classes, the load and on slots, the
- * sentinel whys and the contracts are exactly what a hand-built fixture would simplify away. Both agents read
- * the same files in the same run, so the comparison holds whatever the vault says today.
+ * A lens that reads on access must compile EXACTLY as a lens loaded whole, once nothing is pending: the
+ * renderer's agent cannot read disk and fills in over rounds, so any difference is the preview lying about
+ * what the model will receive. Runs against the REAL vault, not a fixture, because a fixture simplifies away
+ * exactly what this compares.
  */
 
 const ROOT  = resolve( __dirname, '../../../..' )
-// TWO LIVE LENSES. `STACKED` was `render` until 2026-09-25, when the package realignment renamed every
-// superseded lens to `retire-*` — and this suite did not fail, it SKIPPED, which is how it would have gone
-// quiet indefinitely. If that matters more than the convenience of skipping, turn `skipIf` below into a
-// hard failure; the guard is kept only because a consumer may vendor this SDK without the vault beside it.
+// Two live lenses. A retired name makes this suite SKIP rather than fail, so a rename goes quiet.
+// The guard exists only because a consumer may vendor this SDK without the vault beside it.
 const HOUSE   = join( ROOT, '_Claude', 'lenses', 'house', 'house.html' )
 const STACKED = join( ROOT, '_Claude', 'lenses', 'starmind-studio', 'starmind-studio.html' )
 const VAULT   = existsSync( STACKED ) && existsSync( HOUSE )

@@ -9,10 +9,8 @@ import type { VaultToolNames } from '../VaultTools'
 import type { ToolResult } from '../../server/McpServer'
 
 /**
- * NavIndex — a folder nav-index is derived from the documents under it on every write. What is pinned is
- * what made the hand-kept version rot: a document born with no row, a description changed under a row
- * that did not follow, and a second copy of both. Plus the three bounds that keep it affordable in a
- * vault nobody tidies — scope, head reads, the cap — and the things it must never touch.
+ * NavIndex: a folder nav-index is derived from the documents under it on every write, so a row cannot outlive its
+ * document or drift from its description. The bounds (scope, head reads, cap) keep it affordable in a vault nobody tidies.
  */
 
 const NAMES: VaultToolNames = {
@@ -34,7 +32,7 @@ const doc = ( name: string, opts: { h1?: string; description?: string; status?: 
 	+ ( opts.author ? `<dt>author</dt><dd data-kcd-field="author" data-kcd-type="text">${ opts.author }</dd>` : '' )
 	+ `</dl>\n<h1>${ opts.h1 ?? name }</h1>\n<p>Body.</p>\n</article>\n</body></html>\n`
 
-/** A hand-kept index, as the vault had them: rows that are wrong, and a description worth keeping. */
+/** A hand-kept index: a stale row and a description worth keeping. */
 const handIndex = ( name: string, description: string ) =>
 	`<!DOCTYPE html><html><head><meta charset="utf-8"><title>${ name }</title></head><body>\n`
 	+ `<article data-kcd="nav-index">\n<dl data-kcd-frontmatter>`
@@ -101,7 +99,7 @@ describe( 'NavIndex — a row is what the document says about itself', () => {
 		nav().rebuild( 'references/nav-index.html' )
 		const html = read( 'references/nav-index.html' )
 		expect( html ).toContain( 'The project store of truth.' )
-		// the author's address is TEXT once parsed — a tag-stripper deleted it, and the validator refused the index
+		// The author's address is text once parsed; stripping it as a tag would make the validator refuse the index.
 		expect( html ).toContain( 'Ada L. &lt;ada@example.com&gt;' )
 	} )
 
@@ -149,18 +147,7 @@ describe( 'NavIndex — a row is what the document says about itself', () => {
 	} )
 } )
 
-/**
- * THE DRAFTS SECTION IS GONE, and this block is what pinned it. A layout row could declare where its documents
- * were DRAFTED — a glob under ephemeral space — and the index for that directory grew a Drafts section listing
- * them as addresses, refreshed by a write anywhere under the glob.
- *
- * `plans` was the only row that ever declared one, and a plan is a database record now: it is authored on the
- * planning surface and a KCD document is only ever what a plan is EXPORTED to, so no document has a draft stage
- * to be in. Three assertions were deleted rather than rewritten because there is no second row to re-point them
- * at — the behaviour has no remaining case, not merely no remaining example.
- *
- * What replaces the second of them is the rule below: ephemeral space now reaches NO index, with no exception.
- */
+/** Ephemeral space reaches no index. A plan is a database record now, so no document has a draft stage to index. */
 describe( 'NavIndex — ephemeral space reaches no index at all', () => {
 
 	beforeEach( () => {

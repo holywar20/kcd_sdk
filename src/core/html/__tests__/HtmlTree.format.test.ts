@@ -2,17 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { HtmlTree } from '../HtmlTree';
 
 /**
- * The pretty-printer seam ( 2026-08-17 ).
- *
- * `serialize` emitted no newlines at all, and `parse` collapses every whitespace-only run to a single
- * space — so every document written through `save_doc` came out as ONE PHYSICAL LINE. `KcdSynth` built
- * indented markup and `KcdEmit.spliceFrontmatter` re-parsed it through `HtmlTree` in the same call and
- * threw the formatting away: two halves of one pipeline undoing each other.
- *
- * The danger in fixing it is the opposite defect. Whitespace between BLOCK elements renders to nothing
- * and is free to use for structure; whitespace between INLINE elements is rendered content, and
- * injecting a newline there splits or welds words. These cases exist to pin that line, because a weld
- * is invisible in a diff and obvious only to a reader.
+ * The pretty-printer seam. Whitespace between block elements renders to nothing and is free for structure;
+ * whitespace between inline elements is rendered content, and a newline there splits or welds words.
  */
 
 const round = ( html: string ) => HtmlTree.innerHtml( HtmlTree.parse( html ) );
@@ -36,11 +27,7 @@ describe( 'HtmlTree.serialize — block structure', () => {
 
 describe( 'HtmlTree.serialize — inline runs are never reformatted', () => {
 
-	/**
-	 * THE WELD. `</strong> <code>` carries a significant space; drop or newline it and the rendered text
-	 * reads "canonical:_Claude". `parse` already preserves that space as a single-space text node — this
-	 * asserts `serialize` does not then destroy it.
-	 */
+	/** The space between `</strong>` and `<code>` is significant; losing it reads "canonical:_Claude". */
 	it( 'preserves the significant space between two inline elements', () => {
 		const out = round( '<p><strong>canonical:</strong> <code>_Claude</code></p>' );
 		expect( out ).toBe( '<p><strong>canonical:</strong> <code>_Claude</code></p>' );
@@ -81,11 +68,7 @@ describe( 'HtmlTree.serialize — whitespace-significant and raw content', () =>
 
 describe( 'HtmlTree.serialize — stability', () => {
 
-	/**
-	 * IDEMPOTENCE IS THE LOAD-BEARING PROPERTY. Every `save_doc` re-parses and re-serializes the whole
-	 * body, so a printer that is not a fixed point would churn the file on every write — a diff on every
-	 * save that touched nothing, which is worse than the flattening it replaced.
-	 */
+	/** Idempotence is load-bearing: every save re-serializes the whole body, so a non-fixed-point printer churns every file. */
 	it( 'is a fixed point — a second pass changes nothing', () => {
 		const src = '<section data-kcd-section="x"><h2>T</h2><p>Body with <code>code</code> in it.</p>'
 			+ '<ul><li>one</li><li>two</li></ul></section>';
@@ -94,21 +77,7 @@ describe( 'HtmlTree.serialize — stability', () => {
 		expect( twice ).toBe( once );
 	} );
 
-	/**
-	 * Content survives; SPACING BETWEEN BLOCKS may change, and that is the improvement rather than the
-	 * regression. `textOf` concatenates a subtree with no separator, so on a flattened
-	 * `<h2>T</h2><p>alpha…` it returned `Talpha` — two blocks welded into one word. Pretty-printing
-	 * puts a newline there, so the same read gives `T alpha`.
-	 *
-	 * Asserting exact string equality across the round trip would therefore pin the WELD as correct.
-	 * The real invariant is that no content is lost and word order holds — checked here — while the
-	 * inline-spacing cases above pin the half where exact spacing genuinely matters.
-	 *
-	 * Nothing in the compile path was affected either way: `KcdContext.block()` dispatches per element
-	 * and only ever calls `inline()` on a leaf block, never on a multi-block container. Verified before
-	 * this comment was written, because the tempting claim — "the flattening was corrupting compiled
-	 * context" — is false.
-	 */
+	/** Only content and word order are asserted: block spacing may change, and the old `textOf` weld must not be pinned as correct. */
 	// Asserted against the CORRECT reading, not against the source — the source carries the weld
 	// ( `Talpha` ), so comparing the two would pin the defect as the expected result.
 	it( 'preserves every word and their order across a round trip', () => {

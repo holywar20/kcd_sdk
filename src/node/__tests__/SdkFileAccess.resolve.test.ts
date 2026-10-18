@@ -6,15 +6,9 @@ import type { AccessEntry } from '../../core/AccessPolicy'
 import type { GrantRef } from '../../session/InjectedItem'
 
 /**
- * The RESOLVER — one question, asked by every guard in three processes.
- *
- * Split from the main SdkFileAccess suite because that one touches real disk by contract and this one does
- * not: over paths that do not exist, resolution is path math over configuration. Links are the one thing it
- * reads the disk for, and those cases live in the main suite, beside the disk they need.
- *
- * Paths hang off `tmpdir()` so they are absolute on both platforms without ever being created. A literal
- * will not do: `join( 'C:', 'x' )` is drive-RELATIVE, and a POSIX literal resolves against the current
- * drive on Windows — either way the comparison would not be the one the test reads like.
+ * The resolver: one question, asked by every guard. Path math over configuration, so no disk is touched;
+ * links, which do read disk, are tested in the main suite. Paths hang off `tmpdir()` because a drive-relative
+ * or POSIX literal would resolve against the current drive on Windows.
  */
 
 const BASE   = join( tmpdir(), 'starmind-resolve' )
@@ -72,9 +66,8 @@ describe( 'FLOOR PLUS — overlapping entries take the highest, never the neares
 	} )
 
 	it( 'a shallower nested entry does NOT carve a pocket — most-specific was rejected outright', () => {
-		// This is the rule in one assertion. Under most-specific-wins the answer here would be `read`; the
-		// model is deliberately less expressive so that a person looking at two rows can predict the answer
-		// without tracing anything.
+		// Most-specific-wins would answer `read` here; the model is deliberately less expressive, so two rows
+		// predict the answer without tracing.
 		const entries = [ at( ROOT, 'delete' ), at( join( ROOT, 'src' ), 'read' ) ]
 		expect( SdkFileAccess.resolveLevel( INSIDE, entries ).level ).toBe( 'delete' )
 	} )
@@ -96,12 +89,8 @@ describe( 'FLOOR PLUS — overlapping entries take the highest, never the neares
 } )
 
 /**
- * THE ORIGIN MARKER IS INVISIBLE HERE, and that is the assertion.
- *
- * An entry says who put it there — Starmind shipped it, or a person authored it — so a surface can explain
- * what dropping a row costs. It is a LABEL with two READING consumers and no say in any verdict. A marker
- * that tipped a resolution would be most-specific-wins smuggled back into the one model whose whole value is
- * that highest-wins is predictable, and it would arrive looking like a formatting field.
+ * The origin marker is a label with no say in any verdict. One that tipped a resolution would bring
+ * most-specific-wins back in through the side door.
  */
 describe( 'origin never enters resolution', () => {
 
@@ -117,8 +106,7 @@ describe( 'origin never enters resolution', () => {
 	} )
 
 	it( 'gives two OVERLAPPING entries the same verdict whichever one is shipped', () => {
-		// The case a clever reader would reach for: "surely a person's row should beat one we shipped". It
-		// does not. The deeper level wins, from either side, exactly as it does with no markers present.
+		// A person's row does not beat a shipped one: the deeper level wins from either side, as with no markers.
 		const deep = join( ROOT, 'src' )
 		expect( SdkFileAccess.resolveLevel( INSIDE, [ marked( ROOT, 'delete', 'shipped' ), marked( deep, 'read', 'authored' ) ] ).level ).toBe( 'delete' )
 		expect( SdkFileAccess.resolveLevel( INSIDE, [ marked( ROOT, 'delete', 'authored' ), marked( deep, 'read', 'shipped' ) ] ).level ).toBe( 'delete' )
@@ -161,8 +149,7 @@ describe( 'grants', () => {
 	} )
 
 	it( 'a TOOL grant says nothing about a path, whatever its subject resolves to', () => {
-		// Skipped by kind rather than left to its level. A qualified tool id is a string, and `jail` would
-		// resolve it as a relative directory name — improbable is not a containment argument.
+		// Skipped by kind: a qualified tool id is a string, and `jail` would read it as a relative directory.
 		const tool: GrantRef = { kind: 'tool', subject: 'starmind_file.read', level: 'delete' }
 		expect( SdkFileAccess.resolveLevel( FILE, [], [ tool ] ).level ).toBe( 'none' )
 		expect( SdkFileAccess.scope( [], [ tool ], 'read' ) ).toEqual( [] )
@@ -188,8 +175,7 @@ describe( 'granted — the explicit hand-over, reported apart from the verdict',
 	} )
 
 	it( 'reports it EVEN WHEN configuration already covered the path deeper', () => {
-		// The whole reason this field exists apart from `via`. Keyed off `via`, the same drop would relax the
-		// write surface on a file outside the project and not on one inside it — invisibly, at the gesture.
+		// Keyed off `via`, the same drop would relax writes inside the project and not outside it, invisibly.
 		const verdict = SdkFileAccess.resolveLevel( INSIDE, [ at( ROOT, 'delete' ) ], [ fileGrant( INSIDE, 'write' ) ] )
 		expect( verdict.level ).toBe( 'delete' )
 		expect( verdict.via ).toBe( 'config' )
@@ -241,8 +227,7 @@ describe( 'scope — the witness, filtered by the level the caller needs', () =>
 	} )
 
 	it( 'drops read-only roots when the caller needs to WRITE', () => {
-		// A refusal for a write that pointed at read-only roots is the same fiction one rung down: the agent
-		// retries there and is refused again, having been told where to go.
+		// Pointing a write at read-only roots is the same fiction one rung down: the agent retries and is refused again.
 		expect( SdkFileAccess.scope( entries, [], 'write' ) ).toEqual( [ ROOT ] )
 	} )
 
@@ -276,15 +261,13 @@ describe( 'the witness agrees with the verdict', () => {
 
 describe( 'the refusal — WHY, WHERE, and now HOW DEEP', () => {
 
-	// ONE AUTHOR, and these assert the thing that makes that worth having: the same three facts, worded the
-	// same way, whichever door refused. Both doors call this; neither writes its own.
+	// One author for the refusal: both doors call this, so the same facts are worded the same way.
 
 	const scopeAt = ( entries: AccessEntry[], required: 'read' | 'write' | 'delete' ): string[] =>
 		SdkFileAccess.scope( entries, [], required )
 
 	it( 'names the DEPTH when the path is reachable but not deeply enough', () => {
-		// The refusal the graded ladder created — the boolean pair could not express it. Its next move is ASK
-		// FOR MORE HERE, which is the opposite of the out-of-scope refusal's GO SOMEWHERE ELSE.
+		// The refusal the graded ladder created: its next move is ASK FOR MORE HERE, the opposite of GO SOMEWHERE ELSE.
 		const entries = [ at( ROOT, 'read' ) ]
 		const line = SdkFileAccess.refusal( SdkFileAccess.resolveLevel( INSIDE, entries ), 'write', scopeAt( entries, 'write' ) )
 
@@ -295,8 +278,7 @@ describe( 'the refusal — WHY, WHERE, and now HOW DEEP', () => {
 	} )
 
 	it( 'does NOT send a too-shallow caller somewhere else', () => {
-		// The silent failure this branch exists to prevent: handed the out-of-scope advice, an agent
-		// relocates a file it should have asked about, and the relocation looks like success.
+		// Handed out-of-scope advice, an agent relocates a file it should have asked about, and that looks like success.
 		const entries = [ at( ROOT, 'read' ) ]
 		const line = SdkFileAccess.refusal( SdkFileAccess.resolveLevel( INSIDE, entries ), 'write', scopeAt( entries, 'write' ) )
 

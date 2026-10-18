@@ -3,17 +3,9 @@ import * as path from 'path'
 import { Vault } from '../Vault'
 
 /**
- * Vault path math — the ONE place two path currencies are reconciled.
- *
- * The vault speaks two by design, and neither is wrong. An href INSIDE a document is vault-ROOT-relative
- * ( `_Claude/plans/x.html` ) because a browser opening that file from the project root has to follow it.
- * A tool PARAMETER is vault-relative ( `plans/x.html` ) because it resolves against the root itself.
- *
- * The regression that earned this file: an agent read a link out of a document and passed it verbatim to
- * `get_doc`. `toAbs` produced `…/_Claude/_Claude/lenses/…`, the path jail PASSED it ( a doubled path is
- * still inside the vault, so the one guard positioned to catch it could not see it ), and it died as a raw
- * ENOENT with an absolute path the caller never wrote. Copying a link into a tool call is the obvious
- * thing to do; it has to work.
+ * Vault path math. An href inside a document is vault-root-relative (`_Claude/plans/x.html`); a tool
+ * parameter is vault-relative (`plans/x.html`). Both must resolve to the same artifact, so a link copied
+ * from a document works as a tool argument.
  */
 
 const PROJECT_ROOT = path.resolve( 'C:/repo' )
@@ -30,8 +22,7 @@ describe( 'Vault.toAbs', () => {
 	it( 'treats a DOC-ROOT-PREFIXED path as the same artifact', () => {
 		const v = vault()
 
-		// THE regression. Both spellings name one file, because both spellings appear in the system: the
-		// second is what every href in every document says.
+		// Both spellings name one file: the second is what every href in every document says.
 		expect( v.toAbs( '_Claude/plans/x.html' ) ).toBe( v.toAbs( 'plans/x.html' ) )
 	} )
 
@@ -71,8 +62,7 @@ describe( 'Vault.isInside — the path jail', () => {
 	} )
 
 	it( 'still refuses a traversal out of the vault', () => {
-		// The jail's real job, and the thing the normalization must not weaken: `_Claude/../..` is still
-		// outside, and reads through the same `toAbs` the strip now lives in.
+		// The jail's real job, which the normalization must not weaken. `_Claude/../..` is still outside.
 		expect( vault().isInside( '../../etc/passwd' ) ).toBe( false )
 		expect( vault().isInside( '_Claude/../../../etc/passwd' ) ).toBe( false )
 	} )
@@ -82,11 +72,7 @@ describe( 'Vault.toVaultRel', () => {
 	it( 'answers the SAME relative path for either spelling', () => {
 		const v = vault()
 
-		// The return currency is vault-relative, so a caller handing in a doc-root-prefixed path gets back
-		// the canonical form rather than its own spelling echoed. That currency is FORWARD-SLASH on every
-		// platform — decided 2026-10-01, deliberately, because a vault-relative path is a wire format and
-		// a native separator gave the same document two spellings on Windows. Asserted as a literal here
-		// rather than through `path.join` so the contract is visible, not platform-dependent.
+		// Vault-relative is the canonical form, and forward-slash on every platform.
 		expect( v.toVaultRel( '_Claude/plans/x.html' ) ).toBe( v.toVaultRel( 'plans/x.html' ) )
 		expect( v.toVaultRel( 'plans/x.html' ) ).toBe( 'plans/x.html' )
 	} )

@@ -5,17 +5,11 @@ import { LensObject } from '../../primitives/framework/LensObject'
 import type { ReaderFn, TaggedBlock } from '../../primitives/types'
 
 /**
- * One artifact contributes once ( bug-report-26 ), on BOTH the axes that can duplicate it.
- *
- * The defect: `dedupeBySource` ranked by `sourceLayer` and kept every block tied for the best rank, but
- * every lens tags its blocks `lens` — so a reference three stacked lenses each load arrived as three
- * same-path, same-rank blocks, all tied, all kept.
- *
- * The two axes are settled in different places, and deliberately. ACROSS LAYERS is `dedupeBySource`, on a
- * flat block list. ACROSS SIBLING LENSES is `getContextBlocks`, which claims a path per LENS — the last
- * point where the lens boundary is still visible. Downstream, one artifact's several regions and several
- * lenses' copies of one region are the same shape, so the sibling case cannot be answered there without
- * costing real content. Both are pinned so a later fix to either cannot quietly undo the other.
+ * One artifact contributes once, on BOTH the axes that can duplicate it, and the axes are settled in
+ * different places on purpose. ACROSS LAYERS is `dedupeBySource`, on a flat block list. ACROSS SIBLING LENSES
+ * is `getContextBlocks`, which claims a path per LENS, the last point where the lens boundary is visible.
+ * Downstream, one artifact's regions and several lenses' copies of one region have the same shape, so the
+ * sibling case cannot be answered there. Both are pinned so a later fix to either cannot undo the other.
  */
 
 const ROOT = '/vault/_Claude'
@@ -111,7 +105,7 @@ describe( 'Agent.dedupeBySource — the layer axis, which is all it owns', () =>
 
 describe( 'Agent.getContextBlocks — the sibling-lens axis', () => {
 
-	/** The reported shape: Churchill's driver / mcp / model-manager each load `js-style-guide`. */
+	/** Three lenses each loading the same reference. */
 	const churchill = (): Agent => Agent.create( { lenses: [
 		lensLoading( 'driver', [ STYLE_GUIDE ] ),
 		lensLoading( 'mcp', [ STYLE_GUIDE ] ),
@@ -239,21 +233,7 @@ const modeRead: ReaderFn = ( absPath ) => {
 const modeLens = ( file: string ): LensObject =>
 	LensObject.load( `${ MODE_ROOT }/${ file }`, { projectRoot: MODE_ROOT, read: modeRead, depth: 2, eager: true } )
 
-/**
- * WHAT A SHARED REFERENCE'S MODE DOES WHEN TWO LENSES DISAGREE — pinned as it behaves TODAY.
- *
- * First-in-stack wins the COPY; it does NOT win the MODE. The mechanism is `LensObject.stubBlock`: every
- * `on`-mode row in a lens collapses into ONE synthetic block carrying `path: this.path` — the LENS's path,
- * not the reference's. So a first lens holding X at `on` contributes no block under X's path, claims
- * nothing for X in `Agent.getContextBlocks`, and a second lens's `load` of X still rides in full.
- *
- * RULED NOT WORTH REPAIRING — Bryan, 2026-09-29, closing bug-report-26: the `on`-mode case is cheap enough
- * that chasing it does not pay, and a test case is enough to cover it. The report's Notes sketch a fix
- * ( make the deduped currency the ARTIFACT rather than the block ) which is kept for its reasoning and is
- * explicitly NOT a live direction. So this is documented behaviour, not a bug somebody enshrined — and the
- * point of pinning it is that a future change to `getContextBlocks` or `stubBlock` has to come past here
- * and say so out loud.
- */
+/** First-in-stack wins the copy, not the mode: `stubBlock` files an `on` lens's rows under the LENS's path, so a later `load` still rides. Ruled not worth repairing; pinned as it behaves. */
 describe( 'Agent.getContextBlocks — the mode axis, pinned as-is', () => {
 
 	/** Slash-blind, because the block's path came through `PathText.resolve` and wears the platform's separator. */

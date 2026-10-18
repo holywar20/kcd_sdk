@@ -6,12 +6,8 @@ import { Vault } from '../Vault';
 import { VaultUtilities } from '../VaultUtilities';
 
 /**
- * A LENS NO LONGER CORRECTS THE FLOOR'S HABITS, because a lens carries no habits ( plan agents-own-behaviour ).
- *
- * This file pinned habit-class displacement between a lens and the floor it stood on ( protocol §6, found
- * 2026-09-04 ). Habits belong to the agent now — its record holds them and the agent compiler resolves them —
- * so the contention that bug lived in cannot arise in a lens. What stands in its place is the refusal: a lens
- * that still carries habit rows does not compile at all, rather than compiling a half it no longer owns.
+ * A lens carries no habits — they belong to the agent, which resolves them. So a lens still carrying habit
+ * rows is refused at compile rather than corrected.
  */
 
 let root = '';

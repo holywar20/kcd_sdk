@@ -11,11 +11,9 @@ import type { ToolResult } from '../../server/McpServer';
 /**
  * VaultTools — the one engine behind Starmind's `sm_documentation` keystones.
  *
- * A face calls these ops under its own names, so what is worth pinning is what a FACE cannot get
- * wrong by construction: the jail runs inside every path-taking op ( no face can skip it ), a refusal
- * names the sibling AS THIS FACE CALLS IT, a write reports what it touched, and the prose renders the
- * same on every face except for the names. Every assertion on a refusal reads its TEXT — the message is
- * the model's next input, not a log line.
+ * A face calls these ops under its own names, so what is pinned is what a face cannot get wrong by
+ * construction: the jail runs inside every path-taking op, and every refusal is asserted on its TEXT,
+ * because the message is the model's next input, not a log line.
  */
 
 const NAMES: VaultToolNames = {
@@ -118,12 +116,8 @@ describe( 'VaultTools — reads', () => {
 	} );
 
 	/**
-	 * THE SILENT DROP — a document on disk that no query returns, and nothing says why.
-	 *
-	 * A file that fails to parse is absent from the scan, which is correct. Being absent from the ANSWER
-	 * with no signal is not: it reads identically to "no such document", so a reader hunting a file that
-	 * is right there learns nothing and has no way to learn it. That cost a real agent twenty minutes
-	 * over `_lens-base.html`, found in the end by falling back to a raw file glob.
+	 * A file that fails to parse is absent from the scan, which is correct. Absent from the ANSWER with no
+	 * signal is not: it reads as "no such document", so the note names it above the results.
 	 */
 	describe( 'a document it cannot parse', () => {
 
@@ -159,13 +153,8 @@ describe( 'VaultTools — reads', () => {
 	} );
 
 	/**
-	 * THE PREAMBLE TAX — the fault advisory is only affordable while every line of it deserves a look.
-	 *
-	 * Ephemeral space is where this project's agents write scratch by the hundred, none of it KCD and
-	 * none of it meant to be. Measured live 2026-09-25: forty-eight such files named on EVERY
-	 * documentation call, roughly 800 tokens of advice about documents nobody intends to fix. An
-	 * advisory whose lines cannot be acted on trains a reader to skip the block, which costs the one
-	 * case it exists for.
+	 * Ephemeral space holds scratch nobody means to fix, so an unparseable file there is named only when
+	 * the glob reaches into it. An advisory about files nobody will fix trains readers to skip it.
 	 */
 	describe( 'an unparseable file in ephemeral space', () => {
 
@@ -177,14 +166,12 @@ describe( 'VaultTools — reads', () => {
 		} );
 
 		it( 'IS named when the glob reaches into that space — the caller asked about it', () => {
-			// A silent drop for a caller who NAMED the space would be the original "the file is there and
-			// no query finds it" bug wearing different clothes.
+			// A caller who named the space gets the advisory; silence there would hide the file.
 			expect( text( tools().query( { glob: 'work/**' } ) ) ).toContain( 'scratch.html' );
 		} );
 
 		it( 'still reports a graded document that cannot be parsed', () => {
-			// The gate is about WHERE, not about relaxing the advisory. A broken file in the library is
-			// exactly what the list is for, and it must survive the fix for the noise.
+			// The gate is about WHERE, not about relaxing the advisory: a broken library file must still be named.
 			put( '_Claude/references/patterns/broken.html', '<not an artifact at all' );
 			const said = text( tools().query( {} ) );
 			expect( said ).toContain( 'references/patterns/broken.html' );
@@ -200,10 +187,7 @@ describe( 'VaultTools — reads', () => {
 		expect( refs.map( r => r.path ) ).toContain( 'work/notes/real.html' );
 	} );
 
-	/**
-	 * PAGING — an unscoped query over a real vault answers with hundreds of refs, and every one of them
-	 * is spent whether or not the reader wanted the list.
-	 */
+	/** An unscoped query over a real vault answers with hundreds of refs; paging keeps each answer small. */
 	describe( 'more refs than fit on a page', () => {
 
 		/** 25 more, on top of the two the fixture plants — 27 total, so page 2 is a short one. */
@@ -309,8 +293,7 @@ describe( 'VaultTools — writes report what they touched', () => {
 	const alpha = (): string => readFileSync( join( root, '_Claude', 'references', 'patterns', 'alpha.html' ), 'utf-8' );
 
 	it( 'save with create refuses a path that already holds a document, and lands nothing', () => {
-		// bug-report-20. Two filers took "one past the highest on disk" from one listing, and the second write
-		// replaced the first unseen. `create` makes the write exclusive: the loser is refused, not merged away.
+		// `create` makes the write exclusive: a second writer is refused, not merged away.
 		const before = alpha();
 		const r = tools().save( { path: 'references/patterns/alpha.html', create: true, artifact: authored( 'alpha', 'The second filer.' ) } );
 		expect( r.isError ).toBe( true );
@@ -333,8 +316,7 @@ describe( 'VaultTools — writes report what they touched', () => {
 	} );
 
 	it( 'saves an artifact read at full and sent straight back as body, one passage altered', () => {
-		// bug-report-25 claimed this EDIT path was unusable. It is the report's own reproduction, frontmatter block
-		// stripped from the body as the schema asks, and it lands with the edit intact.
+		// A read at full, sent back as body with its frontmatter stripped, lands with the edit intact.
 		const read = json( tools().get( { path: 'references/patterns/alpha.html', full: true } ) );
 		const body = String( read[ 'body' ] );
 		const stripped = body.slice( body.indexOf( '</dl>' ) + '</dl>'.length ).replace( 'The target.', 'The altered target.' );
@@ -449,10 +431,7 @@ describe( 'VaultTools — batch runs the FACE\'s dispatch, every call, one resul
 		expect( steps( r )[ 2 ]!.ok ).toBe( true );
 	} );
 
-	/**
-	 * A BATCH THAT RUNS NOTHING SAYS SO. `calls` sent as a JSON string came back `{ results: [] }` — no error, nothing
-	 * written — and an agent read that as success. It is refused whole, and names what arrived.
-	 */
+	/** A batch that runs nothing must say so: a string, missing or empty `calls` is refused whole, naming what arrived. */
 	it( 'refuses, and runs nothing, when calls is a string, missing or empty', async () => {
 		const t   = tools();
 		let   ran = 0;
@@ -500,13 +479,8 @@ describe( 'VaultTools.spec — one copy of the prose, rendered per face', () => 
 	} );
 
 	/**
-	 * THE ANTI-DRIFT PIN ( BUG-74 ).
-	 *
-	 * This description used to name `<strong>`, `<code>` and `<a href>` in prose while the synthesizer a
-	 * package away escaped them. The escaping was one defect; the two statements being able to disagree at
-	 * all was the other, and only the second one can come back. So the advertised list is GENERATED from
-	 * `PROSE_INLINE_TAGS`, and this case fails the moment somebody adds a member and writes the sentence by
-	 * hand instead — the new tag is in the constant and missing from the text a model reads.
+	 * The advertised inline list is generated from `PROSE_INLINE_TAGS`, not restated, so a tag added to the
+	 * constant cannot go missing from the text a model reads.
 	 */
 	it( 'advertises exactly the inline allowlist, generated rather than restated', () => {
 		const spec     = VaultTools.spec( 'save', NAMES );

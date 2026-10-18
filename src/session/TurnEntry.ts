@@ -28,7 +28,26 @@ export const TERMINALS = {
 	 *  `flagged`). Ends the turn, not the task: the board reads what the block means for the work. */
 	halted:    { answered: true,  note: 'the agent reported the work is blocked and cannot proceed until its question is answered' },
 	failed:    { answered: false, note: 'the dispatch failed' },
-	cancelled: { answered: false, note: 'stopped before it finished' }
+	cancelled: { answered: false, note: 'stopped before it finished' },
+	/**
+	 * A BOUND INSIDE THIS APP STOPPED THE TURN — nobody cancelled it ( note 99, DEFECT-542 ).
+	 *
+	 * Its own member rather than `cancelled`, and the reason is what survives a RELOAD. In the live session a
+	 * ceiling and a person pressing stop are told apart by the failure CODE ( `round_ceiling`, `retry_ceiling`
+	 * against `cancelled` ). The `outcome` column does not carry the code, so after a reload the code is gone
+	 * and a runaway loop read as a user who changed their mind — in telemetry, to a person reviewing an
+	 * overnight run, and to an agent reading its own history. The fact had to go in the column that survives.
+	 *
+	 * It is the same flattening the `cancelled` / `failed` split was built to end, reached from the other side.
+	 *
+	 * `answered: false` IS LOAD-BEARING: a ceilinged turn got no answer and must never be counted as one.
+	 *
+	 * WHICH BOUNDS LAND HERE: both of `_halted`'s ceilings — the round ceiling ( the model kept asking for
+	 * tools without answering ) and the retry ceiling ( a rail station sent the turn round without
+	 * dispatching ). Neither is a person's decision, and that is the distinction this member exists to keep.
+	 * `cancelled` is now exactly one thing: the abort signal.
+	 */
+	ceilinged: { answered: false, note: 'stopped by one of this turn\'s own ceilings — nobody cancelled it; it ran out of rounds or retries' }
 } as const;
 
 /** The whole vocabulary. `answered` is the caller's boolean; the key is the diagnosis (a cut-off reply and a

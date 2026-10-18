@@ -32,11 +32,8 @@ describe( 'KcdEmit — round trip against KcdParse', () => {
 		expect( report.ok ).toBe( true );
 	} );
 
-	// NOT byte-for-byte, and the name used to say it was. `spliceFrontmatter` re-parses and
-	// re-serializes the whole body, so what survives is CONTENT and structure, never the source's
-	// exact whitespace — and since 2026-08-17 the output is deliberately reformatted. The assertion
-	// below was always a `toContain`, so only the name was ever wrong; that is precisely how the claim
-	// survived being repeated into the tool description an agent reads.
+	// NOT byte-for-byte: spliceFrontmatter re-parses and re-serializes the body, so what survives is content and
+	// structure, never the source's exact whitespace.
 	it( 'edited frontmatter rides through; untouched body content survives', () => {
 		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const edited = { ...artifact, frontmatter: { ...artifact.frontmatter, status: 'draft' } };
@@ -50,9 +47,7 @@ describe( 'KcdEmit — round trip against KcdParse', () => {
 		expect( reparsed.body ).toContain( 'Some prose that must survive the round trip untouched.' );
 	} );
 
-	// An address field carries its value as TEXT and must NOT be emitted as a link — an address asserts
-	// no occupancy, so taking its value from an href would make it the very thing it replaces
-	// ( KcdAddress.fieldValue ). The round trip is the guard: emit text, read text, same value back.
+	// An address field carries its value as TEXT, never as a link: an address asserts no occupancy (KcdAddress.fieldValue). The round trip is the guard.
 	it( 'an address field round-trips as a real value, and never as a link', () => {
 		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
 		const html = KcdEmit.emit( artifact );
@@ -70,13 +65,8 @@ describe( 'KcdEmit — round trip against KcdParse', () => {
 } );
 
 /**
- * The two-tier stylesheet contract — protocol §8.1, amended 2026-08-17.
- *
- * This block exists because the previous ruling had NO detector, and on 2026-08-17 a session reversed
- * it in good faith: it read `KcdEmit`'s own comment ( which recorded the superseded reasoning ) plus a
- * plan Open Question calling the absolute href a defect, and never opened §8.1. Nothing objected,
- * because nothing asserted the rule. A settled ruling with no case behind it is one confident session
- * away from being undone — so every clause of the amended rule gets a case here.
+ * The two-tier stylesheet contract (protocol §8.1). Every clause of the rule has a case here, because a rule
+ * with no case behind it is one confident session away from being undone.
  */
 describe( 'KcdEmit — the two-tier stylesheet ( §8.1 )', () => {
 
@@ -89,10 +79,8 @@ describe( 'KcdEmit — the two-tier stylesheet ( §8.1 )', () => {
 	} );
 
 	/**
-	 * THE ONE THAT MATTERS. Both tiers set `body` at identical specificity, so the LATER declaration
-	 * wins. Baseline first, link second ⇒ kcd.css overrides. Reversed, nine lines silently beat the
-	 * real stylesheet in every browser and the page still looks fine — the failure is invisible by
-	 * construction, which is exactly why it needs an assertion rather than an eyeball.
+	 * Both tiers set `body` at identical specificity, so the later declaration wins. Baseline first, link second:
+	 * a reversed order would let the baseline beat the real stylesheet in every browser, invisibly.
 	 */
 	it( 'puts the baseline BEFORE the link, so the real stylesheet wins the cascade', () => {
 		const artifact = KcdParse.parse( FIXTURE, 'fixture.html' , '_Claude');
@@ -136,11 +124,7 @@ describe( 'KcdEmit.cssHrefFor — the one copy of the depth math', () => {
 		expect( KcdEmit.cssHrefFor( 'habits/unslotted/index-format.html' ) ).toBe( '../../kcd.css' );
 	} );
 
-	/**
-	 * A pre-2026-07-26 vault keeps the stylesheet at `kcd/kcd.css`. Mockingjay is a live instance and
-	 * every document there already links `../../kcd/kcd.css` — correctly. Assuming the vault root
-	 * would emit a confidently broken link into every document of that vault.
-	 */
+	/** A vault may keep its stylesheet below the root (`kcd/kcd.css`); assuming the root would emit a broken link into every document. */
 	it( 'honours a stylesheet that does not sit at the vault root', () => {
 		expect( KcdEmit.cssHrefFor( 'nav-index.html', 'kcd/kcd.css' ) ).toBe( 'kcd/kcd.css' );
 		expect( KcdEmit.cssHrefFor( 'contracts/plan.html', 'kcd/kcd.css' ) ).toBe( '../kcd/kcd.css' );
@@ -180,25 +164,15 @@ describe( 'KcdEmit.cssTargetFrom — the inverse, so a MOVE can re-express a lin
 		}
 	} );
 
-	/**
-	 * SELF-HEALING IS THE POINT, not a side effect. A document moved to a new depth carries an href that
-	 * is wrong for where it now sits; the target it names is still right. Re-expressing therefore fixes
-	 * the link rather than faithfully carrying the error along — which is exactly the defect found on
-	 * 2026-08-19, where a promoted plan kept three `../` at two levels deep and rendered unstyled.
-	 */
+	/** Self-healing is the point: a moved document's href is wrong for its new depth, but the target it names is still right. */
 	it( 'recovers the right target from an href that was already wrong for its location', () => {
 		const stale = '../../../kcd.css';                              // written at depth 3
 		expect( KcdEmit.cssHrefFor( 'plans/capability/x.html', KcdEmit.cssTargetFrom( stale )! ) ).toBe( '../../kcd.css' );
 	} );
 
 	/**
-	 * A protocol URL is the RETIRED absolute form ( protocol §8.1 amended it away on 2026-08-17 ) and a
-	 * root-absolute path is a hand edit. Both are a different repair with a ruling behind them, so a mover
-	 * declines rather than deciding on its own authority.
-	 *
-	 * NO VERB OWNS THAT REPAIR ANY MORE. `fixStylesheetLinks` did, and it was deleted on 2026-10-05
-	 * ( TASK-730 ) as callerless. The decline below is unchanged and still correct — a mover was never
-	 * the right place for it — but the href now stays as it is until a person or a re-emit changes it.
+	 * A protocol URL or a root-absolute path is a different repair with its own ruling, so a mover declines it.
+	 * Nothing else repairs it: the href stays as it is until a person or a re-emit changes it.
 	 */
 	it( 'declines anything that is not a plain relative reference', () => {
 		expect( KcdEmit.cssTargetFrom( 'file:///C:/vault/kcd.css' ) ).toBeNull();

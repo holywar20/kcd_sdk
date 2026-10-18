@@ -2,20 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { Transcript, frameFile, framePointer, frameFolder, frameTool, grantSubject, type Attachment, type Grant, type TurnEntry } from '../TurnEntry';
 
 /**
- * Attachments — injection, and what an attachment reads as once it is history.
- *
- * The model, in one sentence: an attachment stores a PATH and never a body, and what rides is decided by
- * WHERE it sits rather than by a setting. The live turn carries the file; every prior turn carries a
- * pointer the agent can follow. Removal is the one thing position does NOT decide: it is an intent recorded
- * on the entry and executed by the next compaction, so a removed file keeps riding until then.
- *
- * That makes position the clock, which is why there is no mode here to test. The three-state this replaced
- * ( suggested · on · off ) needed a persisted setting, a control to change it, a write to persist the
- * change, and a rule for what happened when the write failed. All four went away when the body did.
- *
- * The case worth guarding hardest is the LIVE/PRIOR split: get it wrong in one direction and a file rides
- * whole on every turn forever, get it wrong in the other and the model is told about a file whose contents
- * it never saw and cannot reach.
+ * An attachment stores a PATH, never a body. Position decides what rides: the live turn carries the file,
+ * every prior turn a pointer. Removal is the one thing position does not decide; it is an intent that the
+ * next compaction executes, so a removed file keeps riding until then. Position is the clock, so there is
+ * no mode to test. Guard the LIVE/PRIOR split hardest: wrong one way, a file rides whole forever; wrong the
+ * other way, the model is told of a file it cannot reach.
  */
 
 type FileEntry  = Extract<Attachment, { kind: 'injected-file' }>;
@@ -63,8 +54,7 @@ describe( 'injection — the live turn carries the file', () => {
 		const blocks = injecting( imageEntry( 'shot.png' ), 'BASE64BYTES' ).wireMessages()
 			.flatMap( ( m ) => typeof m.content === 'string' ? [] : m.content.map( ( b ) => b.type ) );
 
-		// The one place the two kinds genuinely diverge, and the reason they stay two kinds rather than one
-		// discriminated on mediaType: this branch is a compile-time guarantee, not a string comparison.
+		// Where the two kinds genuinely diverge; they stay two kinds so this is a compile-time guarantee, not a string check.
 		expect( blocks ).toContain( 'image' );
 	} );
 
@@ -72,15 +62,13 @@ describe( 'injection — the live turn carries the file', () => {
 		const t = injecting( imageEntry( 'shot.png' ), 'BASE64BYTES' );
 		const wire = JSON.stringify( t.wireMessages( { imagesAsText: true } ) );
 
-		// The failure this exists to stop: a text-only model, or a CLI transport, receiving NOTHING because
-		// each tier dropped the block it could not translate. A handle it can act on beats silence.
+		// A text-only model or CLI transport must get a handle it can act on, not silence.
 		expect( wire ).not.toContain( 'BASE64BYTES' );
 		expect( wire ).toContain( 'C:/repo/shot.png' );
 	} );
 
 	it( 'TELLS THE MODEL when the file could not be read, rather than sending silence', () => {
-		// `contents` absent on the live turn means main's read failed. A user who injects a file and gets nothing
-		// reasonably assumes it arrived — and the agent then answers from thin air.
+		// Absent `contents` on the live turn means main's read failed; silence would have the agent answer from thin air.
 		const t = new Transcript();
 		const live = t.openTurn( 'turn-1', 0 );
 		t.append( fileEntry( 'gone.ts' ), live );
@@ -91,12 +79,7 @@ describe( 'injection — the live turn carries the file', () => {
 	} );
 
 	it( 'carries an EMPTY file through as empty, never as a failed read', () => {
-		// The reported defect, pinned. `contents` was tested for truthiness, so `''` — a file that read
-		// perfectly and happens to be empty — took the failure arm and told the model it was unreadable.
-		//
-		// Worth a test rather than a comment because of what sits downstream: `write` is whole-file replace
-		// with no append, so an agent that believes a file is unreadable is one blind write from destroying
-		// it. The empty case is only harmless because there was nothing in it to lose.
+		// `''` must not take the failure arm: `write` replaces whole files, so an agent told a file is unreadable is one blind write from losing it.
 		const t = new Transcript();
 		const live = t.openTurn( 'turn-1', 0 );
 		t.append( { ...fileEntry( 'empty.md' ), contents: '' } as TurnEntry, live );
@@ -111,8 +94,7 @@ describe( 'after injection — every prior turn carries a pointer', () => {
 	it( 'stops sending the body once the turn is history', () => {
 		const wire = wireText( afterInjection( { ...fileEntry( 'a.ts' ), contents: 'FILE BODY' } as Attachment ) );
 
-		// Even with stale `contents` still on the object, position decides. This is what makes injection
-		// one-shot without a flag to clear, a write to persist it, or a failed send that burns it.
+		// Position decides even with stale `contents` still on the object: injection is one-shot with no flag to clear.
 		expect( wire ).not.toContain( 'FILE BODY' );
 		expect( wire ).toContain( 'C:/repo/a.ts' );
 	} );
@@ -134,8 +116,7 @@ describe( 'after injection — every prior turn carries a pointer', () => {
 		const live = t.allTurns()[ 1 ];
 		t.append( { ...fileEntry( 'a.ts' ), contents: 'FRESH BODY' } as TurnEntry, live );
 
-		// The user pointed at it twice; the transcript says so. The old entry stays a pointer, the new one
-		// rides whole — no mutation of history to express "they wanted it again".
+		// Re-injecting appends a new entry: the old one stays a pointer and the account keeps both.
 		expect( t.attachments() ).toHaveLength( 2 );
 		expect( wireText( t ) ).toContain( 'FRESH BODY' );
 	} );
@@ -145,17 +126,14 @@ describe( 'removal — an intent, executed at compaction', () => {
 	it( 'keeps riding UNCHANGED until a compaction executes it', () => {
 		const wire = wireText( afterInjection( { ...fileEntry( 'a.ts' ), removed: true } ) );
 
-		// The case worth guarding: honouring removal on the wire rewrites a prior turn to save a pointer, and
-		// re-prefills everything after it. That is the trade backwards, and it is the whole reason removal is
-		// deferred rather than immediate. What changes right away is what the PERSON sees.
+		// Honouring removal on the wire would rewrite a prior turn and re-prefill everything after it; only what the person sees changes now.
 		expect( wire ).toContain( framePointer( 'a.ts', 'C:/repo/a.ts' ) );
 	} );
 
 	it( 'shows as removed to the person, on the same entry the wire reads plainly', () => {
 		const t = afterInjection( { ...fileEntry( 'a.ts' ), removed: true } );
 
-		// Two readers, one entry, and the divergence is the design: the itinerary is told at once, the model
-		// is told by the file simply not being there after the next pass.
+		// Two readers, one entry: the itinerary shows removal now; the model stops seeing the file at the next pass.
 		expect( t.turnRows()[ 0 ].rows.some( ( r ) => r.text.includes( 'removed' ) ) ).toBe( true );
 	} );
 
@@ -168,8 +146,7 @@ describe( 'removal — an intent, executed at compaction', () => {
 	} );
 
 	it( 'still costs a pointer, because it is still riding', () => {
-		// Pricing it at zero the moment the user asked reports a saving that has not happened yet — and the
-		// gauge answers "what will the next send cost", which is unchanged until the pass runs.
+		// Pricing it at zero now reports a saving that has not happened; the gauge answers what the next send costs.
 		expect( Transcript._entryTokens( { ...fileEntry( 'a.ts', 40_000 ), removed: true } ) ).toBeGreaterThan( 0 );
 	} );
 } );
@@ -187,17 +164,14 @@ describe( 'the gutter list — what is still IN CONTEXT', () => {
 	it( 'drops a COMPACTED turn\'s attachments, removed or not', () => {
 		const t = twoTurns( fileEntry( 'gone.ts' ), fileEntry( 'here.ts' ) );
 
-		// A summary stands in for that turn, so its files stopped riding when it did. A chip still sitting
-		// there would claim context the model no longer has, which is the whole reason this list is not just
-		// "every attachment ever".
+		// A chip left on a compacted turn would claim context the model no longer has.
 		expect( t.attachments().map( ( a ) => a.name ) ).toEqual( [ 'here.ts' ] );
 	} );
 
 	it( 'KEEPS a removed file whose turn no summary covers yet', () => {
 		const t = twoTurns( fileEntry( 'old.ts' ), { ...fileEntry( 'marked.ts' ), removed: true } );
 
-		// Removal alone does not drop the chip: the file is still riding as a pointer, so hiding it would
-		// lie in the other direction. The tile wears the red tone until its turn is compacted.
+		// Removal alone keeps the chip: the file still rides as a pointer. The tile wears the red tone until compaction.
 		expect( t.attachments().map( ( a ) => a.name ) ).toEqual( [ 'marked.ts' ] );
 	} );
 
@@ -216,9 +190,7 @@ describe( 'the gutter list — what is still IN CONTEXT', () => {
 		t.append( fileEntry( 'b.ts' ), t.openTurn( 'turn-2', 1 ) );
 		t.failTurn( 'turn-1' );
 
-		// Compaction is the line, not the projection. `windowed()` drops a failed turn from the WIRE; the
-		// file it carried is still reachable in the gutter, and hiding it there would make chips vanish for
-		// a reason the user never asked for.
+		// Compaction is the line, not the wire projection: a failed turn's file stays reachable in the gutter.
 		expect( t.windowed().allTurns() ).toHaveLength( 1 );
 		expect( t.attachments().map( ( a ) => a.name ) ).toEqual( [ 'a.ts', 'b.ts' ] );
 	} );
@@ -263,14 +235,12 @@ describe( 'the itinerary and the compactor see the handle', () => {
 		const row = afterInjection( imageEntry( 'shot.png' ) ).turnRows()[ 0 ].rows
 			.find( ( r ) => r.kind === 'image' )!;
 
-		// Shipping the image across IPC to redraw a list is what this whole design exists to stop, and the
-		// row carries no handle either — a surface that wants a thumbnail earns one when it exists.
+		// The itinerary ships no bytes; a thumbnail surface earns a handle when it exists.
 		expect( row.text ).toContain( 'C:/repo/shot.png' );
 	} );
 
 	it( 'NEVER hands the compactor a body — structurally, not by rule', () => {
-		// There is no stored body to digest, so a summary cannot assert knowledge the conversation never had.
-		// The guard that used to enforce this, and the head-truncation that used to bound it, both went away.
+		// No stored body exists to digest, so a summary cannot assert knowledge the conversation never had.
 		expect( Transcript.digestText( fileEntry( 'a.ts' ) ) ).toBe( framePointer( 'a.ts', 'C:/repo/a.ts' ) );
 	} );
 
@@ -293,11 +263,7 @@ describe( 'frameFile / framePointer', () => {
 	} );
 } );
 
-/**
- * Folders and tools are GRANTS on the same terms a file is — the point of giving them entry kinds rather
- * than a table of their own. What is guarded here is that they inherit the model rather than imitating it:
- * the same decay, the same list, the same removal, the same subject vocabulary.
- */
+/** Folders and tools are grants on the same terms as files: the same decay, list, removal and subject vocabulary. */
 describe( 'folder and tool grants — the same rule, different payloads', () => {
 	const folder: Grant = { at: 1, kind: 'injected-folder', path: 'C:/repo/src', name: 'src' };
 	const tool:   Grant = { at: 1, kind: 'injected-tool',   server: 'starmind_files', name: 'read_file' };
@@ -320,8 +286,7 @@ describe( 'folder and tool grants — the same rule, different payloads', () => 
 	} );
 
 	it( 'a tool\'s subject is derived from its pair, never stored beside it', () => {
-		// The stored fields are server + name; a subject column would be a second copy of what these two
-		// already say, and the copy is what goes stale.
+		// Server and name are stored; a subject column would be a second copy that goes stale.
 		expect( grantSubject( tool ) ).toBe( 'starmind_files.read_file' );
 		expect( grantSubject( folder ) ).toBe( 'C:/repo/src' );
 	} );
@@ -334,8 +299,7 @@ describe( 'folder and tool grants — the same rule, different payloads', () => 
 	} );
 
 	it( 'prices as its reference, since neither has a compiled payload yet', () => {
-		// The listing and the schema are the backing tool's job and have not landed. Pricing them as
-		// anything richer would be the gauge reporting a cost nobody pays.
+		// The listing and schema are the backing tool's job and have not landed; pricing richer would report a cost nobody pays.
 		expect( Transcript._entryTokens( folder, true ) ).toBe( Transcript._entryTokens( folder, false ) );
 	} );
 } );

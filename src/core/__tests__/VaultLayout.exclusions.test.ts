@@ -6,29 +6,13 @@ import { Vault } from '../../node/Vault'
 const PROJECT_ROOT = path.resolve( __dirname, '../../../..' )   // kcd_sdk/src/core/__tests__ → repo root
 
 /**
- * EPHEMERAL IS THE ONLY WAY A DIRECTORY DROPS OUT OF A GRADING SWEEP, and this file is what says so.
- *
- * It replaces `VaultLayout.archival.test.ts`, whose whole subject no longer exists. There were TWO
- * exclusions: ephemeral ( never installed, so protocol §1.1 forbids linking into it ) and ARCHIVAL
- * ( shipped and linkable, but no longer held to the current standard ). That suite's load-bearing case
- * pinned them apart, because folding archival into ephemeral would have made every provenance link into
- * a retired plan an `ephemeral-link` error — a regression with no symptom until a validator started
- * rejecting documents that were correct the day before.
- *
- * Archival's only occupants were ever `plans/plans_complete` and `plans/plans_deferred`. Those buckets
- * existed because a plan WAS a document: completing or retiring one filed its file, and the folder was
- * the plan's status. A plan is a database record now, nothing files a document anywhere, and both folders
- * were emptied by hand ( Bryan, 2026-10-14 ) — so the flag, its three readers and that suite went with
- * them rather than staying as a mechanism with no occupant.
- *
- * What this file guards is the OPPOSITE mistake to the one it replaces: that the removal did not quietly
- * take `plans/` out of the graded library along with its buckets, and did not leave a second exclusion
- * behind under another name.
+ * Ephemeral is the only exclusion from a grading sweep. The archival exclusion is gone, so this file guards
+ * the opposite mistake: that removing it did not take `plans/` out of the graded library, nor leave a second
+ * exclusion behind under another name.
  */
 describe( 'VaultLayout — ephemeral is the only exclusion', () => {
 
-	/** The old archival bucket paths. Nothing is on disk at either any more; the question is how a path
-	 *  THERE is judged, since a stale export or a hand-made folder could still put one back. */
+	/** A path under a retired archival bucket, which a stale export could still put back. */
 	const WAS_ARCHIVAL = '_Claude/plans/plans_complete/some-retired-plan.html'
 
 	it( 'carries no archival predicate at all — the mechanism is gone, not merely unoccupied', () => {
@@ -73,9 +57,7 @@ describe( 'Vault.isLibraryPath — what a whole-vault sweep grades', () => {
 		expect( vault.isLibraryPath( 'work/x.html' ) ).toBe( false )
 	} )
 
-	/** THE BEHAVIOUR CHANGE, stated as a test rather than left to a comment: a document under either old
-	 *  bucket is now GRADED. Both are empty, so this costs nothing today — and it is the honest reading of
-	 *  removing the exemption, rather than a surprise the next person has to discover from a drift report. */
+	/** Removing the exemption grades documents under the old archival buckets; both are empty today. */
 	it( 'grades a document under the old archival buckets', () => {
 		expect( vault.isLibraryPath( 'plans/plans_complete/x.html' ) ).toBe( true )
 		expect( vault.isLibraryPath( 'plans/plans_deferred/x.html' ) ).toBe( true )

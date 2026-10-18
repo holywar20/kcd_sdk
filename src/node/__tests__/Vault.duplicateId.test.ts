@@ -5,10 +5,8 @@ import { join } from 'path';
 import { Vault } from '../Vault';
 
 /**
- * A DUPLICATED ID IS AN ERROR ( plan agents-own-behaviour, "Lens and habit ids live in their frontmatter" ).
- *
- * The id is a document's identity — an agent names its lenses by it — so two library documents carrying one
- * means a record could resolve to either. A scratch copy under `work/` is a backup nobody resolves, and is not.
+ * A duplicated id is an error: an agent names its lenses by it, so two library documents carrying one could resolve to either.
+ * A scratch copy under `work/` is a backup nobody resolves, and is not flagged.
  */
 
 const SHARED = '0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b';

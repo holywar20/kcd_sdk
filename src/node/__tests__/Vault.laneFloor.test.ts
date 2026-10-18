@@ -5,9 +5,8 @@ import * as path from 'path'
 import { Vault } from '../Vault'
 
 /**
- * No floor on the vault face either ( plan agents-own-behaviour, "Retire _lens-base" ). There used to be two —
- * `_lens-base` for a session and `_lane-base` for an unattended run — and `buildAgent` stacked one under every
- * compile. Both are gone: a vault that still holds either file compiles the named lenses and nothing else.
+ * A vault holding no floor file compiles only the named lenses: `buildAgent` stacks nothing under them, whatever
+ * `_lens-base` or `_lane-base` files it still holds.
  */
 
 const PROJECT_ROOT = path.resolve( __dirname, '../../../..' )
@@ -17,8 +16,7 @@ function leftoverVault(): { root: string, clean: () => void } {
 	const root = fs.mkdtempSync( path.join( os.tmpdir(), 'no-floor-' ) )
 	const src  = new Vault( PROJECT_ROOT )
 
-	// A LIVE lens, copied out of the real vault. Was `render` until 2026-09-25, when the package realignment
-	// renamed every superseded lens to `retire-*`; a package lens is the stable pin now.
+	// A live package lens, copied out of the real vault: superseded lenses get renamed, so a package lens is the pin.
 	const LENS    = 'starmind-studio'
 	const lensRel = src.lensPath( LENS )
 	fs.mkdirSync( path.join( root, '_Claude', path.dirname( lensRel ) ), { recursive: true } )

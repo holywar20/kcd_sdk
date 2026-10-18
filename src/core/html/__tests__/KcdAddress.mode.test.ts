@@ -5,17 +5,8 @@ import { KcdParse } from '../KcdParse';
 import { HtmlTree } from '../HtmlTree';
 
 /**
- * THE SLOT-MODE WORD, and the agreement between the two heads that read it.
- *
- * The parser and the validator each held their own copy of the accepted set and fell in OPPOSITE
- * directions on the same input: one demoted an unrecognised mode to `on` in silence, the other raised a
- * hard `bad-mode`. So a document could pass one head and be quietly rewritten by the other, and the
- * symptom — an agent getting thinner context — had no failure to chase. Both read `KcdAddress.readMode`
- * now, and these cases pin the AGREEMENT rather than either head's private behaviour.
- *
- * `suggested` is the retired third state ( renamed `load` 2026-09-16 ). It is pinned as REFUSED, not as
- * absent: it read as an alias for one transitional period and the arm is gone, so the case that matters
- * is that it now fails LOUDLY and says which word to use, rather than parsing as something.
+ * The slot-mode word, read by one shared reader so the parser and the validator cannot disagree on an input.
+ * `suggested` is refused, not absent: it must fail loudly and name the word to use.
  */
 function doc( mode: string ): string {
 	return `<!DOCTYPE html>
@@ -85,8 +76,8 @@ describe( 'slot mode — parser and validator agree on every input', () => {
 		expect( codes( 'suggested' ) ).toContain( 'bad-mode' );
 		const fault = KcdValidate.validate( doc( 'suggested' ), { docRoot: '_Claude' } ).errors.find( e => e.code === 'bad-mode' );
 		expect( fault!.msg ).toContain( 'load' );
-		// The hint is the whole value of this failure: a vault deployed elsewhere and never swept loses
-		// its WHOLE floor lens to it, and the legal set alone does not say which word was wrong.
+		// The hint matters: a vault never swept loses its whole floor lens to this, and the legal
+		// set alone does not name the rename.
 		expect( fault!.msg ).toContain( '2026-09-16' );
 	} );
 

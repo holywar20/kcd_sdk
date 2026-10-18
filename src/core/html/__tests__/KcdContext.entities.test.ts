@@ -1,14 +1,7 @@
 /**
- * The PROJECTION-side entity decode — the other end of the seam `HtmlTree.entities.test.ts` locks.
- *
- * `HtmlTree.decode` knows five entities and must never learn a sixth: it is one half of a round trip
- * ( parse → serialize ) that every `save_doc` runs, and widening it corrodes the entities it does not
- * own. So the vault's ~1,600 authored `&mdash;` / `&rdquo;` / `&rarr;` runs reached agents as LITERAL
- * TEXT, several tokens each, reading as noise in every compiled context and every `get_doc`.
- *
- * The decode therefore lives HERE, on the way out to agent text, where nothing is written back. What
- * this file locks is both halves of that claim: that agent-facing text comes out decoded on every path
- * that produces it, and that the disk round trip is exactly as untouched as it was before.
+ * The projection-side entity decode, the other end of the seam HtmlTree.entities locks. `HtmlTree.decode` must
+ * never learn a sixth entity, since it runs on every save; decoding therefore happens here, on the way out to agent
+ * text, where nothing is written back.
  */
 
 import { describe, it, expect } from 'vitest';

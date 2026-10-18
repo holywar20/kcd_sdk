@@ -4,13 +4,9 @@ import { KcdValidate } from '../KcdValidate';
 /**
  * The habit PROJECTION rules — content a habit carries that the dense form never delivers.
  *
- * `KcdContext.projectHabit` reads four sections and takes `rules` from `<li>` items only. Everything
- * else in the file rides an on-demand read, which is a real and deliberate tier — so these cases are
- * NOT about forbidding extra sections. They pin the two shapes where the authored document and the
- * projected one disagree without anything reporting it, both found in the deployed corpus on
- * 2026-08-18: `author-script` and `author-reference` had written their rules as house faux-tables
- * ( seven and six rules respectively, reaching no agent ), and a whitelist habit pointed the agent at
- * a section the projection drops.
+ * `KcdContext.projectHabit` takes `rules` from `<li>` items only and reads a fixed set of sections. Extra
+ * sections are legitimate on-demand reference, so these cases pin where the authored and projected documents
+ * disagree without anything reporting it, not a ban on extra sections.
  */
 function habit( name: string, body: string ): string {
 	return `<!DOCTYPE html>
@@ -71,9 +67,7 @@ describe( 'KcdValidate — habit rules must be a list to project', () => {
 		expect( codes( report ) ).not.toContain( 'habit-rules-not-projecting' );
 	} );
 
-	// Prose in a rules block loses just as completely as a table does — the mechanism is the same
-	// ( `readSection` files everything that is not an <li> under `text`, and `projectHabit` reads
-	// `items` ), so the check is anchored on the absence of list items rather than on seeing a table.
+	// Prose loses as completely as a table does: anything that is not an <li> is filed under text, and projectHabit reads only items, so the check anchors on the absence of list items.
 	it( 'prose in the rules section fails for the same reason a table does', () => {
 		const report = KcdValidate.validate( habit( 'prose-rules', `
 			<section data-kcd-section="rules"><h3>Rules</h3><p>never edit the whitelist on your own initiative</p></section>` ) , { docRoot: '_Claude' });
@@ -84,9 +78,7 @@ describe( 'KcdValidate — habit rules must be a list to project', () => {
 
 describe( 'KcdValidate — a projected field may not defer to a section that is dropped', () => {
 
-	// `run-report`, verbatim in shape: the action said "see the Output/Format sections below", so the
-	// agent was handed a pointer whose target the dense form drops. The destination path survived only
-	// because it happened to be inlined in the same sentence; the chart template did not.
+	// An action pointing at a section the projection drops: the agent is handed a pointer whose target never arrives.
 	it( 'an action naming a non-projected section WARNS', () => {
 		const report = KcdValidate.validate( habit( 'template-pointer', `
 			<section data-kcd-section="action"><h3>Action</h3><p>write the chart — see the format section below for the exact shape</p></section>
@@ -98,10 +90,7 @@ describe( 'KcdValidate — a projected field may not defer to a section that is 
 		expect( report.ok ).toBe( true );          // a warning, not a refusal — the fix is editorial
 	} );
 
-	// The params sections PROJECT ( `KcdContext.paramBlocks` ), so pointing at one is correct and this
-	// check must stay quiet. It did warn here until 2026-08-18, when the compiler was taught to inject
-	// them — the pin exists so the two lists cannot drift back apart: a section that rides must never be
-	// reported as dropped, or the warning trains authors to delete a working reference.
+	// Params sections project (`KcdContext.paramBlocks`), so pointing at one is correct: a riding section must never be reported as dropped.
 	it( 'an action naming its own params section is silent — params ride the projection', () => {
 		const report = KcdValidate.validate( habit( 'whitelist-pointer', `
 			<section data-kcd-section="action"><h3>Action</h3><p>check the command against public-habit-params · whitelist below</p></section>
@@ -121,10 +110,7 @@ describe( 'KcdValidate — a projected field may not defer to a section that is 
 		expect( codes( report ) ).not.toContain( 'habit-nonprojecting-ref' );
 	} );
 
-	// The precision case, and the reason the check is anchored on section NAMES rather than on deictic
-	// words like "above" / "below". `run-command-judge` and `run-command-free` both say "every rule
-	// above" — pointing at `rules`, which projects perfectly well. A deixis-based check flags both and
-	// teaches authors to route around it; this one stays quiet.
+	// Anchored on section names, not deictic words: "every rule above" points at rules, which projects, so it stays quiet.
 	it( 'a projected field pointing at ANOTHER projected field is fine', () => {
 		const report = KcdValidate.validate( habit( 'rule-backref', `
 			<section data-kcd-section="action"><h3>Action</h3><p>run it when every rule above is satisfied</p></section>
@@ -133,8 +119,7 @@ describe( 'KcdValidate — a projected field may not defer to a section that is 
 		expect( codes( report ) ).not.toContain( 'habit-nonprojecting-ref' );
 	} );
 
-	// One habit may leak in more than one place; each is its own finding so a fix can be verified
-	// field by field rather than by watching a single warning disappear.
+	// One finding per offending field, so each fix can be verified on its own.
 	it( 'reports once per offending field', () => {
 		const report = KcdValidate.validate( habit( 'two-pointers', `
 			<section data-kcd-section="action"><h3>Action</h3><p>write the chart described under format</p></section>
@@ -147,16 +132,8 @@ describe( 'KcdValidate — a projected field may not defer to a section that is 
 } );
 
 /**
- * INCLUSION IS THE AGENT'S, NOT THE DOCUMENT'S ( plan agents-own-behaviour, task 64 ).
- *
- * A habit used to be able to declare that it ALWAYS applied, and a lens's habit slot could write
- * `always` in its Why cell to say the same thing. Both are gone: an agent decides which habits it
- * holds and which of those load in full, and a habit that is held but not loaded contributes the
- * `why` text authored here. The document says what it is for; it does not say who gets it.
- *
- * The second case is the one that matters. The idiom is absent rather than handled, so nothing in
- * `checkHabit` would notice its return — what refuses it is the locked frontmatter set, and that is
- * the guard worth pinning.
+ * INCLUSION IS THE AGENT'S, NOT THE DOCUMENT'S. A habit declares what it is for, never who gets it. An
+ * `always` field is refused by the locked frontmatter set, not by checkHabit, so that set is the guard worth pinning.
  */
 describe( 'KcdValidate — a habit declares no inclusion of its own', () => {
 

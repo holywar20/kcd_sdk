@@ -6,23 +6,9 @@ import { Vault } from '../Vault';
 import { VaultUtilities } from '../VaultUtilities';
 
 /**
- * A LINK CASED WRONG IS A BROKEN LINK, AND AN ERROR ( 2026-10-13 ).
- *
- * The validator used to ask `fs.existsSync`, which answers what the FILESYSTEM is willing to open. On
- * Windows and macOS that is case-insensitive, so a wrongly-cased link resolved and the validator saw
- * nothing at all. The cost was paid in full: a context migration rewrote half of TitansReachV5's vault to
- * `_context/` and left the other half pointing at `_Context/`, grep found 107 dead links in 15 files, and
- * `validate_docs` reported `{ issues: [], errors: 0 }` both before AND after the repair. A clean bill of
- * health bought false confidence through the whole migration, because a validator that says "no issues"
- * when it means "I cannot tell" is worse than one that says nothing — a clean result gets acted on.
- *
- * SO THE CHECK READS DIRECTORY ENTRIES, NOT THE FILESYSTEM'S WILLINGNESS. The real entry is found with a
- * case-insensitive comparison and then judged case-EXACTLY, which is why these tests pass identically on
- * Linux ( where the link also fails to open ) and on Windows ( where it does not ). No fixture here needs
- * two directories differing only in case, which no Windows machine could create anyway.
- *
- * ERROR, NOT WARN. The link does not resolve; it is merely being resolved for you today. The failure is
- * invisible on the developer's machine and total in any container, which is exactly how it ships.
+ * A link cased wrong is a broken link, and an error. The check reads directory entries rather than the filesystem's
+ * willingness to open a path, so it judges case exactly and behaves the same on case-insensitive and case-sensitive hosts.
+ * Error, not warn: the link fails in any container, and the failure is invisible on the developer's machine.
  */
 
 let root = '';
@@ -88,8 +74,8 @@ describe( 'Vault.referenceIssues — a link cased wrong', () => {
 		expect( issue.message ).toContain( '_kcd/references/target.html' );
 	} );
 
-	// The one that actually happened. It also satisfies the wrong-vault check, and must not be reported as
-	// one: "rewrite the leading segment" sends a reader to redo a migration, where the repair is one letter.
+	// The doc-root case also satisfies the wrong-vault check and must not be reported as one: that sends a reader
+	// to redo a migration, where the fix is one letter.
 	it( 'is an ERROR on the doc root, and reads as a case mismatch rather than a wrong vault', () => {
 		const [ issue ] = issuesFor( 'references/docroot.html' );
 		expect( issue.severity ).toBe( 'error' );
@@ -128,10 +114,7 @@ describe( 'Vault.referenceIssues — a link cased wrong', () => {
 
 describe( 'VaultUtilities.health — the whole-vault sweep', () => {
 
-	/**
-	 * THE ACCEPTANCE CASE, as the task stated it: the sweep that reported zero must now report errors, and
-	 * the denominator is asserted first — a sweep that checked nothing also reports nothing wrong.
-	 */
+	/** The sweep must report errors; the denominator is asserted first, since a sweep that checked nothing reports nothing wrong. */
 	it( 'counts a cased-wrong link as an error, not a warning', () => {
 		const { summary, issues } = VaultUtilities.health( vaultOf() );
 

@@ -16,14 +16,10 @@ import { ACCESS_LEVELS, type AccessLevel } from '../../session/InjectedItem'
 import type { AccessEntry } from '../AccessPolicy'
 
 /**
- * AccessPolicy — the one fold, and THE MIGRATION TABLE.
+ * AccessPolicy — the one fold, and THE MIGRATION TABLE. A wrong row fails silently: one rung low refuses
+ * work a person configured, one rung high hands out reach nobody granted.
  *
- * The table is the part that matters. Five readers used to fold the stored `enabled`/`write` pair
- * independently; this replaces all five, so a wrong row here is a wrong row in three processes at once,
- * and it fails silently — a level that reads one rung low simply refuses work a person configured, and a
- * rung high hands out reach nobody granted.
- *
- * Pure. No disk, no config, no processes — this module deliberately knows nothing about containment.
+ * Pure. No disk, no config, no processes.
  */
 
 describe( 'the migration table — legacy pair to ladder', () => {
@@ -47,9 +43,7 @@ describe( 'the migration table — legacy pair to ladder', () => {
 	}
 
 	it( 'maps write:true to DELETE and not to write — the correction that preserves meaning', () => {
-		// Mapping to `write` would have silently REVOKED deletes a person already had, because the delete
-		// guard's root set was byte-identical to the write guard's. Called out on its own because a migration
-		// table is the one place a plausible-and-wrong line does its damage without a symptom.
+		// Mapping to `write` would silently revoke deletes a person already had.
 		expect( parseAccessEntry( { path: 'p', enabled: true, write: true } )?.level ).toBe( 'delete' )
 	} )
 } )
@@ -85,12 +79,8 @@ describe( 'the new shape', () => {
 } )
 
 /**
- * THE ORIGIN MARKER — a label, and provably only a label.
- *
- * A reach row Starmind SHIPS is a different kind of thing from one a person authored, and a surface that
- * cannot tell them apart cannot explain to anybody what dropping one costs. That is the whole job. The
- * dangerous version of this field is the clever one: anything that let origin decide which entry WINS
- * would reintroduce most-specific resolution into a model whose entire value is highest-wins.
+ * THE ORIGIN MARKER — a label, and provably only a label. Origin must never decide which entry wins: that
+ * would reintroduce most-specific resolution into a model whose value is highest-wins.
  */
 describe( 'the origin marker', () => {
 
@@ -112,8 +102,7 @@ describe( 'the origin marker', () => {
 	} )
 
 	it( 'leaves an absent marker absent rather than inventing a stored fact', () => {
-		// `originOf` owns the default, in ONE place. The parse does not stamp one, so nothing can later mistake
-		// a silence for a person's explicit answer.
+		// The parse stamps no default, so a silence is never mistaken for a person's explicit answer.
 		expect( parseAccessEntry( { path: 'p', level: 'read' } ) ).toEqual( { path: 'p', level: 'read' } )
 	} )
 
@@ -239,9 +228,7 @@ describe( 'the authored default', () => {
 
 describe( 'the agent-facing vocabulary', () => {
 
-	// What reaches a model about its own permissions IS prompt text. These assertions are about wording
-	// because the wording is the feature — and because this vocabulary lived as a private function inside
-	// one server file until it was hoisted here, which is the state where two doors word one ladder two ways.
+	// What reaches a model about its own permissions IS prompt text, so the wording is the feature.
 
 	it( 'is CUMULATIVE, because the ladder is', () => {
 		expect( operationsFor( 'read' ) ).toBe( 'list, read, search' )

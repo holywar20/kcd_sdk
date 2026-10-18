@@ -2,21 +2,11 @@ import { describe, it, expect } from 'vitest';
 import { KcdValidate } from '../KcdValidate';
 
 /**
- * THE EPHEMERAL-LINK LAW, EVALUATED AGAINST THE RIGHT VAULT ( 2026-09-10 ).
+ * THE EPHEMERAL-LINK LAW IS VAULT-RELATIVE. The scratch segment comes from the doc root, never from
+ * the first path segment.
  *
- * `isEphemeralHref` hunted for the literal segment `_Claude` and, when it could not find one, fell
- * back to reading the FIRST segment as the doc root — silently. In any vault named otherwise that
- * made §1.1 wrong in both directions at once, and the direction nobody notices is the dangerous one:
- *
- *   a real link into `_kcd/work/` was NOT reported   ( top read as "_kcd", which is not ephemeral )
- *   a stale link into `_Claude/work/` WAS reported   ( right verdict, wrong reason — the file's
- *                                                      actual defect is that it names the wrong vault )
- *
- * It reached writes as well as reports, because `save_doc` validates before it lands a file. So a
- * non-default vault refused legal documents and accepted illegal ones.
- *
- * BOTH DIRECTIONS ARE PINNED HERE. A test that only proved the link IS caught would pass against the
- * old code for the `_Claude` case and prove nothing about the defect.
+ * BOTH DIRECTIONS ARE PINNED. A test that only proves a link is caught passes against a validator that
+ * guessed the vault.
  */
 
 const doc = ( selfType: string, body: string ) =>
@@ -41,18 +31,12 @@ describe( 'KcdValidate — the ephemeral-link law is vault-relative', () => {
 		expect( codes( html, '_Claude' ) ).toContain( 'ephemeral-link' );
 	} );
 
-	/** THE DEFECT. Identical document, differently-named vault — and it used to pass clean. */
 	it( 'catches the same link in a NON-DEFAULT vault', () => {
 		const html = doc( 'reference', '<p><a href="_kcd/work/notes.html">notes</a></p>' );
 		expect( codes( html, '_kcd' ) ).toContain( 'ephemeral-link' );
 	} );
 
-	/**
-	 * THE OTHER DIRECTION. A `_Claude/…` href inside a `_kcd` vault names a folder that does not
-	 * exist there — it is not a link into THIS vault's scratch space, and calling it one describes
-	 * the wrong defect. ( It is still broken, and the reference-integrity pass reports it as a
-	 * dangling link — a different finding, from the pass that can actually check the disk. )
-	 */
+	/** A `_Claude/…` href in a `_kcd` vault is not that vault's scratch space: it is a dangling link, a different finding. */
 	it( 'does not call a foreign-vault href a link into THIS vault\'s scratch space', () => {
 		const html = doc( 'reference', '<p><a href="_Claude/work/notes.html">notes</a></p>' );
 		expect( codes( html, '_kcd' ) ).not.toContain( 'ephemeral-link' );
@@ -65,19 +49,11 @@ describe( 'KcdValidate — the ephemeral-link law is vault-relative', () => {
 		expect( codes( html, '_kcd' ) ).toEqual( [] );
 	} );
 
-	/**
-	 * A document that ITSELF lives in ephemeral space is exempt — it never ships, so its links to its
-	 * own neighbourhood assert nothing false. That exemption keyed off the same broken lookup, so it
-	 * silently stopped applying outside a `_Claude` vault: the identical file was exempt in one vault
-	 * and an error in another.
-	 */
+	/** A document that lives in scratch space is exempt: it never ships, so its links assert nothing false. */
 	it( 'exempts a document that itself lives in scratch space, whatever the vault is called', () => {
 		const html = doc( 'reference', '<p><a href="_kcd/work/sibling.html">sibling</a></p>' );
 
-		// The exemption has to be what makes the difference, so the SAME document is asserted both
-		// ways. Without this pair the case passed against the broken code too — by accident, because
-		// the link check and the self check were wrong in opposite directions and cancelled out. Two
-		// compensating bugs read exactly like correct behaviour from one assertion.
+		// Asserted both ways: one assertion can pass on two compensating bugs.
 		expect( codes( html, '_kcd' ) ).toContain( 'ephemeral-link' );
 		expect( codes( html, '_kcd', 'C:/proj/_kcd/work/self.html' ) ).toEqual( [] );
 	} );

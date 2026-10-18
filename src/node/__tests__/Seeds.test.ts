@@ -9,20 +9,10 @@ import { KcdContext } from '../../core/html/KcdContext'
 const PROJECT_ROOT = path.resolve( __dirname, '../../../..' )   // kcd_sdk/src/node/__tests__ → repo root
 
 /**
- * §10 SEEDS — the three claims the protocol makes in prose, pinned so the
- * prose cannot quietly stop being true. Written 2026-08-13 alongside the §10 documentation pass, whose
- * whole premise is that prose alone is what drifted last time.
- *
- * The claims:
- *   1. A payload is carried VERBATIM. Script content is raw text and needs no escaping, so what an
- *      author writes is what lands in CLAUDE.md.
- *   2. Seeds NEVER COMPILE. The context projector strips them, so a payload written for an agent that
- *      has not read the vault never reaches one that has — and host blocks do not multiply the wire.
- *   3. Seed targets ARE the install's file registry. `installedPaths` derives from the declarations, so
- *      an uninstall removes exactly what the install added and no second list can drift.
- *
- * Each is load-bearing and each fails SILENTLY: a corrupted payload still writes a file, a leaked seed
- * still compiles, and a missed target just leaves litter behind on uninstall. None of them announce.
+ * §10 SEEDS: the three claims the protocol makes in prose, pinned so the prose cannot quietly stop being true.
+ * (1) A payload is carried verbatim. (2) Seeds never compile, so a payload written for an unread vault never reaches one that has.
+ * (3) Seed targets are the install's file registry, so an uninstall removes exactly what the install added.
+ * Each fails silently; none of them announce.
  */
 const SEED_BLOCK = [
 	'<script type="text/kcd-md" data-kcd-seed="claude" data-kcd-target="CLAUDE.md" data-kcd-mode="prepend">',
@@ -42,8 +32,7 @@ describe( 'parseSeedsFrom — a payload is carried verbatim', () => {
 		expect( seed.mode ).toBe( 'prepend' )
 	} )
 
-	/** The claim that matters. Every one of these characters is what `serialize` used to escape, and an
-	 *  escaped `>` here is a literal `&gt;` in a real project's CLAUDE.md. */
+	/** The claim that matters: an escaped `>` here would be a literal `&gt;` in a real project's CLAUDE.md. */
 	it( 'keeps <, & and > exactly as authored', () => {
 		const [ seed ] = VaultUtilities.parseSeedsFrom( SEED_BLOCK )
 		expect( seed.payload ).toContain( '> A blockquote' )
@@ -73,9 +62,8 @@ describe( 'parseSeedsFrom — a payload is carried verbatim', () => {
 } )
 
 /**
- * Claim 2. A seed is deploy input, not agent context — it is prose written FOR an agent that has not
- * read the vault, which is precisely the wrong thing to hand one that has. Leaking it would also triple
- * `root-context` on the wire, since one document carries a block per host.
+ * Claim 2: a seed is deploy input written for an agent that has not read the vault, so it must never compile.
+ * Leaking it would also multiply `root-context` on the wire, once per host.
  */
 describe( 'seeds never compile', () => {
 
@@ -96,9 +84,8 @@ describe( 'seeds never compile', () => {
 } )
 
 /**
- * Claim 3. `installedPaths` is the one answer to "what did we put in this repository", derived from the
- * seed declarations rather than written down beside them. Asserted as an INVARIANT over whatever the
- * vault declares, not against a literal list — a project that adds a fourth host must not fail this.
+ * Claim 3: `installedPaths` is derived from the seed declarations, not written beside them, so no second list can drift.
+ * Asserted as an invariant over whatever the vault declares, so a fourth host does not fail it.
  */
 describe( 'installedPaths — the seed set IS the install registry', () => {
 

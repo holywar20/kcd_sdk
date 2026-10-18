@@ -2,8 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { ContractObject } from '../index';
 
 /**
- * A contract's TRIGGER — the one line a compiled context carries for it ( plan agents-own-behaviour,
- * task 75 ).
+ * A contract's TRIGGER — the one line a compiled context carries for it.
  *
  * A *When* section is authored as prose and runs to several paragraphs, and `readSection` hands back its
  * rows separately from its text. Both halves of that are traps. Returning the text alone drops the very
@@ -30,8 +29,7 @@ describe( 'ContractObject.getWhen', () => {
 		expect( c.getWhen() ).toBe( 'Invoked explicitly as #close, or by description.' );
 	} );
 
-	// The half that was lost. A statement ending in a colon names its conditions in the list under it,
-	// and `text` does not contain them — so the line promised the conditions and then named none.
+	// A statement ending in a colon names its conditions in the list under it; `text` does not hold them.
 	it( 'carries the rows a colon promised, not the paragraph after them', () => {
 		const c = contract(
 			'<p>This contract activates whenever an audit analyzer:</p>'

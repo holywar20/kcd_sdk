@@ -9,7 +9,7 @@ import { NameMatch } from '../core/NameMatch'
 import { Noise } from '../core/Noise'
 import { Blacklist } from '../core/Blacklist'
 import { EsCsv } from '../core/EsCsv'
-import type { FileEntry, FileStat, FileRoots, GrepRow, GrepCount, GrepScan, GrepSkip } from '../core/FileTypes'
+import type { FileEntry, FileStat, FileRoots, GrepRow, GrepCount, GrepScan, GrepSkip, GrepCapped } from '../core/FileTypes'
 import { higherLevel, operationsFor, verbFor, type AccessEntry } from '../core/AccessPolicy'
 import { accessRank, type AccessLevel } from '../session/InjectedItem'
 import type { GrantRef } from '../session/InjectedItem'
@@ -309,7 +309,7 @@ export class SdkFileAccess {
 	async grepText( root: string, query: string, opts: GrepScanOptions = {}, token: SearchToken = { cancelled: false } ): Promise<GrepScan> {
 		const rows:   GrepRow[]   = []
 		const counts: GrepCount[] = []
-		if( !query || token.cancelled ) return { rows, searched: 0, capped: false, cancelled: token.cancelled, counts, candidates: 0, nearMisses: 0, rootIsFile: false, fileSkip: null }
+		if( !query || token.cancelled ) return { rows, searched: 0, capped: false, cappedBy: null, cancelled: token.cancelled, counts, candidates: 0, nearMisses: 0, rootIsFile: false, fileSkip: null }
 
 		const fold     = opts.caseInsensitive === true
 		const needle   = fold ? query.toLowerCase() : query
@@ -331,6 +331,15 @@ export class SdkFileAccess {
 		let   visited    = 0
 		let   searched   = 0
 		let   capped     = false
+		// WHICH ceiling fired, not just that one did: `maxRows` cannot relieve a per-file clip and `maxPerFile`
+		// cannot relieve a spent row budget, so a caller told only "capped" has an even chance of reaching for
+		// a dial that changes nothing ( DEFECT-611 ). The row and walk caps WIN over the per-file one when both
+		// fire, because they ended the walk: raising `maxPerFile` against a spent budget returns the same list.
+		let   cappedBy: GrepCapped = null
+		const _capAt = ( by: Exclude<GrepCapped, null> ): void => {
+			capped = true
+			if( cappedBy === null || by !== 'file' ) cappedBy = by
+		}
 		// Counted at the glob filter, the only place that can tell 'nothing here' from 'nothing your pattern kept'.
 		let   candidates = 0
 		let   nearMisses = 0
@@ -377,12 +386,15 @@ export class SdkFileAccess {
 			let emitted = -1
 			let taken   = 0
 			for( const i of hitAt ) {
-				if( taken >= maxFile || spent() ) { capped = true; break }
+				// Asked apart, and the budget first: both can be true at once, and the one that ended the WALK is
+				// the one worth reporting.
+				if( spent() )          { _capAt( 'rows' ); break }
+				if( taken >= maxFile ) { _capAt( 'file' ); break }
 				taken += 1
 				const from = Math.max( emitted + 1, i - before )
 				const to   = Math.min( lines.length - 1, i + after )
 				for( let j = from; j <= to; j++ ) {
-					if( spent() ) { capped = true; break }
+					if( spent() ) { _capAt( 'rows' ); break }
 					const line = lines[ j ] ?? ''
 					// Truncate the line, never drop the match: a generated file past every filter would otherwise eat the result.
 					const text = line.length > GREP_LINE_CHARS ? line.slice( 0, GREP_LINE_CHARS ) + ' …' : line
@@ -390,6 +402,8 @@ export class SdkFileAccess {
 					emitted = j
 				}
 			}
+			// A backstop, and deliberately NOT an attribution: every path that leaves hits untaken has already
+			// named its own cap above, and guessing here would overwrite a true `rows` with a false `file`.
 			if( taken < hitAt.length ) capped = true
 			return true
 		}
@@ -407,9 +421,9 @@ export class SdkFileAccess {
 				: !TextTypes.isText( root )                    ? 'nontext'
 				: Blacklist.excludes( root, deny )             ? 'protected'
 				: null
-			if( refused ) return { rows, searched: 0, capped: false, cancelled: false, counts, candidates: 0, nearMisses: 0, rootIsFile: true, fileSkip: refused }
+			if( refused ) return { rows, searched: 0, capped: false, cappedBy: null, cancelled: false, counts, candidates: 0, nearMisses: 0, rootIsFile: true, fileSkip: refused }
 			const read = scanFile( root )
-			return { rows, searched: read ? 1 : 0, capped, cancelled: false, counts, candidates: 1, nearMisses: 0, rootIsFile: true, fileSkip: read ? null : skip }
+			return { rows, searched: read ? 1 : 0, capped, cappedBy, cancelled: false, counts, candidates: 1, nearMisses: 0, rootIsFile: true, fileSkip: read ? null : skip }
 		}
 
 		while( stack.length > 0 ) {
@@ -428,7 +442,7 @@ export class SdkFileAccess {
 				budget  += 1
 				if( visited > GREP_WALK_CAP ) {
 					this._warn( 'grep_walk_capped', { root, query, cap: GREP_WALK_CAP } )
-					return { rows, searched, capped: true, cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
+					return { rows, searched, capped: true, cappedBy: 'walk', cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
 				}
 
 				const full = join( dir, d.name )
@@ -464,18 +478,18 @@ export class SdkFileAccess {
 				// The budget ends the walk, not just this file: a partial answer gains nothing from more opens.
 				if( spent() ) {
 					this._warn( 'grep_truncated', { root, query, cap: maxRows, mode } )
-					return { rows, searched, capped: true, cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
+					return { rows, searched, capped: true, cappedBy: 'rows', cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
 				}
 
 				if( budget >= GREP_YIELD_BUDGET ) {
 					budget = 0
 					await _tick()
-					if( token.cancelled ) return { rows, searched, capped, cancelled: true, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
+					if( token.cancelled ) return { rows, searched, capped, cappedBy, cancelled: true, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
 				}
 			}
 		}
 
-		return { rows, searched, capped, cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
+		return { rows, searched, capped, cappedBy, cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
 	}
 
 	/** Asks a live Everything instance instead of walking. Returns `null`, never throws, on any failure, which search() reads
@@ -733,7 +747,7 @@ export class SdkFileAccess {
 	static blacklistLine(): string {
 		// Names the rule and its reference: a listed file cannot be opened to learn why it was refused, so this line is the only route.
 		return 'It matches a protected pattern ( credentials, keys and repository internals, plus the Command '
-			+ 'Deck command roster, which is executable instruction rather than data ) — the deny-list\'s '
+			+ 'Deck command roster and a skill\'s `SKILL.md`, which are authored instruction rather than data ) — the deny-list\'s '
 			+ 'defaults hold unconditionally and no configuration can switch one off. This is not something a '
 			+ 'retry, a different path or a granted file will fix. What each pattern protects, and the roster\'s '
 			+ 'shape if a user needs to edit it themselves, is in '

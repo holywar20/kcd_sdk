@@ -14,8 +14,8 @@ import { Glob } from './Glob';
  *  opt-in flag, because mixing the two teaches people to trim this list.
  *
  *  Two KINDS of thing are protected here, and they are protected for opposite reasons. The first eight
- *  patterns keep a SECRET out of a model's context — the harm is in the reading. The last one keeps an
- *  EXECUTABLE INSTRUCTION out of an agent's hands — the harm is in the writing, and the read is denied
+ *  patterns keep a SECRET out of a model's context — the harm is in the reading. The last TWO keep an
+ *  AUTHORED INSTRUCTION out of an agent's hands — the harm is in the writing, and the read is denied
  *  alongside it by ruling rather than by necessity ( see below ). Both kinds belong on one list because
  *  there is one enforcement point; nothing about the matching rule distinguishes them. */
 export const DEFAULT_BLACKLIST: string[] = [
@@ -59,6 +59,53 @@ export const DEFAULT_BLACKLIST: string[] = [
 	 * deck folder's own roster and every category subfolder's.
 	 */
 	'**/dev-utilities/**/commands.json',
+
+	/**
+	 * THE SKILL MANIFEST — the second entry protecting an INSTRUCTION rather than a secret, and the same
+	 * shape as the roster above ( AUDIT-289, DEFECT-457; Bryan ruled it 2026-10-16 ).
+	 *
+	 * WHAT IT IS. `SKILL.md` is the WHOLE of what makes a folder an Agent Skill: `SkillFolder.readSkillFolder`
+	 * reads exactly `join( dir, 'SKILL.md' )` and nothing else to decide one exists, and its body is prose a
+	 * later agent reads as curated. The shelf is `<userData>/skills`, which the starter kit reaches at
+	 * `delete` so a running skill can tidy up after itself.
+	 *
+	 * WHY IT IS DENIED. The reach row and the file tools together were enough to AUTHOR a skill: `sm_file`'s
+	 * write and move are not in `sm_skills`, they hold `delete` on that tree, and `_reconcile` marks an
+	 * unknown folder `source: 'placed'` — indistinguishable from one a person copied in. So an agent could
+	 * write instructions the shelf then presents as human-curated. `allowed-tools` is NOT enforced in
+	 * Starmind ( `SkillFolder.ts` — "Read and carried; nothing here acts on it" ), so the live amplification
+	 * is one hop out: `SkillLibraryService.copyOut` copies a folder to `~/.claude/skills`, where the Claude
+	 * Code CLI does honour it.
+	 *
+	 * WHAT IT IS NOT. Privilege retention by an agent already inside the perimeter, holding a `sm_file.write`
+	 * grant a person gives every time. Not a remote path, and nothing about the acquisition path changed.
+	 *
+	 * READ IS DENIED TOO, by the roster's ruling and for the same friction reason. THE COST IS GLOBAL AND
+	 * PERMANENT: `patterns()` puts the defaults first and there is deliberately no way to switch one off, so
+	 * no agent can read or author a `SKILL.md` ANYWHERE from now on — including drafting one for a person to
+	 * review, and including the two in-tree integration manifests under `odysseus/integrations/`. Bryan
+	 * accepted that knowingly rather than lowering the shelf's reach row to `read`, which would have
+	 * foreclosed the cleanup affordance the row exists for. AUDIT-289 measured that cost as zero against
+	 * the tree and was wrong — the two odysseus manifests were already there, dated 2026-10-04 — and he
+	 * reconfirmed the global deny on DEFECT-457 once they were found: "Global deny, accept it." So editing
+	 * the odysseus integration's skill definition is a human-only act from now on, by decision.
+	 *
+	 * IT CLOSES THE MOVE ROUTE TOO, and that half is the one worth pinning: `FileGate.admitMove` runs the
+	 * DESTINATION through `admitWrite`, which calls `_protected`, so a rename onto a `SKILL.md` is refused.
+	 *
+	 * IT DOES NOT BREAK `read_skill`. That path is `SkillLibraryService.read` → `readSkillInstructions` →
+	 * raw `fs.readFileSync`, which passes neither `FileGate` nor `Blacklist`. The library's own reads are
+	 * unaffected; only the agent-facing file tools meet this.
+	 *
+	 * SCOPE IS THE MANIFEST, NOT THE FOLDER — the roster entry's residual, in the same words. Non-manifest
+	 * prose inside a curated skill stays agent-writable, so a `references/` file the skill's body tells a
+	 * later agent to read is still poisonable. Ruled acceptable to keep a skill's working area usable.
+	 *
+	 * ONE FILENAME, ANCHORED NOWHERE. Unlike the roster, there is no path convention to anchor on: the
+	 * shelf is `<userData>/skills` but a skill is also read from a project tree and copied out to
+	 * `~/.claude/skills`, and the filename is the authority wherever it sits. Do not narrow this to a root.
+	 */
+	'**/SKILL.md',
 ];
 
 /** Does a filesystem of this platform treat two paths differing only in case as the SAME file?

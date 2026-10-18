@@ -5,16 +5,11 @@ import { join } from 'path';
 import { Vault } from '../Vault';
 
 /**
- * Heal by canonical path, not by graph ( 2026-08-18 ).
+ * Heal by canonical path, not by graph: the text pass reaches what the parse graph cannot (markdown
+ * todos, `data-kcd-address`, the project-root CLAUDE.md, files that fail to parse).
  *
- * `move_doc` healed what the artifact PARSE GRAPH contained, so everything outside it was invisible:
- * markdown todos, `data-kcd-address`, the project-root CLAUDE.md, and any file that fails to parse —
- * which is the file most in need of repair. Three independent misses, one cause. The sharpest was
- * promoting a plan out of `work/` on 2026-08-17: it reported `edits: []` while two documents
- * referenced it — an empty result that reads identically to *nothing pointed at this*.
- *
- * EVERY CASE HERE PINS A POSITIVE NUMBER OR A CONCRETE STRING ON DISK. Asserting that a heal did not
- * throw is worth nothing: the old behaviour did not throw either, it just never looked.
+ * EVERY CASE HERE PINS A POSITIVE NUMBER OR A CONCRETE STRING ON DISK. A heal that did not throw proves
+ * nothing: the old behaviour did not throw either, it just never looked.
  */
 
 let root = '';
@@ -65,9 +60,8 @@ describe( 'Vault heal — the TEXT pass reaches what the graph cannot', () => {
 	} );
 
 	/**
-	 * THE CASE THIS SWEEP EXISTS FOR, in its harshest form. A document that fails to parse is dropped
-	 * by `scan()`, so the graph pass sees NO reference in it — and a malformed file is precisely the
-	 * one whose links nobody else is maintaining.
+	 * A document that fails to parse is dropped by `scan()`, so the graph pass sees no reference in it.
+	 * A malformed file is the one whose links nobody else maintains.
 	 */
 	it( 'heals a document that fails to parse, which the graph pass drops entirely', () => {
 		put( '_Claude/references/patterns/broken.html',
@@ -89,10 +83,8 @@ describe( 'Vault heal — the TEXT pass reaches what the graph cannot', () => {
 	} );
 
 	/**
-	 * An address is a `<code data-kcd-address="…">` — the path sits in the OPENING TAG of a `<code>`
-	 * element, while quoted speech is that element's CONTENT. Get the distinction wrong in the obvious
-	 * direction ( "the match is inside a code element ⇒ quoted" ) and every address in the corpus is
-	 * classified as speech and healed never.
+	 * The path sits in the opening tag of the `<code>` element, not its content. Classing a match inside a
+	 * code element as quoted speech would leave every address in the corpus unhealed.
 	 */
 	it( 'heals a data-kcd-address, and does NOT mistake it for the <code> element it lives on', () => {
 		put( '_Claude/references/patterns/beta.html',
@@ -122,14 +114,9 @@ describe( 'Vault heal — quoted speech is REPORTED, never rewritten', () => {
 	} );
 
 	/**
-	 * THE KNOWN LIMIT, pinned rather than left to be discovered. The swap is whole-file, so the
-	 * quoted-speech rule is honoured per FILE and not per occurrence: one document carrying BOTH a live
-	 * link and a quoted sample of the same href has the sample rewritten alongside it. Per-occurrence
-	 * would mean rewriting by index rather than by string — positional surgery in place of the
-	 * formatting-preserving literal swap, which is a change to the write path and not a tweak.
-	 *
-	 * The bucket is still right: the reference is in `edits`, NOT in `reported`, because the file was
-	 * touched. `reported` never claims something was left alone that was not.
+	 * Known limit, pinned: the quoted-speech rule applies per FILE, so a document holding both a live link
+	 * and a quoted sample of the same href has the sample swapped too. Per-occurrence needs positional
+	 * surgery on the write path. The reference is in `edits`, not `reported`, because the file was touched.
 	 */
 	it( 'a file holding BOTH a live link and a quoted sample has the sample swapped too', () => {
 		put( '_Claude/references/patterns/beta.html', doc( 'beta',
@@ -192,10 +179,8 @@ describe( 'Vault heal — the count means referrers', () => {
 	} );
 
 	/**
-	 * One edit is one ( referrer, authored href ) SWAP — `rewriteHref` replaces every occurrence of that
-	 * string in the file. The graph pass reported one entry per LINK, so a document naming the target
-	 * three times produced three identical edits, two of them guaranteed no-ops. The text pass never
-	 * did, and a plan whose two halves count differently is a plan nobody can read.
+	 * One edit is one (referrer, href) swap: `rewriteHref` replaces every occurrence. Counting per link would
+	 * list identical no-op edits for a document naming the target three times.
 	 */
 	it( 'counts a referrer once however many times it names the target, and still rewrites all of them', () => {
 		put( '_Claude/references/patterns/beta.html', doc( 'beta',
@@ -213,10 +198,8 @@ describe( 'Vault heal — the count means referrers', () => {
 describe( 'Vault heal — delete reports what it cannot excise instead of failing after the fact', () => {
 
 	/**
-	 * Excision is parse-and-splice, so it reaches parsed HTML/`.js` only. A markdown reference cannot
-	 * be cut out of a sentence span-precisely, and rewriting somebody's prose is not a delete's job —
-	 * so the reference is NAMED as one that will dangle. Before this it was neither excised nor
-	 * mentioned, which is the same silence the whole sweep exists to remove.
+	 * Excision is parse-and-splice, so it reaches parsed HTML and `.js` only. A markdown reference cannot be
+	 * cut span-precisely, and rewriting prose is not a delete's job, so it is named as one that will dangle.
 	 */
 	it( 'names a markdown reference as not-excisable rather than excising or ignoring it', () => {
 		put( '_Claude/logs/driver/todo/todo.md', `- [ ] see [alpha](${ TARGET_REF })\n` );
@@ -231,14 +214,8 @@ describe( 'Vault heal — delete reports what it cannot excise instead of failin
 } );
 
 /**
- * A move heals every link POINTING AT the document. Until 2026-08-19 it healed nothing pointing OUT of
- * it, and the stylesheet href is depth-relative by protocol §8.1 — so any move that changed directory
- * depth left the moved file reaching past the vault for a file that is not there.
- *
- * IT FAILED SILENTLY, which is the whole reason it survived: the document still parses, `health` still
- * returns zero issues, and the page still renders on its Tier 1 inline baseline, so it looks merely
- * plain rather than broken. Two live instances were found by a human opening one in a browser, one of
- * them a day old. Every case below pins the href on disk, because "it did not throw" was already true.
+ * A move must also re-express the moved document's own stylesheet href, which is depth-relative (protocol
+ * §8.1). It fails silently: the page still parses and renders plain, so every case pins the href on disk.
  */
 describe( 'Vault move — the moved document\'s OWN stylesheet link', () => {
 
@@ -257,17 +234,8 @@ describe( 'Vault move — the moved document\'s OWN stylesheet link', () => {
 	} );
 
 	/**
-	 * ATTRIBUTE ORDER IS NOT SIGNIFICANT, and until 2026-08-24 it silently was.
-	 *
-	 * Both readers of the link declared `/<link\s+rel="stylesheet"\s+href="([^"]+)"\s*\/?>/` privately —
-	 * first match only, exact order — so a head with `href` before `rel`, or carrying any third attribute,
-	 * was skipped WITHOUT A REPORT and read identically to a document with no link at all. It survived
-	 * because the emitter writes the attributes in exactly that order, so every document this system
-	 * AUTHORED matched; the exposed case was a HAND-EDITED head, which is the document a person cared
-	 * enough to touch.
-	 *
-	 * The six cases around this one all use the emitter's order, which is precisely why a green suite said
-	 * nothing about the gap. These two are here so it cannot come back invisibly.
+	 * Attribute order is not significant: a hand-edited head with `href` before `rel` was once skipped without
+	 * a report. These two cases stop that returning; the others use the emitter's order.
 	 */
 	const linkedRaw = ( name: string, tag: string ) =>
 		doc( name, '<p>The target.</p>' ).replace( '</head>', `${ tag }
@@ -319,10 +287,7 @@ describe( 'Vault move — the moved document\'s OWN stylesheet link', () => {
 		expect( hrefIn( '_Claude/plans/alpha.html' ) ).toBe( '../kcd.css' );
 	} );
 
-	/** The retired absolute form is a different repair with a ruling behind it, and a mover rewriting one
-	 *  would be making that decision on its own authority. `fixStylesheetLinks` used to own those and was
-	 *  deleted on 2026-10-05 ( TASK-730 ) as callerless, so nothing sweeps them now; the decline below is
-	 *  unchanged, because declining was never contingent on something else doing the repair. */
+	/** A machine-bound absolute href is a separate repair with its own ruling, so a mover leaves it alone. */
 	it( 'declines to rewrite a machine-bound absolute href', () => {
 		put( `_Claude/${ TARGET }`, linked( 'alpha', 'file:///C:/vault/kcd.css' ) );
 

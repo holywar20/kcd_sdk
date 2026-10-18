@@ -183,7 +183,7 @@ describe( 'KcdContext.projectBlocks — block decomposition', () => {
 		// No block carries the `# [type] path` header or the frontmatter keep-set anymore.
 		expect( blocks.some( b => b.text.includes( '# [lens]' ) ) ).toBe( false );
 		expect( blocks.some( b => b.text.includes( 'name: region-fixture' ) ) ).toBe( false );
-		// The first block is now the artifact's real lede ( still tagged `care` for a lens ), not the head.
+		// The first block is the artifact's lede, tagged `care` for a lens, not the head.
 		expect( blocks[ 0 ].region ).toBe( 'care' );
 		expect( blocks[ 0 ].text ).toContain( 'identity lede' );
 	} );
@@ -225,8 +225,7 @@ describe( 'KcdContext.projectBlocks — block decomposition', () => {
 	} );
 } );
 
-// A lens whose Do region carries a Tools section: three explicitly-stamped tool slots ( on / load /
-// off ) plus one BARE slot ( no data-kcd-slot value ) that must still resolve to `tool` by position.
+// A lens whose Do region has three stamped tool slots and one bare slot that must still resolve to `tool` by position.
 const TOOLS_FIXTURE = `<!DOCTYPE html>
 <html lang="en">
 <head><meta charset="utf-8"><title>Tools Fixture</title></head>
@@ -259,11 +258,8 @@ const TOOLS_FIXTURE = `<!DOCTYPE html>
 </html>
 `;
 
-// NOTE: this fixture keeps ONE deliberately-bare slot ( `write` ) to prove the parser still INFERS a
-// slot's kind by position ( `inferSlotKind`, live by design ). A bare slot is invalid per the validator
-// now, so these tests build through `KcdParse.build( HtmlTree.parse( … ) )` — the non-validating assembly
-// path — rather than `KcdParse.parse`, which would reject the doc at the gate. Inference is a parser
-// resilience feature; validity is a separate, stricter contract.
+// `write` is a deliberately bare slot, proving the parser still infers kind by position. The validator rejects bare slots,
+// so these tests build with `KcdParse.build`, not `KcdParse.parse`.
 describe( 'KcdParse / KcdContext — tool-kind slots ( explicit data-kcd-slot="tool" + bare-slot fallback )', () => {
 	it( 'toolModes keys on the KIND, not the section name — explicit `tool` slots AND a bare tools-section slot both resolve; mode `off` drops out', () => {
 		const artifact = KcdParse.build( HtmlTree.parse( TOOLS_FIXTURE ), 'tools.html' );
@@ -313,11 +309,7 @@ describe( 'a rule row — a What by another name ( bug 17 )', () => {
 		'</div></section></article></body></html>'
 	].join( '' );
 
-	/**
-	 * THE REGRESSION, stated as what was actually wrong: this projected two bare bullets, because `readSlot`
-	 * returned only what/where/why and a `rule` cell fell on the floor. The page rendered correctly for a
-	 * human and `validate_docs` passed clean, which is how it survived across seven documents.
-	 */
+	/** `readSlot` returned only what/where/why, so a `rule` cell fell on the floor and projected as a bare bullet. */
 	it( 'projects its text, where it used to project a bare bullet', () => {
 		const out = KcdContext.project( KcdParse.parse( RULES, 'r.html', '_Claude' ) );
 

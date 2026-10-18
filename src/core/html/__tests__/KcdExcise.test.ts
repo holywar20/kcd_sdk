@@ -25,7 +25,6 @@ describe( 'KcdExcise.html', () => {
 		const out = KcdExcise.html( DOC, isGone );
 		expect( out ).not.toContain( 'Drop Me' );
 		expect( out ).not.toContain( 'href="_Claude/refs/gone.html"' );
-		// the sibling record + the head survive byte-for-byte
 		expect( out ).toContain( '<span data-kcd-field="what" data-kcd-type="text">Keep Me</span>' );
 		expect( out ).toContain( '<div data-kcd-head><span>What</span><span>Where</span><span>Why</span></div>' );
 	} );

@@ -7,23 +7,9 @@ import { KCDPrimitive } from '../../../primitives/framework/KCDPrimitive';
 import type { ArtifactType, SerializedArtifact } from '../../../primitives/types';
 
 /**
- * WHAT HAPPENS TO A DOCUMENT STILL DECLARING `audit`, now that the type is retired ( Bryan, 2026-10-03 ).
- *
- * TASK-386 was carded on the reasoning that such a document would "degrade to `unknown` rather than
- * throwing", and asked for that to be verified rather than relied on. IT IS HALF TRUE, and the half that
- * is false is the half that matters — so this file pins both halves rather than the comfortable one.
- *
- *   - THE PARSE PATH DOES NOT DEGRADE. `KcdValidate` raises `unknown-type` for a root type absent from
- *     `KcdAddress.TYPES`, that is an ERROR rather than a warning, and `KcdParse.parse` throws on any
- *     error. So an audit document left on disk would FAIL TO PARSE. Nothing rewrites its type to
- *     `unknown`; `unknown` is a type a document may be ASSIGNED by the layout table, never a landing
- *     place a rejected declaration falls into.
- *   - THE WIRE PATH DOES DEGRADE, and throws nothing. `fromSerialized` falls back to `hydrateBase` for
- *     any type with no registered hydrator, which is what every type outside that list already does.
- *
- * Which makes the card's ordering a REQUIREMENT and not a courtesy: the twelve audit artifacts had to go
- * first ( task 385 ), and `query_docs { type: 'audit' }` was confirmed empty before the vocabulary
- * changed. This file is what makes that dependency fail loudly if anyone re-adds a document later.
+ * A document still declaring the retired `audit` type. The parse path does not degrade: `unknown-type` is an
+ * error and `KcdParse.parse` throws. The wire path does: `fromSerialized` falls back to a bare primitive and throws
+ * nothing. So audit documents must be gone before the vocabulary changes; this fails loudly if one returns.
  */
 
 /** A minimal conforming document at whatever root type it is handed. `audit` is passed as a bare string
@@ -68,8 +54,7 @@ describe( 'the audit type is retired from the vocabulary', () => {
 			links: [],
 		} satisfies SerializedArtifact;
 
-		// THE HALF OF THE CARD'S CLAIM THAT HOLDS. No throw, and the type string is carried through
-		// verbatim rather than rewritten — a bare `KCDPrimitive` wearing the retired name.
+		// No throw, and the type string is carried through verbatim: a bare `KCDPrimitive` wearing the retired name.
 		const obj = KCDPrimitive.fromSerialized( wire );
 		expect( obj.getType() ).toBe( 'audit' );
 		expect( obj.getRole() ).toBe( 'know' );
@@ -79,8 +64,7 @@ describe( 'the audit type is retired from the vocabulary', () => {
 	it( 'FAILS VALIDATION as an unknown type rather than degrading, which is why the documents went first', () => {
 		const report = KcdValidate.validate( doc( 'audit' ), { docRoot: '_Claude' } );
 
-		// The correction to the card's premise, stated as the assertion. A retired root type is a named
-		// validation error — it is not quietly re-read as `unknown`.
+		// A retired root type is a named validation error, not quietly re-read as `unknown`.
 		expect( report.errors.map( e => e.code ) ).toContain( 'unknown-type' );
 		expect( report.ok ).toBe( false );
 	} );

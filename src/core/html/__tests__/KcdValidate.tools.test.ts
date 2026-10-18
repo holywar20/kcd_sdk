@@ -2,11 +2,7 @@ import { describe, it, expect } from 'vitest';
 import { KcdValidate } from '../KcdValidate';
 
 /**
- * A TOOL SLOT LIVES NOWHERE ( plan agents-own-behaviour, 2026-09-22 ).
- *
- * An agent's tools live on its record. A lens carried tool slots until the lens became information, and every
- * other type — a process written as prose — never encoded a permission at all: the projection dropped tool slots
- * from the body, so the guidance they carried never reached a compiled context either.
+ * A TOOL SLOT LIVES NOWHERE. An agent's tools live on its record, not in a document.
  */
 function doc( type: string, body: string ): string {
 	return `<!DOCTYPE html>

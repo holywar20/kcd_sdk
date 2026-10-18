@@ -52,12 +52,23 @@ export type GrepCount = {
  *  differs per cause — edit a table, raise a cap, widen a root — so the cause travels rather than the prose. */
 export type GrepSkip = 'noise' | 'nontext' | 'protected' | 'empty' | 'oversized' | 'unreadable'
 
+/** WHICH ceiling stopped a search, for the same reason `GrepSkip` exists: the remedy differs per cause and
+ *  one word for all of them sends a caller at the wrong dial. `rows` is the budget across the whole walk —
+ *  raising it is the fix. `file` is the per-file match ceiling, hit while the row budget still had room, so
+ *  there is nothing left to narrow and `maxPerFile` is the only dial that moves it. `walk` is the directory
+ *  entry ceiling: the tree is too large and the root is what wants narrowing. Null means nothing was cut. */
+export type GrepCapped = 'rows' | 'file' | 'walk' | null
+
 /** What a content search returns. `searched` counts files actually opened: nothing found across 0 files
  *  is meaningless. `capped` (more exist) and `cancelled` (stopped on request) both mark the list partial. */
 export type GrepScan = {
 	rows:      GrepRow[]
 	searched:  number
 	capped:    boolean
+	/** WHICH ceiling fired, when one did — see `GrepCapped`. The row and walk caps outrank the per-file one
+	 *  because they end the WALK, while a per-file clip leaves the search free to carry on into the next file:
+	 *  told `file` when the budget is also gone, a caller raises `maxPerFile` and gets the same list back. */
+	cappedBy:  GrepCapped
 	cancelled: boolean
 	/** One entry per opened file that held a match, in walk order. Always filled. */
 	counts:    GrepCount[]

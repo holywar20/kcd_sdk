@@ -5,18 +5,9 @@ import { join } from 'path';
 import { Vault } from '../Vault';
 
 /**
- * A WRONG-VAULT REFERENCE IS AN ERROR, NOT A DANGLING LINK ( 2026-09-10 ).
- *
- * The two look identical to a naive check — neither target is on disk — but they call for opposite
- * responses. A dangling link usually means the target has not been written yet: wait, or write it.
- * A wrong-vault reference means the DOCUMENT IS MISTAKEN ABOUT WHERE IT LIVES, and everything that
- * follows the link goes nowhere until someone repairs it. Reporting both as advisory warnings put
- * the second one in a bucket people are trained to skim.
- *
- * IT IS PROVEN, NOT GUESSED, and that distinction is the whole design. Swap the href's leading
- * segment for this vault's name; if the target then exists, the reference was correct about
- * everything except which vault it is in. A heuristic on the shape of the name ( "starts with an
- * underscore" ) would have flagged project paths and missed a vault named `kcd`.
+ * A wrong-vault reference is an error, not a dangling link: the document is mistaken about where it
+ * lives. Proven, not guessed: swap the href's leading segment for this vault's name and check that the
+ * target exists. A heuristic on the name's shape would flag project paths and miss a vault named `kcd`.
  */
 
 let root = '';
@@ -72,12 +63,7 @@ describe( 'Vault.referenceIssues — wrong vault vs. missing target', () => {
 		expect( issue.message ).toContain( '_kcd/references/target.html' );
 	} );
 
-	/**
-	 * THE CASE THAT MUST NOT TRIGGER, and the reason the check is evidence-based. A link to project
-	 * code is not a vault reference — swapping its first segment produces nothing, so it stays the
-	 * advisory warning it always was. A shape-based rule would have promoted this to an error and
-	 * taught everyone to ignore the new severity within a week.
-	 */
+	/** A link to project code stays a warning: swapping its first segment resolves to nothing. */
 	it( 'leaves a link to project code as an ordinary warning', () => {
 		const [ issue ] = issuesFor( 'references/code.html' );
 		expect( issue.severity ).toBe( 'warn' );

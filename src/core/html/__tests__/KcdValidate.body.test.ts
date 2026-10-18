@@ -2,10 +2,8 @@ import { describe, it, expect } from 'vitest';
 import { KcdValidate } from '../KcdValidate';
 
 /**
- * The empty-body rule. A document whose frontmatter is perfect and whose body is absent used to
- * validate clean and land on disk — `save_doc` refuses on errors only, so nothing stopped it. These
- * cases pin the rule at both edges: the empty box FAILS, and the thinnest real document ( a bare
- * `<h1>` ) PASSES, because the rule asks whether a body exists and not whether it is any good.
+ * The empty-body rule. These cases pin both edges: the empty box FAILS, and the thinnest real document
+ * ( a bare `<h1>` ) PASSES, because the rule asks whether a body exists and not whether it is any good.
  */
 function doc( type: string, name: string, body: string ): string {
 	return `<!DOCTYPE html>
@@ -60,10 +58,7 @@ describe( 'KcdValidate — the body rule', () => {
 		expect( report.ok ).toBe( true );
 	} );
 
-	// RULED: no template exemption. `validate()` returns on `rootType === 'template'` before any
-	// structural pass, so a scaffold is already exempt from this rule along with every other one —
-	// adding a second exemption would only duplicate that. Pinned here so a future reader who goes
-	// looking for the missing carve-out finds the reason instead of a hole.
+	// RULED: no template exemption of its own. validate() returns on rootType === 'template' before any structural pass.
 	it( 'a template is exempt — it never reaches the rule', () => {
 		const report = KcdValidate.validate( doc( 'template', 'scaffold', '' ) , { docRoot: '_Claude' });
 
@@ -73,9 +68,8 @@ describe( 'KcdValidate — the body rule', () => {
 } );
 
 /**
- * THE GUARD THAT WOULD HAVE CAUGHT BUG 17. `unaddressed-slot` only ever asked whether a row carried ANY
- * field; a `rule` cell satisfied that and still projected nothing, so seventy-eight authored rules were
- * invisible to every agent while validating clean. The question is now whether the READER can read it.
+ * A row must be one the reader can read. `unaddressed-slot` only asks whether a row carries a field;
+ * `unread-slot` asks whether the reader reads it.
  */
 describe( 'KcdValidate — a row nobody can read', () => {
 
@@ -100,7 +94,7 @@ describe( 'KcdValidate — a row nobody can read', () => {
 		expect( report.errors.some( e => e.code === 'unread-slot' ) ).toBe( false );
 	} );
 
-	/** The older, blunter fault still fires where it always did — the new check did not replace it. */
+	/** The older fault still applies; unread-slot did not replace it. */
 	it( 'still refuses a row carrying no field at all', () => {
 		const report = KcdValidate.validate( slot( '<span>bare</span>' ), { docRoot: '_Claude' } );
 

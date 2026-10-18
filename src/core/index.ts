@@ -8,7 +8,6 @@
 export * from '../primitives';
 export * from '../agent';
 export * from '../session';
-export * from '../constellation';
 export * from './Assert';
 export * from './Keystone';
 export * from './Command';

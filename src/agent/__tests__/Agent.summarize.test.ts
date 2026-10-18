@@ -33,9 +33,8 @@ describe( 'Agent.summarize — the roster form', () => {
 			projectId: 'p1',
 			name:      'Render',
 			model:     'test.lorem',
-			// BOTH HALVES of the binding, never just the model: a roster that can say which brain answers
-			// and not which subscription pays is half an answer, and the half it drops is the one that
-			// costs money. Non-null always — the reserved member when nothing is stated.
+			// Both halves of the binding: a roster that drops the account hides the half that costs money.
+			// Non-null always: the reserved member when none is stated.
 			account:   'idt',
 			lensPaths: [ '/vault/_Claude/lenses/render/render.html', '/vault/_Claude/lenses/mcp/mcp.html' ],
 		} )

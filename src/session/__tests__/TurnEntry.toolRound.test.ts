@@ -2,16 +2,9 @@ import { describe, it, expect } from 'vitest';
 import { frameToolRound, TOOL_ERROR_CHARS, type TurnEntry } from '../TurnEntry';
 
 /**
- * The standard tool-round shape — the one renderer of a tool call on the compaction path.
- *
- * The property under every case: the detail goes, the IDENTITY and the OUTCOME stay. A round collapses to
- * one line because a call's arguments and a result's body are envelope to a pass being asked what happened,
- * and tool traffic is the most compressible mass a transcript holds.
- *
- * The case worth guarding hardest is the FAILURE. Dropping the body is the natural way to shrink a result,
- * and for an error the body is the outcome — a compacted transcript in which a failure reads as a success
- * teaches the next session a history that did not happen, and compaction is the one pass whose output
- * nobody re-reads against the original.
+ * The standard tool-round shape, the one renderer of a tool call on the compaction path. The detail goes;
+ * the identity and the outcome stay. A failure is the case to guard hardest: a failed result that reads as a
+ * success teaches the next session a history that did not happen, and nobody re-reads compaction output.
  */
 
 type Call   = Extract<TurnEntry, { kind: 'tool-call' }>;

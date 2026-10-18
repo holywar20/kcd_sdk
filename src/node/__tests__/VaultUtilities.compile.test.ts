@@ -33,7 +33,7 @@ describe( 'VaultUtilities.compile — one compiler, shared with Starmind', () =>
 	it( 'drops the legacy stub blocks whose rows the manifest already carries', () => {
 		const { text } = VaultUtilities.compile( vault(), [ 'starmind-studio', 'starmind-mcp' ] )
 
-		// One `# Available on request` section PER LENS used to ride here, duplicating the routing tables.
+		// Per-lens stub sections duplicated the routing tables; none may reappear.
 		expect( text ).not.toContain( 'Available on request' )
 	} )
 

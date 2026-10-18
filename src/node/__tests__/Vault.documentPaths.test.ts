@@ -6,20 +6,8 @@ import { Vault } from '../Vault';
 import { VaultUtilities } from '../VaultUtilities';
 
 /**
- * WHAT THE SWEEP NEVER LOOKED AT ( 2026-09-10 ).
- *
- * `documentPaths()` walked the indexed DIRECTORIES. The vault root is not one of them, so every
- * document sitting directly at the root was outside every whole-vault sweep ever run — and those
- * are the four most-read documents there are: `root.html` ( the entry an agent loads first ),
- * `root-context.html` ( the source every host entry file is generated from ), `kcd_framework.html`,
- * and the vault's own `nav-index.html` ( the map a human opens first ).
- *
- * The report did not say they were skipped. It said the vault was clean. "Nothing is here" and
- * "everything here is fine" rendering identically is the defect this project names most often, and
- * it was live one level below the command that exists to catch it.
- *
- * NESTED AND ROOT ARE BOTH PINNED, because they reach the walk by different routes and only one of
- * them was ever broken — a test covering the nested case alone passes against the bug.
+ * `documentPaths()` reaches documents at the vault root as well as the indexed directories. Root and nested are both
+ * pinned: they reach the walk by different routes, so one case alone would not cover the other.
  */
 
 let root = '';
@@ -35,7 +23,7 @@ const doc = ( name: string, type: string, body = '<section data-kcd-section="ove
 	+ `<dt>status</dt><dd data-kcd-field="status" data-kcd-type="enum">active</dd>`
 	+ `</dl>\n<h1>${ name }</h1>\n${ body }\n</article>\n</body></html>\n`;
 
-/** One `ephemeral-link` — the same code the generated root nav-index was carrying six of. */
+/** One `ephemeral-link`: a link into scratch space. */
 const BROKEN_BODY =
 	'<section data-kcd-section="overview"><h2>Overview</h2>'
 	+ '<p>A link into scratch space: <a href="_Claude/work/notes.html">notes</a></p></section>';
@@ -46,7 +34,7 @@ beforeAll( () => {
 	mkdirSync( join( root, '_Claude', 'references' ), { recursive: true } );
 	mkdirSync( join( root, '_Claude', 'work' ),       { recursive: true } );
 
-	// At the vault ROOT — the set that was never swept.
+	// At the vault root.
 	writeFileSync( join( root, '_Claude', 'nav-index.html' ), doc( 'vault', 'nav-index', BROKEN_BODY ) );
 	writeFileSync( join( root, '_Claude', 'root.html' ),      doc( 'root',  'framework', BROKEN_BODY ) );
 
@@ -74,11 +62,7 @@ describe( 'Vault.documentPaths — what the sweep reaches', () => {
 		expect( paths ).toContain( 'lenses/nav-index.html' );
 	} );
 
-	/**
-	 * The root walk must NOT recurse. Ephemeral directories sit at the root, and walking it
-	 * recursively would grade `work/` and `logs/` — undoing the library gate from the other side and
-	 * re-creating the noise it was added to remove.
-	 */
+	/** The root walk must not recurse, or it would grade ephemeral `work/` and `logs/`. */
 	it( 'does not reach into ephemeral space at the root', () => {
 		const paths = vaultOf().documentPaths().map( p => p.replace( /\\/g, '/' ) );
 		expect( paths ).not.toContain( 'work/notes.html' );
@@ -94,11 +78,7 @@ describe( 'VaultUtilities.health — root documents are graded', () => {
 		expect( paths ).toContain( 'lenses/nav-index.html' );
 	} );
 
-	/**
-	 * THE CASE THIS FILE EXISTS FOR. Four documents carry one error each; three are graded and one
-	 * is ephemeral. Pinned as a COUNT, because the failure mode was a report that read clean rather
-	 * than one that read wrong.
-	 */
+	/** Four documents carry one error each; three are graded, one is ephemeral. Pinned as a count: a clean-reading report is the failure. */
 	it( 'counts every root-level error that the sweep used to miss', () => {
 		const { summary } = VaultUtilities.health( vaultOf() );
 		expect( summary.checked ).toBe( 4 );   // 2 root + 2 nested; work/ is not walked

@@ -3,23 +3,11 @@ import { Session } from '../Session';
 import { grantSubject, type Grant } from '../TurnEntry';
 
 /**
- * THE HOIST — what survives a compaction, and what a compaction quietly executes.
- *
- * `Session.ts` states the rule in prose at the three-readers comment block and nothing checked it. The
- * whole model turns on one sentence: *a grant that survives compaction is canonized, and a grant marked
- * removed simply is not* — so the pass that rewrites the prefix settles both deferred decisions at once,
- * and not-promoting IS the execution of a revocation. Two different bugs hide behind that, and both are
- * silent:
- *
- *   • a compacted grant that fails to hoist is a permission the user granted and the system forgot,
- *     revoked by a summarisation nobody asked for and cannot see;
- *   • a REMOVED grant that hoists anyway is a revocation that did not happen, and there is no second
- *     mechanism to catch it — not-promoting was the only one.
- *
- * Beside those, the structural claim the comment block makes about the three readers: `hoistedGrants()`
- * is a SUBSET of `grants()` and DISJOINT from `attachments()` by construction. That is what makes the
- * hoist a move between tiers rather than a copy, and it is the invariant a merge of any two of the three
- * would break — quietly, by drawing compacted files in the gutter or by expiring a permission.
+ * The hoist: what survives a compaction, and what a compaction quietly executes. A compacted grant is
+ * canonized and stays authorized; a removed grant is simply not promoted, which is the only way a
+ * revocation takes effect. Two silent failures: a compacted grant that fails to hoist is a permission
+ * lost to a summary, and a removed grant that hoists anyway is a revocation that never happened.
+ * `hoistedGrants()` is a subset of `grants()` and disjoint from `attachments()`; collapsing two readers breaks that.
  */
 
 /** One file grant. `removed` is the pending revocation — an intent, until a compaction executes it. */
@@ -76,9 +64,7 @@ describe( 'Session grants across a compaction', () => {
 		expect( session.grantRows().map( ( r ) => r.where ) ).toEqual( [ 'C:/repo/b.ts' ] );
 	} );
 
-	/** …AND NOT ONE MOMENT SOONER. A revocation is pending on both axes until the compaction that executes
-	 *  it, so a removed grant on a live turn still shows and still authorizes. Honouring it instantly would
-	 *  buy a re-prefill for a distinction nobody asked for. */
+	/** Not one moment sooner: a removed grant on a live turn still shows and authorizes, because honouring it early would buy a re-prefill for nothing. */
 	it( 'still authorizes a grant marked removed while its turn is live', () => {
 		const session = newSession();
 		turnWith( session, 'turn-1', 1, fileGrant( 'a.ts', true ) );
@@ -103,9 +89,7 @@ describe( 'Session grants across a compaction', () => {
 		expect( session.attachments().filter( ( a ) => a.name === 'a.ts' ) ).toHaveLength( 1 );
 	} );
 
-	/** ORDER DOES NOT SAVE IT EITHER. The live set is collected across the WHOLE transcript before anything
-	 *  is removed, so a grant compacted AFTER its re-injection is still un-hoisted — a hoist that walked and
-	 *  decided in one pass would promote this one and duplicate the reference. */
+	/** The live set is collected across the whole transcript before anything is removed, so a grant compacted after its re-injection is still un-hoisted. */
 	it( 'un-hoists even when the compacted turn comes after the live one', () => {
 		const session = newSession();
 		turnWith( session, 'turn-1', 1, fileGrant( 'a.ts' ) );
@@ -139,9 +123,7 @@ describe( 'Session grants across a compaction', () => {
 		expect( granted ).toEqual( [ 'C:/repo/gone.ts', 'C:/repo/here.ts', 'C:/repo/pending.ts' ] );
 	} );
 
-	/** Every canonized row says WHO authorized it, in the shape the manifest merge reads. The merge
-	 *  re-renders from structured rows and never parses rendered text, which is why a prose return shipped
-	 *  an empty `## Grants` heading — the rows are the section. */
+	/** Canonized rows are structured, not prose: the manifest merge re-renders from them and never parses rendered text. */
 	it( 'renders a canonized grant as a manifest row carrying kind, subject and why', () => {
 		const session = newSession();
 		turnWith( session, 'turn-1', 1, toolGrant( 'sm_file', 'write' ) );

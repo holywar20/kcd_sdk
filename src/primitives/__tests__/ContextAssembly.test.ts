@@ -1,7 +1,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { describe, it, expect } from 'vitest';
-import '../index';   // registers every type's fromSerialized hydrator ( fromHtml/load need the real subclass, not the base fallback )
+import '../index';   // registers each type's hydrator; fromHtml/load need the real subclass
 import { LensObject } from '../framework/LensObject';
 import { ContextAssembler } from '../framework/ContextAssembler';
 import { SlotResolver } from '../framework/SlotResolver';
@@ -36,9 +36,8 @@ ${ LENS_BODY( '<div data-kcd-slot="reference" data-kcd-mode="load"><span data-kc
 </body></html>
 `;
 
-// Two references the lens slots at `load`. Under LINKS-ONLY dredge their bodies ( "From Reference
-// A/B." ) never ride — they surface only as routing rows in the lens's own References table. The bodies
-// stay in the fixture so a regression that re-introduced full-text dredge would surface them.
+// Under links-only dredge these bodies never ride; they surface only as routing rows. The bodies stay in
+// the fixture so a regression to full-text dredge would surface them.
 const refHtml = ( slug: string, label: string ) => `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Reference</title></head>
 <body>
@@ -146,11 +145,8 @@ describe( 'LensObject.getContextBlocks + ContextAssembler — Phase 2 integratio
 	} );
 
 	it( 'off mode is excluded from the synthetic stub block, and never dredged — on mode gets both a stub row and a dredge skip', () => {
-		// Links only in POLICY, deliberately with no authored routing-table text of their own (a bare
-		// <a> with no data-kcd-slot never reaches KcdParse.policy — every policy entry comes from an
-		// authored slot, and that slot's own text always renders via the artifact's own content
-		// regardless of mode). stubBlock() is the generic net for policy entries; this proves `off`
-		// is excluded from it while `on` (the default) still shows up there.
+		// Links only in POLICY: no authored routing text. stubBlock() is the generic net for policy entries;
+		// this proves `off` is excluded from it while `on` (the default) still shows up there.
 		const offHtml = `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Off Fixture Lens</title></head>
 <body>
@@ -182,37 +178,18 @@ ${ LENS_BODY( '<div data-kcd-slot="reference" data-kcd-mode="off"><span data-kcd
 	} );
 } );
 
-// ── SLOT MODE, SETTLED ( ruled 2026-07-12, corrected the same day; the transitional note this replaces
-// retired 2026-09-17 ). `on` = a deck pointer, where the routing row is the slot's whole contribution;
-// `load` = an implicit injection whose body rides — the "this matters" highlight the user operates.
-// `dredgeFrom` realizes both, so the assertions below pin the END STATE, not a way-station.
-//
-// WHAT THE MODE RULE RIDES ON IS THE LOADER, and reading one for the other is what kept the old note
-// alive past its subject. A non-eager lens dredges NOTHING, so `on` and `load` are indistinguishable
-// there — a routing row each and no body between them. Everything that COMPILES loads eager ( see
-// `LensLoadOptions.eager` ), and that is where the two modes part company. Both halves are asserted
-// below: a test that only ever loaded lazily reports the loader's silence as the mode's meaning, which
-// is how `Vault.buildAgent.test.ts` came to compare an eager compile against a lazy one for six weeks.
-//
-// A session INJECT ( `addInjected` — a deliberate paste of context ) rides a full body under either
-// loader, and projects through the same dense form as any other injected habit.
+// SLOT MODE: `on` is a deck pointer, where the routing row is the slot's whole contribution; `load` is an implicit
+// injection whose body rides. The mode only shows under an eager load, which every compile uses: a lazy lens
+// dredges nothing, so the two modes look alike there. A session inject rides a full body under either loader.
 
 const PROJECT_ROOT = path.resolve( __dirname, '../../../..' );   // kcd_sdk/src/primitives/__tests__ → repo root
 const HABITS_DIR   = path.join( PROJECT_ROOT, '_Claude/habits' );
 
-// THE REAL LENS THESE SUITES LOAD IS THE DEPLOYED ONE, and it was `documentation` until 2026-09-25, when
-// the package realignment renamed every superseded lens to `retire-*` and took this file down as a block.
-// It is `sm-documentation` now — the package lens that succeeded it.
-//
-// DO NOT "FIX" THIS BY EDITING `InstallManifest`. That table's `lenses/documentation` row names the
-// CANONICAL lens in the shipped substrate ( starmind/resources/substrate/lenses/documentation ), which is
-// a different artifact that has not moved and must not. Canonical and deployed diverge by design; this
-// vault's rename says nothing about what a fresh vault is given.
+// The deployed lens is `sm-documentation`. Do not edit `InstallManifest` to change it: its `lenses/documentation`
+// row names the canonical lens in the shipped substrate, a different artifact that must not move.
 
-// NOTE: the link below sits in the KNOW region, not Do, even though a habit is a Do-role artifact.
-// `KcdParse.policy()` no longer cares which region carried the link (mode alone gates dredging), but
-// the fixture keeps a Know-region placement anyway — SlotResolver only cares about a block's
-// `habitClass`/`sourceLayer`, not which region carried the link, so this exercises the identical path.
+// The link sits in the Know region though a habit is Do-role; SlotResolver keys on habitClass and sourceLayer,
+// not region, so this exercises the identical path.
 const slotLensHtml = ( mode: 'on' | 'load' ) => `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Slot Fixture Lens</title></head>
 <body>
@@ -239,9 +216,7 @@ describe( 'habit slot dredge follows MODE once the lens is loaded the way a comp
 			projectRoot: PROJECT_ROOT, read: readReal, depth: 2, eager: true
 		} );
 
-		// EAGER, so the target IS fetched and the object exists — `on` needs it for the Atlas graph and the
-		// reader drawer. What `on` withholds is inclusion: the fetched habit is marked not-included, so the
-		// routing row is its whole contribution and its full text never appears.
+		// Eager, so the target is fetched; `on` withholds inclusion, so the routing row is its whole contribution.
 		expect( lens.getNodes().length ).toBe( 1 );
 		const beforeInject = lens.serializeForContext();
 		expect( beforeInject ).not.toMatch( /WRITE THE FINDING, NOT THE ACTIVITY/ );
@@ -252,10 +227,8 @@ describe( 'habit slot dredge follows MODE once the lens is loaded the way a comp
 		const askHabit = fs.readFileSync( askHabitPath, 'utf-8' );
 		lens.addInjected( KCDPrimitive.fromHtml( askHabit, askHabitPath , '_Claude') );
 
-		// addInjected is itself always a "load" act (the GUI "drop context" gesture) — the
-		// injected habit's OWN body now rides as its DENSE four-field form ( KcdContext.projectHabit ),
-		// not a raw dump, same as any other injected habit. What's proven here is that the LENS's
-		// `on`-mode dredge stays silent while the injected habit's directive rides.
+		// An injected habit rides in its dense four-field form (KcdContext.projectHabit); the lens's `on`-mode
+		// dredge stays silent while that directive rides.
 		const afterInject = lens.serializeForContext();
 		expect( afterInject ).toContain( 'nobody asked, write nothing' );
 		expect( afterInject ).not.toMatch( /WRITE THE FINDING, NOT THE ACTIVITY/ );
@@ -282,9 +255,8 @@ describe( 'habit slot dredge follows MODE once the lens is loaded the way a comp
 		const eagerCtx = eager.serializeForContext();
 		expect( eagerCtx ).toMatch( /WRITE THE FINDING, NOT THE ACTIVITY/ );
 
-		// NON-EAGER — links-only, and NOT because the mode says so: the whole dredge is gated off, so there
-		// is no fetched object for any mode to include. Asserted beside its pair, because on its own this
-		// reads as `load` meaning nothing — which is exactly the reading that outlived the dredge rework.
+		// Non-eager: links-only because the whole dredge is gated off, not because of the mode. Asserted beside
+		// its eager pair, so `load` is not read as meaning nothing.
 		const lazy = load( false );
 		expect( lazy.getNodes().length ).toBe( 0 );
 		const lazyCtx = lazy.serializeForContext();
@@ -298,9 +270,8 @@ describe( 'habit slot dredge follows MODE once the lens is loaded the way a comp
 	} );
 } );
 
-// A lens with ONE `load` slot pointing at a plan. Same shape as slotLensHtml, but the target is a
-// plan path — the point being that `load` ( which DOES ride full text for a habit or reference ) must
-// still NOT ride full text for a plan: plans are link-only in assembled context ( Bryan, 2026-07-12 ).
+// A lens with ONE `load` slot pointing at a plan. `load` rides full text for a habit or reference, but never
+// for a plan: plans are link-only in assembled context.
 const planSlotLensHtml = ( planHref: string ) => `<!DOCTYPE html>
 <html><head><meta charset="utf-8"><title>Plan Slot Fixture Lens</title></head>
 <body>
@@ -326,7 +297,7 @@ describe( 'Agent.compile — the context-compiler surface: merged body first, th
 
 	it( 'trails with the manifest: the body leads, then a Files table and the References table, each exactly once', () => {
 		const out = loadBase().compile();
-		// The manifest sinks to the bottom ( Bryan, 2026-07-12 ): the body prose leads, the affordance
+		// The manifest sinks to the bottom: the body prose leads, the affordance
 		// surface trails. The Files table is the manifest head, so no body text follows it.
 		expect( out.startsWith( '## Files' ) ).toBe( false );
 		const filesIdx = out.indexOf( '## Files' );
@@ -399,9 +370,8 @@ describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Ph
 	} );
 
 	it( 'two packages injecting keep their own headings rather than collapsing into one band', () => {
-		// The reason a contribution carries its heading in the TEXT instead of letting `withBandHeadings`
-		// splice one: that splices ONE heading per tier, and every injection shares a tier. Collapsing two
-		// packages under a single heading would leave a reader unable to tell which package said what.
+		// The heading rides in the contribution text: withBandHeadings splices one heading per tier, so two
+		// packages would collapse under one.
 		const agent = loadBase();
 		const out = agent.compiledBlocks( { contributed: [
 			Agent.contributionBlock( { id: 'a_pkg', heading: 'Memory',  text: 'FROM A' } ),
@@ -413,10 +383,8 @@ describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Ph
 	} );
 
 	it( 'an injection keeps its own identity in the breakdown', () => {
-		// THE DEFECT THIS PINS: `segmentKey` reads a section-less block as STRUCTURAL — a divider or heading
-		// with no identity — and folds its text into a neighbour. Injections sort LAST, so there is no
-		// neighbour after them and the text landed on the previous segment instead. On the wire and
-		// misattributed in the breakdown is worse than absent, because the round drawer reads as correct.
+		// Pins `segmentKey` folding a section-less injection into the previous segment: misattributed in the
+		// breakdown is worse than absent, because the round drawer reads as correct.
 		const agent = loadBase();
 		agent.bindEnv( { contributions: [ { id: 'semantic_memory', heading: 'Memory', text: 'INJECTED TEXT' } ] } );
 		const seg = agent.contextSegments().find( ( x ) => x.text.includes( 'INJECTED TEXT' ) );
@@ -462,9 +430,7 @@ describe( 'Agent.compiledBlocks — the no-drift lock (compiled-context plan, Ph
 		const agent = loadBase();
 		const blocks = agent.compiledBlocks();
 		const sep = '\n\n';
-		// Stand-in for the renderer's real `estimateTokens` — the SDK carries no tokenizer (plan Notes:
-		// "compiledBlocks does not pull a tokenizer into @kcd/core"). Any consistent length function obeys
-		// the same additive identity, which is the actual property being locked here.
+		// The SDK carries no tokenizer; any consistent length function obeys the same additive identity.
 		const weight = ( s: string ): number => s.length;
 		const summed = blocks.reduce( ( a, b ) => a + weight( b.text ), 0 ) + Math.max( 0, blocks.length - 1 ) * weight( sep );
 		expect( summed ).toBe( weight( blocks.map( b => b.text ).join( sep ) ) );
@@ -562,8 +528,7 @@ describe( 'ContextAssembler — unit', () => {
 		expect( merged[ 0 ].text ).toBe( 'first ref\n\nsecond ref' );
 	} );
 
-	// ── routing tier ( Bryan, 2026-07-11 ): References/Habits sections sink below core content,
-	// above injected — and fuse across sources even with no authored data-kcd-merge-key. ──
+	// ── routing tier: References/Habits sections sink below core content, above injected, and fuse across sources. ──
 
 	it( 'a references-section block sorts BELOW normal know/do content, but ABOVE injected', () => {
 		const blocks = [
@@ -586,11 +551,8 @@ describe( 'ContextAssembler — unit', () => {
 		expect( sorted.indexOf( 'core' ) ).toBeLessThan( sorted.indexOf( 'refs-routing' ) );
 	} );
 
-	// ── the injected tier: where every package's contribution lands ( 2026-09-07 ) ──
-	// The `memory` TIER IS NOW UNREACHED. It was where the one named contributor's band sorted, between
-	// care and core — "after the lenses but before knowledge". Contributions are injections now, identified
-	// by package and landing last, so nothing routes to tier 1 any more. The entry survives so that
-	// restoring a high band is a routing decision rather than a renumbering.
+	// ── the injected tier: where every package's contribution lands ──
+	// The `memory` tier is unreached; it survives so restoring a high band is a routing decision, not a renumbering.
 
 	it( 'an injected block sorts LAST, below care, core and the manifest', () => {
 		const blocks = [
@@ -641,9 +603,7 @@ describe( 'ContextAssembler — unit', () => {
 		];
 		const merged = ContextAssembler.merge( blocks );
 		expect( merged ).toHaveLength( 1 );
-		// ONE canonical heading, not each member's own ( ### vs ## ) — and the boilerplate intro line
-		// ( it lives only in `text`, never in `rows` — the merge reads `rows`, not `text` ) is gone,
-		// not just deduped: it was never structured data to begin with.
+		// One canonical heading; the boilerplate intro lives only in `text`, never in `rows`, so it is gone rather than deduped.
 		expect( merged[ 0 ].text ).toBe( '## References\n- primary lens ref (a.html)\n- secondary lens ref (b.html)' );
 	} );
 
@@ -711,11 +671,8 @@ describe( 'ContextAssembler — unit', () => {
 
 describe( 'the Grants section reaches the wire, or does not ride at all', () => {
 
-	// A MANIFEST SECTION IS MERGED, and the merge re-renders from each block's structured `rows` rather
-	// than parsing rendered text back apart. Grants were bound as a composed STRING — which looked right,
-	// read right, and contributed no rows — so every canonized grant was dropped between the session and
-	// the wire and the heading arrived alone. The empty `## Grants` an agent reported was the whole
-	// section failing, not an empty session drawing a spare heading.
+	// A manifest section merges from each block's structured `rows`, not from rendered text. Grants once bound as
+	// a composed string that contributed no rows, so every canonized grant was dropped and only the heading shipped.
 
 	// `loadBase` is a per-describe local by convention in this file rather than a file-level helper, so
 	// this block declares its own instead of reaching into a sibling's scope.
@@ -752,9 +709,7 @@ describe( 'the Grants section reaches the wire, or does not ride at all', () => 
 	} );
 
 	it( 'never emits a heading with nothing under it, which is what a dropped table looks like', () => {
-		// The shape of the bug, asserted directly: if a Grants heading is present, a row is present too.
-		// Stated as an invariant rather than as a case, because the failure was invisible precisely by
-		// looking like a legitimately empty section.
+		// If a Grants heading is present, a row is present too; stated as an invariant, since an empty heading looks legitimate.
 		for( const rows of [ [] as SlotRow[], ROWS ] ) {
 			const agent = loadBase();
 			agent.bindEnv( { grants: rows } );

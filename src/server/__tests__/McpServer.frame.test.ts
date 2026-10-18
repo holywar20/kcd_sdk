@@ -3,22 +3,9 @@ import { describe, expect, it, vi } from 'vitest';
 import { McpServer } from '../McpServer';
 
 /**
- * CONTAINMENT OF A MALFORMED FRAME — note 87, item two.
- *
- * `handleLine` is the handler that exists to contain a bad line, and until 2026-10-04 one shape of
- * bad line walked straight past it: `null` is valid JSON, so it parsed cleanly and then threw a
- * TypeError on the first property read — `typeof msg.method` — which sat ABOVE the try. `connect`
- * fires `handleLine` with `void`, so that throw became an unhandled rejection, and an unhandled
- * rejection is a process fault under Node's default. One peer writing one junk line could take a
- * shipped plugin server down.
- *
- * WHAT IS PINNED HERE IS THE CONTAINMENT, not the wording: the promise RESOLVES, and a JSON-RPC
- * error frame goes out on stdout instead.
- *
- * THE TWIN. `starmind_dev/src/mcp/McpServer.ts` is a deliberate hand-maintained copy of the module
- * under test, and this defect was present in both. Both were fixed by hand, and the matching test
- * lives at `starmind_dev/src/__tests__/frame.test.ts`. Keep them in step by hand too — the whole
- * reason the copy exists is that the abstraction which would avoid it costs more than it saves.
+ * `handleLine` contains a malformed frame: the promise RESOLVES and a JSON-RPC error frame goes out on
+ * stdout. `starmind_dev/src/mcp/McpServer.ts` is a deliberate hand-maintained twin of this module; keep
+ * the two in step by hand (the matching test is `starmind_dev/src/__tests__/frame.test.ts`).
  */
 
 /** Drive one line through the private handler and collect every frame it wrote to stdout.
@@ -52,7 +39,7 @@ describe( 'handleLine — a frame that is not an object', () => {
 	const PARSE_ERROR     = -32700;
 
 	it( 'contains a bare `null` rather than throwing out of the handler', async () => {
-		// THE EXACT FRAME THAT USED TO ESCAPE. Valid JSON, parses to `null`, and `null.method` throws.
+		// Valid JSON that parses to `null`: `null.method` throws, so this is the case the containment guards.
 		const frames = await feed( 'null' );
 
 		expect( frames ).toHaveLength( 1 );
@@ -60,19 +47,15 @@ describe( 'handleLine — a frame that is not an object', () => {
 	} );
 
 	it( 'contains a bare number, string, boolean and array without replying to any of them', async () => {
-		// THESE DO NOT THROW — `(7).method` is undefined, not an error — so they take the
-		// missing-method path and, carrying no id, are owed no reply. The containment assertion is
-		// inside `feed`: the promise resolves. What is pinned HERE is that the silence is deliberate
-		// and total, so a later reader does not mistake a missing answer for a swallowed throw.
+		// These do not throw: `(7).method` is undefined. They take the missing-method path and, with no id,
+		// are owed no reply. Pinned so the silence reads as deliberate, not as a swallowed throw.
 		for ( const line of [ '7', '"x"', 'true', '[]' ] ) {
 			expect( await feed( line ), line ).toEqual( [] );
 		}
 	} );
 
 	it( 'still answers a genuinely unparseable line with a parse error', async () => {
-		// FENCE: widening the try must not have swallowed the parse lane into the new catch. The two
-		// failures are owed two different codes, and conflating them would make a truncated line
-		// indistinguishable from a well-formed non-request.
+		// FENCE: a parse failure and a non-request are owed different codes, so a truncated line stays distinct.
 		const frames = await feed( '{ not json' );
 
 		expect( frames ).toHaveLength( 1 );

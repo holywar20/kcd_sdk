@@ -5,18 +5,9 @@ import { join } from 'path';
 import { Vault } from '../Vault';
 
 /**
- * TASK-520 — `move_doc` repairs frontmatter IDENTITY references on rename, not just inbound links.
- *
- * `move` already heals an `<a href>`/`data-kcd-address` pointing AT the moved document. What it did
- * not touch is a `base`/`lens`/`origin` slug NAMING it — the exact gap that defeated the 2026-09-25
- * lens realignment's own rename-then-delete guard and left ~180 dead `lens:` references behind,
- * because the frontmatter `name` was hand-edited and nothing propagated the change.
- *
- * The signal this suite exercises: a move whose destination basename differs from the moved
- * document's CURRENT `name` is a rename of identity, by the one-per-type anatomy every typed
- * artifact already follows ( `lenses/{name}/{name}.html` and its siblings ). `Vault.IDENTITY_FIELDS`
- * — derived from `KcdValidate.FRONTMATTER`'s own slug-typed fields, not hand-listed — is `base`,
- * `lens` and `origin`.
+ * A move whose destination basename differs from the document's current `name` is a rename of identity.
+ * `move` then repairs every `base`, `lens` and `origin` slug naming it. Those fields come from
+ * `KcdValidate.FRONTMATTER`, not a hand-written list.
  */
 
 let root = '';
@@ -58,9 +49,7 @@ beforeEach( () => {
 	writeFileSync( join( root, '_kcd', 'lenses', 'render', 'render.html' ), lensDoc( 'render' ) );
 	writeFileSync( join( root, '_kcd', 'references', 'dependent.html' ),
 		refDoc( 'dependent', 'render', 'render' ) );
-	// A NEAR-MISS dependent, naming a slug that merely RESEMBLES the one being renamed — must survive
-	// untouched. Carries its own `lens`/`base` so the negative proves the repair, not merely its
-	// absence.
+	// A near-miss slug must survive the rename untouched, which proves the repair rather than its absence.
 	writeFileSync( join( root, '_kcd', 'references', 'near-miss.html' ),
 		refDoc( 'near-miss', 'render-old', 'render-old' ) );
 } );
@@ -94,40 +83,23 @@ describe( 'Vault.move — identity repair on rename', () => {
 	} );
 
 	/**
-	 * THE 2026-09-25 FAILURE, PINNED — the half the repair exists to prevent, asserted from the guard's
-	 * side rather than from the repair's.
-	 *
-	 * The sequence that got through was rename-then-delete. `identityDependents` reads the target's OWN
-	 * `name` off disk and looks for documents naming it, so after a rename the guard asks about the NEW
-	 * slug — and before `move` propagated the rename, nobody held the new slug. Every wearer still said
-	 * `render`, the guard asked who says `front-end`, found nobody, and allowed the delete. Roughly 180
-	 * references were orphaned by a guard that was working exactly as written.
-	 *
-	 * So the guard was never the defect and relaxing it would have been the wrong repair. What was
-	 * missing is that the two halves disagreed about WHEN the name changed. Now the rename propagates,
-	 * the dependents name the new slug by the time the guard runs, and the delete is refused.
-	 *
-	 * The near-miss case rides along deliberately: a guard that blocked on anything at all would also
-	 * pass the first assertion, so the one that proves it is answering the real question is the document
-	 * it must NOT name.
+	 * The guard reads the target's name, so a rename must propagate before it runs. The near-miss assertion
+	 * stops it refusing everything, which would pass the first check and be useless.
 	 */
 	it( 'no longer reports the renamed target as unreferenced, so the rename-then-delete is refused', () => {
 		const vault = new Vault( root, '_kcd' );
 
 		vault.move( 'lenses/render/render.html', 'lenses/front-end/front-end.html' );
 
-		// THE ASSERTION THAT WOULD HAVE CAUGHT IT. Asked about the renamed document, the guard now finds
-		// the dependent — under the new slug, which it did not hold before the move propagated it.
+		// Asked about the renamed document, the guard finds the dependent under its new slug.
 		const dependents = vault.identityDependents(
 			join( root, '_kcd', 'lenses', 'front-end', 'front-end.html' )
 		);
 		expect( dependents.some( ( p ) => p.includes( 'dependent' ) ) ).toBe( true );
-		// …and NOT the near-miss, whose `render-old` neither was nor became this document's name. A guard
-		// that blocks on everything blocks on this one too, and would be useless rather than safe.
+		// …and not the near-miss, whose slug is not this document's name.
 		expect( dependents.some( ( p ) => p.includes( 'near-miss' ) ) ).toBe( false );
 
-		// The delete the realignment got away with. It is refused now, and the refusal names who holds the
-		// reference — which is the whole of what the caller needs to repoint them.
+		// The refusal names who holds the reference, which is what a caller needs to repoint them.
 		expect( () => vault.delete( 'lenses/front-end/front-end.html' ) )
 			.toThrow( /reference it by identity/ );
 		expect( () => vault.delete( 'lenses/front-end/front-end.html' ) ).toThrow( /dependent/ );

@@ -9,14 +9,8 @@ import type { ToolDef } from '../ToolDef';
  * `Agent.wireSystem` — the system half an agent puts on the wire, pinned byte-for-byte.
  *
  * A CHARACTERIZATION test, not a specification: it asserts nothing about what the string SHOULD say, only
- * that it does not change. Its job is the one-assembly refactor, which makes `compiledContext()` TOTAL —
- * the layers today joined outside it become blocks inside it. A pure refactor leaves these snapshots
- * untouched; anything else is a behaviour change wearing a refactor's clothes.
- *
- * This is the INNER half of the gate. Its twin in starmind pins the outer join through a real dispatch;
- * this one pins block order, text and pricing, because here every layer binds directly rather than
- * arriving through a model descriptor and a routed database — so memory and the tool
- * surface can both carry real content instead of collapsing to empty.
+ * that it does not change. Its twin in starmind pins the outer join through a real dispatch; this one pins
+ * block order, text and pricing, with every layer bound directly so each carries real content.
  */
 
 const LENS_HTML = `<!DOCTYPE html>
@@ -46,20 +40,13 @@ const LENS_HTML = `<!DOCTYPE html>
 /** Two tools from one server, so the manifest's per-server grouping renders rather than falling into
  *  the unnamed fallback bucket. One rides `on` ( a manifest line ), one `load` ( a full schema ). */
 const TOOLS: ToolDef[] = [
-	// IDENTITIES ARE REQUIRED NOW. A def with no `group.tool` is not held — allowances key on it, and
-	// admitting one because it lacks the field everything else is keyed by would make missing metadata a
-	// way in. The fixture stamps them the way the priced serve seam does.
+	// A def with no identity is not held: admitting one for lacking the field would make missing metadata a way in.
+	// The fixture stamps identities the way the priced serve seam does.
 	{ id: 'srv.probe',  name: 'probe',  description: 'Look at a thing.', inputSchema: { type: 'object' }, server: { id: 'srv', name: 'Fixture server', doc: 'A fixture server.' } },
 	{ id: 'srv.commit', name: 'commit', description: 'Change a thing.',  inputSchema: { type: 'object' }, server: { id: 'srv', name: 'Fixture server', doc: 'A fixture server.' } }
 ];
 
-/**
- * An agent with EVERY system layer populated, each carrying distinct, greppable prose.
- *
- * The population is the whole point. A snapshot taken over an agent whose layers are empty would pass
- * through any reordering at all — it would prove the refactor changed nothing about nothing. Every layer
- * that can move has to be present and identifiable for the diff to mean anything.
- */
+/** An agent with every system layer populated, each with distinct greppable prose: a snapshot over empty layers would pass any reordering at all. */
 function fullAgent(): Agent {
 	const lens  = KCDPrimitive.fromHtml( LENS_HTML, '/vault/_Claude/lenses/baseline/baseline.html' , '_Claude') as LensObject;
 	const agent = Agent.create( {
@@ -74,17 +61,13 @@ function fullAgent(): Agent {
 	agent.bindEnv( {
 		hostPrompt:  'The host environment preamble.',
 		toolDefs:    TOOLS,
-		// THE SEARCH TOOL'S NAME, bound as the host binds it, so the manifest's note names the mechanism the
-		// wire carries rather than the mechanism-free form an unhosted agent falls back to ( bug-report-9 ).
+		// The search tool's name, bound as the host binds it, so the manifest note names the mechanism the wire
+		// carries rather than the mechanism-free form an unhosted agent falls back to.
 		searchTool:  'tool_search',
-		// ONE CONTRIBUTOR, declaring the memory band for itself. The fixture used to bind `memory` +
-		// `memoryTags` — a contributor compiled in by name — and the tag-vocabulary constant that headed the
-		// band went with the memory module. A contributor composes its own text now.
+		// One contributor declares the memory band itself: a contributor composes its own text.
 		contributions: [ { id: 'semantic_memory', heading: 'Memory', text: 'A remembered thing.' } ],
 		attachments: 'Attached: notes.md',
-		// STRUCTURED, like every other manifest section's rows. This fixture passed a composed string, and
-		// the expected wire below therefore showed `## Grants` with nothing under it — the bug, pinned as
-		// correct. A row is what survives the merge; a string was silently dropped by it.
+		// Structured rows, like every other manifest section: a composed string is silently dropped by the merge.
 		grants:      [ { what: 'file', where: '/vault/notes.md', why: 'granted by the user for this session' } ]
 	} );
 	return agent;
@@ -92,10 +75,6 @@ function fullAgent(): Agent {
 
 describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 
-	/** Re-pinned 2026-09-15 for two deliberate changes to the tool manifest: the calling rule ( wire names,
-	 *  2026-09-13 ) and the note naming the search tool the host bound ( bug-report-9 ). The agent's name
-	 *  block landed the same day on another machine, and the two were pinned together at the merge. Re-pinned
-	 *  2026-09-22 for the flat lens: a lens's Purpose is its Personality now ( plan agents-own-behaviour ). */
 	it( 'pins the assembled system half byte-for-byte', () => {
 		expect( fullAgent().wireSystem() ).toMatchInlineSnapshot(`
 			"The host environment preamble.
@@ -207,16 +186,9 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 } );
 
 /**
- * The environment layer — what the host says about the INSTALLATION an agent is running in.
- *
- * Its own describe, on an agent that binds it, because `fullAgent` deliberately does not: the snapshots above
- * are a characterization of the layers that existed before this one, and adding a block to that fixture would
- * have re-pinned every one of them to prove a new layer works.
- *
- * WHAT IS WORTH HOLDING is the POSITION and the PRICING, not the text — the text is the host's, composed
- * main-side in starmind, and this side only carries it. A layer that quietly sorted into the lens band would
- * be charged to the wrong bucket in the gauge and read as lens identity in the breakdown, which are both
- * silent failures: everything still renders, and the numbers are wrong.
+ * The environment layer, on an agent that binds it: `fullAgent` deliberately does not, so the snapshots above
+ * keep characterizing the layers that existed before this one. What is held here is the POSITION and the
+ * PRICING, not the text: a layer sorted into the lens band is charged to the wrong bucket and read as lens identity.
  */
 describe( 'Agent — the environment layer', () => {
 
@@ -265,16 +237,10 @@ describe( 'Agent — the environment layer', () => {
 /**
  * THE SKILL SPINE — an attached skill's name and description, in the context the agent is actually sent.
  *
- * Its own describe, on an agent that binds the layer, for the reason the environment layer above has one:
- * the snapshots are a characterization of the layers that existed before this one, and adding a block to
- * `fullAgent` would re-pin all of them to prove a new layer works. `fullAgent` binding no skills is also the
- * assertion that an agent with none is byte-identical to one compiled before this layer existed.
- *
- * WHAT IS WORTH HOLDING HERE is the POSITION, the PRICING and the WHOLENESS of the description. The text is
- * a third party's, resolved main-side off the library, and this side only carries it — but it carries it
- * WHOLE, because the description is the field a model matches a task against and a clipped one is a skill
- * that silently stops firing. The live end-to-end claim ( the string in the bytes a real turn sent ) is
- * pinned in starmind's own `SkillSpineOnTheWire` suite; this is the block-level half of the same gate.
+ * Its own describe, as the environment layer has: `fullAgent` binds no skills, so an agent with none stays
+ * byte-identical to one compiled before this layer existed. What is held is the POSITION, the PRICING and the
+ * WHOLENESS of the description: a clipped description is a skill that silently stops firing.
+ * The live claim is pinned in starmind's SkillSpineOnTheWire suite.
  */
 describe( 'Agent.skillSpine — the attached-skill label', () => {
 
@@ -336,14 +302,10 @@ describe( 'Agent.skillSpine — the attached-skill label', () => {
 		const after  = agent.compiledBudget();
 
 		expect( Agent.bucketOf( agent.compiledContext().find( b => b.section === 'skills' )! ) ).toBe( 'tools' );
-		// The label's own weight lands on TOOLS. The description alone is around seventeen tokens, so a
-		// bucket that moved by less than ten would mean the block had been charged somewhere else.
+		// The label's own weight lands on TOOLS: a move of less than ten would mean the block was charged elsewhere.
 		expect( after.tools - before.tools ).toBeGreaterThan( 10 );
-		// THE LENS BAND MOVES BY ONE DIVIDER AND NOTHING ELSE — a pre-existing property of `bucketOf` rather
-		// than this layer's doing: a structural block carries no `section`, and every sectionless block
-		// prices as `lenses`. So adding any block to the `after` bracket shifts this bucket by the one `---`
-		// that introduces it. Pinned as a BOUND rather than as equality, because the claim worth failing on
-		// is that no lens CONTENT was recharged, and an equality here fails on the divider instead.
+		// The lens band moves by one divider (a pre-existing `bucketOf` property: sectionless blocks price as lenses),
+		// so it is bounded, not equal. The claim that matters is that no lens CONTENT was recharged.
 		expect( after.lenses - before.lenses ).toBeLessThanOrEqual( 2 );
 	} );
 
@@ -367,13 +329,8 @@ describe( 'Agent.skillSpine — the attached-skill label', () => {
 } );
 
 /**
- * The per-source breakdown, held to being a PROJECTION of the wire rather than a second account of it.
- *
- * The first test here is the real gate, and it is an invariant rather than a snapshot: a snapshot can be
- * satisfied by a breakdown that silently drops a block, and dropping blocks is exactly how the old
- * hand-built version came to omit the tool manifest, the routing tables and the attachments. Joining the
- * segments has to reproduce the wire byte for byte — which is only possible if every block reaches
- * exactly one segment.
+ * The per-source breakdown, held to being a PROJECTION of the wire. The invariant is the gate, not the snapshot:
+ * a snapshot can pass a breakdown that silently drops a block, so joining the segments must reproduce the wire.
  */
 describe( 'Agent.contextSegments — the breakdown is the wire, decomposed', () => {
 
@@ -432,17 +389,10 @@ describe( 'Agent.contextSegments — the breakdown is the wire, decomposed', () 
 } );
 
 /**
- * The SLUG — a one-line description of what an agent is for, written by a third party FOR a third party.
- *
- * THE DELIVERABLE HERE IS THE INVISIBILITY TEST, not the field. A field that is supposed to be invisible
- * needs a check that fails the moment it becomes visible, or the invariant is quietly broken by the next
- * person to add a context block and nobody finds out until an agent is reading its own performance review.
- * The sentinel is deliberately unlike anything else the compile emits, so a match is a match and not a
- * coincidence, and it is checked against BOTH doors an agent's context leaves by — the assembled wire and
- * every block of the structured form, since a block can carry text the wire has not joined yet.
- *
- * It lives in this file because this is where the wire is pinned. The snapshots above are the other half of
- * the same gate: a slug folded into a context block would break one of them too. This one says WHY.
+ * The slug is held by the record and never shown to the agent: an invisible field needs a check that fails the
+ * moment it becomes visible. The sentinel is unlike anything the compile emits, and it is checked against both
+ * doors an agent's context leaves by: the assembled wire and every structured block, which can carry text the
+ * wire has not joined yet.
  */
 describe( 'Agent.slug — held by the record, never shown to the agent', () => {
 
@@ -550,17 +500,9 @@ describe( 'Agent.slug — held by the record, never shown to the agent', () => {
 } );
 
 /**
- * The REASONING DEFAULT — the effort and mode a session spawned under this agent is born on.
- *
- * It sits beside the slug for the reason it follows the slug's discipline: persisted on the record, crossing
- * the wire, null when unset, nothing synthesized, normalized once through the accessor — and NOT shown to the
- * agent. The invisibility half matters slightly less here than it does for the slug ( nobody is told they are
- * less capable ) and is pinned anyway, because the field is a fact ABOUT the agent that the agent has no use
- * for, and an unasserted invariant is one the next context block quietly breaks.
- *
- * The TRAP this file's cases do NOT cover is the clamp against a model's declared stops. That needs a model
- * descriptor, which the record has no business resolving — it lives in `clampReasoningEffort` and is driven
- * from the session-creation path, where the suite can hand it a real descriptor.
+ * The REASONING DEFAULT — the effort and mode a session spawned under this agent is born on. Persisted and
+ * wired like the slug, and NOT shown to the agent. The clamp against a model's declared stops is not tested
+ * here: it needs a model descriptor, and lives in `clampReasoningEffort`.
  */
 describe( 'Agent.reasoning — a default a session inherits, not a fact the agent reads', () => {
 
@@ -573,8 +515,7 @@ describe( 'Agent.reasoning — a default a session inherits, not a fact the agen
 	it( 'is absent by default, and NULL does not mean medium', () => {
 		const bare = Agent.create( { name: 'Lincoln', model: 'test.lorem' } );
 
-		// The whole reason the field exists: `medium` was being asserted on every agent's behalf by a
-		// fallback, and "no default was stated" is a different fact that only null can hold.
+		// `medium` was asserted on every agent's behalf by a fallback; only null can say "no default was stated".
 		expect( bare.reasoning ).toBeNull();
 		expect( bare.serializeForWire().reasoning ).toBeNull();
 		expect( Agent.fromSerialized( bare.serializeForWire() ).reasoning ).toBeNull();
@@ -596,9 +537,7 @@ describe( 'Agent.reasoning — a default a session inherits, not a fact the agen
 	it( 'REFUSES a stop that is not on the roster, rather than guessing which one was meant', () => {
 		const agent = fullAgent();
 
-		// Refused rather than repaired — the opposite of the slug's clamp, because a slug that is too long
-		// still says what it meant and an effort off-roster means nothing at all. Guessing would invent a
-		// default, which is exactly the assertion this field exists to stop.
+		// Refused, not clamped: an off-roster effort means nothing, and guessing one would invent a default.
 		agent.reasoning = { effort: 'turbo', mode: 'chain' } as never;
 		expect( agent.reasoning ).toBeNull();
 

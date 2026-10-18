@@ -8,14 +8,11 @@ import { loadLensFromDisk } from '../../node/io';
 import { KCDPrimitive } from '../../primitives/framework/KCDPrimitive';
 
 /**
- * The agent compiler ( plan agents-own-behaviour, task 55 ) — lenses in stack order and none of them leading,
- * loaded habits in full, the rest as their why, the tools described, and no inheritance walked.
+ * The agent compiler: lenses in stack order and none of them leading, loaded habits in full, the rest as
+ * their why, the tools described, and no inheritance walked.
  *
- * NO PRIMARY, SINCE 2026-09-26. The first lens used to contribute its whole Care as the agent's persona while
- * every later one contributed only its philosophy. Personality is authored on the AGENT now ( `systemPrompt` ),
- * so every lens contributes the same thing: its philosophy, its Know tables and the references it loads. The
- * cases below are the ones that pin that — in particular that a lens's personality section reaches the text
- * from NO position, first included.
+ * No lens is primary. Personality is authored on the agent (`systemPrompt`), so every lens contributes only its
+ * philosophy, Know tables and loaded references; a lens's personality section reaches the text from no position.
  */
 
 let root = '';
@@ -101,14 +98,14 @@ describe( 'AgentCompiler', () => {
 		expect( text ).toContain( 'Alpha reference body.' );
 		expect( text ).toContain( 'Beta reference body.' );
 
-		// The heading carries no rank, and the order line no longer appoints one.
+		// Nothing ranks the lenses: no rank on the heading, none on the order line.
 		expect( text ).not.toContain( '— primary' );
 		expect( text ).not.toContain( 'overrules the others' );
 	} );
 
 	/**
-	 * EVERY LENS BRINGS ITS PHILOSOPHY AND ONLY ITS PHILOSOPHY. Several at once is the point rather than a
-	 * collision: the agent holds the competing prerogatives and does the weighing ( Bryan, 2026-09-26 ).
+	 * Every lens brings its philosophy and only its philosophy. Several at once is the point, not a collision:
+	 * the agent does the weighing.
 	 */
 	it( 'takes the philosophy from every lens, and the personality from none of them', () => {
 		const { text } = compile();
@@ -140,10 +137,8 @@ describe( 'AgentCompiler', () => {
 	} );
 
 	/**
-	 * NO NAME IS A REAL INPUT, NOT A MISSING FIELD ( TASK-440 ). A bare lens stack has no agent behind it
-	 * since the substrate was removed, so "You are …" has no subject: the clause is DROPPED rather than
-	 * filled with an empty string, which is what `You are , wearing alpha.` would have been. Everything the
-	 * lenses themselves bring is unaffected — what a lens says does not depend on who is wearing it.
+	 * No name is a real input, not a missing field: the "You are …" clause is dropped rather than filled with an
+	 * empty string. What the lenses bring does not depend on who is wearing them.
 	 */
 	it( 'names nobody when there is no agent, and still carries the lenses', () => {
 		const one = AgentCompiler.compile( { habits: [], tools: [], lenses: [ lens( '_Claude/lenses/alpha/alpha.html' ) ] } ).text;
@@ -162,9 +157,7 @@ describe( 'AgentCompiler', () => {
 		expect( two ).toContain( 'that tension is' );
 	} );
 
-	/** AND AN EMPTY EVERYTHING COMPILES TO NOTHING, which is the result the no-substrate ruling rests on
-	 *  ( Bryan, 2026-10-06 ): "A blank lens is valid - it compiles to nothing." Not an error, not a
-	 *  placeholder, and not a sentence announcing the absence. */
+	/** An empty input compiles to empty text — not an error, not a placeholder, and not a sentence announcing the absence. */
 	it( 'compiles an empty input to empty text', () => {
 		const c = AgentCompiler.compile( { lenses: [], habits: [], tools: [] } );
 		expect( c.text ).toBe( '' );
@@ -231,19 +224,11 @@ describe( 'AgentCompiler', () => {
 	} );
 
 	/**
-	 * CONTRACTS ARE THE PROJECT'S ( planned under agents-own-behaviour, task 75 ). Every agent holds all of them,
-	 * which is why there is no mode and nothing to author — and why the section appears whether or not the
-	 * agent carries a lens. The roster is derived from `contracts/`, so this pins the shape, not the list.
+	 * Every agent holds all project contracts, so there is no mode to author. The roster is derived from
+	 * `contracts/`: this pins the shape, not the list.
 	 */
 	it( 'rides the project\'s contracts, each with the trigger it fires on', () => {
-		/*
-		 * THE SECOND FIXTURE WAS `plan` UNTIL 2026-10-14, and it is renamed rather than left alone because a
-		 * fixture is read as an example. The plan contract was retired and the word `plan` now means ONE thing
-		 * in this codebase — the planning system, with its own studio, store and tools. An agent or a person
-		 * reading a contract called `plan` here would go looking for a document that no longer exists, which is
-		 * exactly the confusion the retirement was meant to end. Two fixtures, because the point is the SHAPE
-		 * and the per-contract trigger line; which two is arbitrary, and now deliberately neutral.
-		 */
+		/* Neutral names: `plan` now means the planning system, so a contract by that name would point at nothing. */
 		const { text, contracts } = AgentCompiler.compile( { name: 'T', lenses: [], habits: [], tools: [], contracts: [
 			{ name: 'close',      path: 'contracts/close.html',      when: 'a task or group of tasks is done' },
 			{ name: 'bug-report', path: 'contracts/bug-report.html', when: 'a real defect needs investigation' }
@@ -274,9 +259,8 @@ describe( 'AgentCompiler', () => {
 	} );
 
 	/**
-	 * THE SPINE LABEL ( plan 22, TASK-318 ) — an attached skill's name and WHOLE description, and nothing
-	 * else: no body, no frontmatter, no path. This compiler never resolves a slug — it is handed the two
-	 * strings already resolved, which is why these cases pass `skills` directly rather than a slug.
+	 * An attached skill's name and WHOLE description, and nothing else: no body, no frontmatter, no path.
+	 * The compiler never resolves a slug, so these cases pass `skills` directly.
 	 */
 	it( 'compiles an attached skill\'s name and whole description, and nothing else', () => {
 		const { text, skills } = AgentCompiler.compile( { name: 'T', lenses: [], habits: [], tools: [],

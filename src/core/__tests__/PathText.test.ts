@@ -4,14 +4,9 @@ import * as path from 'path';
 import { PathText } from '../PathText';
 
 /**
- * Path arithmetic on text — the module that let `LensObject` stop importing Node's `path` ( bug-report-13 ).
- *
- * The property that matters is the MIRROR: for the shapes the SDK actually produces, an absolute root and
- * a vault-relative href, or two absolute paths, this answers byte for byte what Node's own `path.win32`
- * and `path.posix` answer. The node layer compares the two ( `Vault.resolveHref` against `Vault.toAbs` ),
- * so a divergence would not throw; it would quietly break link healing and backlinks. Both of Node's
- * implementations are reachable from any platform, which is why the mirror cases name them explicitly
- * rather than reading off `path` for whichever machine runs the suite.
+ * Path arithmetic on text. For the shapes the SDK produces it must answer byte for byte what Node's
+ * `path.win32` and `path.posix` answer: the node layer compares the two, and a divergence would quietly
+ * break link healing rather than throw. Both are named explicitly, so the mirror holds on any platform.
  */
 describe( 'PathText', () => {
 

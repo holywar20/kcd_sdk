@@ -8,16 +8,9 @@ import type { ArtifactType } from '../../primitives/types'
 const PROJECT_ROOT = path.resolve( __dirname, '../../../..' )   // kcd_sdk/src/core/__tests__ → repo root
 
 /**
- * The seam between two closed sets that have no reason to agree unless something checks: the types a
- * document may DECLARE ( KcdAddress.TYPES ) and the types a directory will ACCEPT ( VaultLayout ).
- *
- * They drifted once already. `how-to` sat in the declarable set for months while the write path refused
- * it in the one folder named after it — legal to author, legal on disk, impossible to save. Nothing
- * caught it because no single file was wrong; only the pair was.
- *
- * HOMES is the fixture and the point. Every declarable type names the canonical path where it lives, so
- * adding a type to the vocabulary forces you to say where it goes — and a type with nowhere to land
- * fails here rather than failing an agent later.
+ * The seam between the types a document may DECLARE (KcdAddress.TYPES) and the types a directory ACCEPTS
+ * (VaultLayout). No single file is wrong when they drift, so only the pair catches it. HOMES names each type's
+ * canonical path, so a type with nowhere to land fails here rather than failing an agent later.
  */
 const HOMES: Record<string, string> = {
 	lens:        '_Claude/lenses/some-lens/some-lens.html',
@@ -57,10 +50,7 @@ describe( 'VaultLayout.accepts — the declarable/acceptable seam', () => {
 	it( 'the retired types are gone from the vocabulary, not merely unused', () => {
 		expect( KcdAddress.TYPES ).not.toContain( 'how-to' )
 		expect( KcdAddress.TYPES ).not.toContain( 'note' )
-		// `audit` joined them 2026-10-03 ( Bryan ): an audit produces a searchable note, not a document.
-		// Churchill proposed leaving the type standing and unused; this assertion is the overrule, and it is
-		// the reason the pair above exists — a type nothing declares still reads as authoritative to the next
-		// agent who finds it in the vocabulary.
+		// `audit` is retired too: a type nothing declares still reads as authoritative to the next agent.
 		expect( KcdAddress.TYPES ).not.toContain( 'audit' )
 	} )
 
@@ -95,12 +85,7 @@ describe( 'VaultLayout.accepts — the declarable/acceptable seam', () => {
 		expect( VaultLayout.acceptedTypes( '_Claude/references/domain/x.html' ) ).toEqual( [ 'reference' ] )
 	} )
 
-	/**
-	 * The one type whose home is a FILENAME rather than a folder. A nav-index is accepted anywhere under
-	 * that name and nowhere else — the name is what makes it one, so accepting it under another name would
-	 * mint a document no index will ever read as an index. Found by probing the real guard, not by unit
-	 * test: the first version of this suite asserted the canonical filename and missed the case entirely.
-	 */
+	/** A nav-index is a FILENAME, not a folder: accepted anywhere under that name, nowhere else. */
 	it( 'accepts a nav-index in any directory, under its own name', () => {
 		expect( VaultLayout.accepts( `_Claude/references/${ VaultLayout.NAV_INDEX_FILE }`, 'nav-index' ) ).toBe( true )
 		expect( VaultLayout.accepts( `_Claude/lenses/${ VaultLayout.NAV_INDEX_FILE }`, 'nav-index' ) ).toBe( true )
@@ -113,11 +98,7 @@ describe( 'VaultLayout.accepts — the declarable/acceptable seam', () => {
 	} )
 } )
 
-/**
- * The facade passes both entry points through one path normalisation, and the guard calls it with the
- * vault-relative form a tool received. Absolute and vault-relative must land on the same answer — that
- * conversion is the only logic the passthrough adds, so it is the only place it can be wrong.
- */
+/** Absolute and vault-relative forms must land on the same answer: normalisation is the only logic the passthrough adds. */
 describe( 'Vault.accepts — the currency the write guard actually calls', () => {
 
 	const vault = new Vault( PROJECT_ROOT, '_Claude' )

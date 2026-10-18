@@ -4,8 +4,7 @@ import { KcdEdit } from '../KcdEdit';
 import { KcdValidate } from '../KcdValidate';
 import { VaultLayout } from '../../VaultLayout';
 
-/** A document's stable id, written into its own frontmatter ( plan agents-own-behaviour, "Lens and habit ids
- *  live in their frontmatter" ). */
+/** A document's stable id, written into its own frontmatter: lens and habit ids live there. */
 
 const ID    = '0f8e2c4a-1b3d-4e5f-8a9b-0c1d2e3f4a5b';
 const OTHER = '9a8b7c6d-5e4f-4a3b-8c2d-1e0f9a8b7c6d';
