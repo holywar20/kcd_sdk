@@ -57,6 +57,17 @@ export interface SerializedSession {
 	zoom: number | null;
 	/** This session's chat-surface font family. Null → the render side's default ('sans'). */
 	fontFamily: FontFamilyKey | null;
+	/**
+	 * Does the house agent still own this session's name — TASK-753, plan 57. True until a human types a
+	 * title through the `rename` pull op, which locks it false; the automatic namer and the chapter-close
+	 * rename both refuse to write a title while it reads false. Clearing a title back to null through that
+	 * same pull op hands naming back to the house agent, so this is not a one-way lock, and pressing the
+	 * house-rename button leaves it true too — a person asking the resident agent to name the session is
+	 * the agent still owning the name, not a human-typed title.
+	 *
+	 * Absent on a payload serialized before this field existed, which reads as true: nothing has locked it yet.
+	 */
+	houseNames?: boolean;
 	/** The policies acting on this session's context. PERSISTED, unlike the transcript: reopening restores them.
 	 *  `Session.policiesFrom` is the one place the legacy bare-policy shape is understood. */
 	policies?: SessionPolicies;
@@ -94,6 +105,8 @@ export interface SessionOptions {
 	status?: SessionStatus;
 	zoom?: number | null;
 	fontFamily?: FontFamilyKey | null;
+	/** Omit for the default — true, the house agent owns a fresh session's name until a human locks it. */
+	houseNames?: boolean;
 	/** PARTIAL: every absent entry is filled from the defaults, so an opener need only name the policy it cares about. */
 	policies?: Partial<SessionPolicies>;
 	/** Why this session was opened — see `SessionBrief`. Absent for an ordinary chat. */
@@ -128,6 +141,8 @@ export class Session {
 	 *  user picks an agent. '' is the unassigned sentinel; hasAgent() is the readable check. */
 	agentId: string;
 	title: string | null;
+	/** See `SerializedSession.houseNames`. */
+	houseNames: boolean;
 	/** Grouping label — flat, one level. Null = ungrouped. */
 	folder: string | null;
 	tags: string[];
@@ -211,6 +226,7 @@ export class Session {
 		zoom: number | null,
 		fontFamily: FontFamilyKey | null,
 		policies: SessionPolicies,
+		houseNames: boolean,
 	) {
 		this.id         = id;
 		this.projectId  = projectId;
@@ -225,6 +241,7 @@ export class Session {
 		this.zoom       = zoom;
 		this.fontFamily = fontFamily;
 		this.policies   = policies;
+		this.houseNames = houseNames;
 	}
 
 	// ── Static entry points ──────────────────────────────────────────────────
@@ -249,6 +266,7 @@ export class Session {
 			opts.zoom ?? null,
 			opts.fontFamily ?? null,
 			Session.policiesFrom( opts.policies ),
+			opts.houseNames ?? true,
 		);
 		// Assigned rather than constructed, as `frame` is: both are layers a caller hangs on a session, not
 		// part of what a session IS.
@@ -272,6 +290,8 @@ export class Session {
 			json.zoom ?? null,
 			json.fontFamily ?? null,
 			Session.policiesFrom( json.policies ),
+			// Absent on a payload serialized before this field existed, which reads as true: nothing has locked it yet.
+			json.houseNames ?? true,
 		);
 		session.brief = json.brief ?? null;
 		// Absent on a row or payload written before the marker existed, which reads as never seen — exactly
@@ -372,6 +392,7 @@ export class Session {
 			status:     this.status,
 			zoom:          this.zoom,
 			fontFamily:    this.fontFamily,
+			houseNames:    this.houseNames,
 			policies:      this.policies,
 			brief:         this.brief,
 			turnStatus: this.turnStatus,
@@ -380,8 +401,13 @@ export class Session {
 
 	// ── Mutators ───────────────────────────────────────────────────────────────
 
-	/** Rename the session; null clears back to the derived title. */
+	/** Rename the session; null clears back to the derived title. Does not touch `houseNames` — the caller
+	 *  states what that should become ( see `SessionService.rename` ), since the same write means two
+	 *  different things depending on who asked for it. */
 	rename( title: string | null ): void { this.title = title; }
+
+	/** Set whether the house agent still owns this session's name — see `SerializedSession.houseNames`. */
+	setHouseNames( houseNames: boolean ): void { this.houseNames = houseNames; }
 
 	/** Bind ( or rebind ) this session to an agent — the draft-session assignment path. '' clears it
 	 *  back to unassigned. Mutates in place; the caller persists ( DB update_session_agent ). */
