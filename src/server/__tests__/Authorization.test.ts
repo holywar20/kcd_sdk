@@ -81,30 +81,33 @@ describe( 'the two lanes carry different things, on purpose', () => {
 		expect( Authorization.assertOnCall( [] ) ).toBeNull()
 	} )
 
-	// BROWSE ALL: in-process lane only, emitted only when true. Absent and false are one statement, so a call
-	// without it stays byte-identical.
+	// BROWSE ALL: in-process lane only, emitted only off its secure default 'off'. Absent and 'off' are one
+	// statement, so a call without it stays byte-identical.
 
-	it( 'carries Browse All only when it is on', () => {
-		expect( Authorization.assertOnCall( [], 'proj-1', undefined, undefined, undefined, true ) )
-			.toEqual( { starmind: { projectId: 'proj-1', browseAll: true } } )
-		expect( Authorization.assertOnCall( [], 'proj-1', undefined, undefined, undefined, false ) )
+	it( 'carries Browse All only when it is off its secure default', () => {
+		expect( Authorization.assertOnCall( [], 'proj-1', undefined, undefined, undefined, 'allow' ) )
+			.toEqual( { starmind: { projectId: 'proj-1', browseAll: 'allow' } } )
+		expect( Authorization.assertOnCall( [], 'proj-1', undefined, undefined, undefined, 'ask' ) )
+			.toEqual( { starmind: { projectId: 'proj-1', browseAll: 'ask' } } )
+		expect( Authorization.assertOnCall( [], 'proj-1', undefined, undefined, undefined, 'off' ) )
 			.toEqual( { starmind: { projectId: 'proj-1' } } )
 	} )
 
 	it( 'speaks up for Browse All alone, since it is something to say', () => {
-		expect( Authorization.assertOnCall( [], '', undefined, undefined, undefined, true ) )
-			.toEqual( { starmind: { browseAll: true } } )
+		expect( Authorization.assertOnCall( [], '', undefined, undefined, undefined, 'allow' ) )
+			.toEqual( { starmind: { browseAll: 'allow' } } )
 	} )
 
-	it( 'reads Browse All back as TRUE only for a literal true', () => {
-		expect( Authorization.browseAllOnCall( { starmind: { browseAll: true } } ) ).toBe( true )
+	it( 'reads Browse All back as a recognised policy word only', () => {
+		expect( Authorization.browseAllOnCall( { starmind: { browseAll: 'allow' } } ) ).toBe( 'allow' )
+		expect( Authorization.browseAllOnCall( { starmind: { browseAll: 'ask' } } ) ).toBe( 'ask' )
 		// Anything else is off, because the secure answer and the absent answer are the same value — there
 		// is no intent a bad value here could be hiding.
-		for ( const value of [ 'true', 1, {}, null, undefined ] ) {
-			expect( Authorization.browseAllOnCall( { starmind: { browseAll: value } } ) ).toBe( false );
+		for ( const value of [ 'true', true, 1, {}, null, undefined ] ) {
+			expect( Authorization.browseAllOnCall( { starmind: { browseAll: value } } ) ).toBe( 'off' );
 		}
-		expect( Authorization.browseAllOnCall( {} ) ).toBe( false );
-		expect( Authorization.browseAllOnCall() ).toBe( false );
+		expect( Authorization.browseAllOnCall( {} ) ).toBe( 'off' );
+		expect( Authorization.browseAllOnCall() ).toBe( 'off' );
 	} )
 
 	it( 'never leaks a project onto the spawn carrier, even with a real one in hand', () => {

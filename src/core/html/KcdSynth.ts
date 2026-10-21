@@ -108,6 +108,11 @@ const INLINE_OPEN = new RegExp( `^<(${ INLINE_NAMES })((?:\\s+[a-zA-Z-]+\\s*=\\s
 
 const INLINE_CLOSE = new RegExp( `^</(${ INLINE_NAMES })\\s*>`, 'i' );
 
+/** Any HTML-looking tag, open or close, allowlisted or not — used ONLY to NAME what the escaper is about to
+ *  refuse, for a warning. It decides nothing about what is kept; `INLINE_OPEN` / `INLINE_CLOSE` alone decide
+ *  that, earlier in the same scan. */
+const GENERIC_TAG = /^<\/?([a-zA-Z][a-zA-Z0-9]*)\b[^<>]*>/;
+
 /** One piece of a block mid-escape. `tag` is `''` for plain text; `html` is the canonical re-emission, built
  *  from the parsed parts rather than from `raw`, and used only once `keep` is set. */
 interface InlineToken {
@@ -243,6 +248,27 @@ export const KcdSynth = new class KcdSynth {
 		return out;
 	}
 
+	/**
+	 * Advisories on STRUCTURAL markup `proseToHtml` entity-escaped without saying so — the silent half of
+	 * BUG-74 ( filed as BUG-134 ). A `<table>` an author meant as real structure renders as literal angle
+	 * brackets and nothing downstream notices; this names what was lost, per section, so the author can
+	 * reach for the `body` path instead. Escaping itself is unchanged and still the default — this only
+	 * reports it. A section already authored as HTML, or carrying none of the inline allowlist's tags
+	 * either, produces no warning.
+	 */
+	escapedTagWarnings( input: SynthInput ): string[] {
+		const out: string[] = [];
+
+		for ( const [ name, text ] of Object.entries( input.sections ?? {} ) ) {
+			if ( !text ) continue;
+			const escaped = new Set<string>();
+			this.proseToHtml( text, escaped );
+			if ( escaped.size )
+				out.push( `section "${ name }": escaped ${ [ ...escaped ].map( t => `<${ t }>` ).join( ', ' ) } — a section needing structure must use the body path` );
+		}
+		return out;
+	}
+
 	/** The inline allowlist as an author is told it, in declaration order — what every description of this
 	 *  path renders, so no face writes the list out by hand. */
 	inlineTagList(): string[] {
@@ -320,7 +346,7 @@ export const KcdSynth = new class KcdSynth {
 
 	/** Plain text → paragraphs and `- ` lists; authored HTML passes through. Anything outside the inline
 	 *  allowlist is ESCAPED, so a stray `<` cannot open a tag. */
-	proseToHtml( text: string ): string {
+	proseToHtml( text: string, escaped?: Set<string> ): string {
 		// Comments come off BEFORE the markup test, so a block that merely opens with one is still
 		// recognized as authored HTML rather than escaped wholesale.
 		const trimmed = text.replace( COMMENT_SYNTAX, '' ).trim();
@@ -329,7 +355,7 @@ export const KcdSynth = new class KcdSynth {
 
 		return trimmed
 			.split( /\n\s*\n/ )
-			.map( block => this.blockToHtml( block.trim() ) )
+			.map( block => this.blockToHtml( block.trim(), escaped ) )
 			.filter( Boolean )
 			.join( '\n' );
 	}
@@ -337,15 +363,15 @@ export const KcdSynth = new class KcdSynth {
 	/** One paragraph-or-list block. Both paths escape through `escapeInline`, never one through it and the
 	 *  other not: where a run of prose happens to sit decided whether its markup survived, which is the
 	 *  defect ( BUG-74 ) rather than a feature of lists. */
-	blockToHtml( block: string ): string {
+	blockToHtml( block: string, escaped?: Set<string> ): string {
 		if ( !block ) return '';
 		const lines = block.split( '\n' ).map( l => l.trim() ).filter( Boolean );
 
 		if ( lines.length && lines.every( l => l.startsWith( '- ' ) ) ) {
-			const items = lines.map( l => `\t<li>${ this.escapeInline( l.slice( 2 ).trim() ) }</li>` ).join( '\n' );
+			const items = lines.map( l => `\t<li>${ this.escapeInline( l.slice( 2 ).trim(), escaped ) }</li>` ).join( '\n' );
 			return `<ul>\n${ items }\n</ul>`;
 		}
-		return `<p>${ this.escapeInline( lines.join( ' ' ) ) }</p>`;
+		return `<p>${ this.escapeInline( lines.join( ' ' ), escaped ) }</p>`;
 	}
 
 	/**
@@ -358,8 +384,8 @@ export const KcdSynth = new class KcdSynth {
 	 * only when it is paired, so the output is balanced BY CONSTRUCTION — an unclosed `<strong>` cannot
 	 * escape its paragraph and swallow the document's structure.
 	 */
-	escapeInline( text: string ): string {
-		const tokens = this.inlineTokens( text );
+	escapeInline( text: string, escaped?: Set<string> ): string {
+		const tokens = this.inlineTokens( text, escaped );
 		this.pairInline( tokens );
 		return tokens.map( t => t.keep ? t.html : HtmlTree.escapeText( t.raw ) ).join( '' );
 	}
@@ -367,7 +393,7 @@ export const KcdSynth = new class KcdSynth {
 	/** Split prose into text and candidate inline tags. A `<` that does not open an admitted tag is consumed
 	 *  as ONE character of text and scanning carries on from the next, so the remainder of a refused tag is
 	 *  escaped as the text it is rather than skipped. */
-	inlineTokens( text: string ): InlineToken[] {
+	inlineTokens( text: string, escaped?: Set<string> ): InlineToken[] {
 		const out: InlineToken[] = [];
 		let plain = '';
 		const flush = (): void => {
@@ -395,6 +421,13 @@ export const KcdSynth = new class KcdSynth {
 				out.push( { tag: open[ 1 ]!.toLowerCase(), open: true, raw: open[ 0 ], html, keep: false } );
 				i += open[ 0 ].length;
 				continue;
+			}
+
+			// Neither an admitted open nor close — what the escaper is about to refuse. Record the NAME for a
+			// warning only; the consumption below ( one character, unchanged ) is what decides the escaped output.
+			if ( escaped ) {
+				const generic = GENERIC_TAG.exec( rest );
+				if ( generic ) escaped.add( generic[ 1 ]!.toLowerCase() );
 			}
 
 			plain += text[ i ];

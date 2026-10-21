@@ -179,7 +179,7 @@ describe( 'Agent.wireSystem — the pre-refactor baseline', () => {
 			{
 			  "lenses": 128,
 			  "system": 28,
-			  "tools": 140,
+			  "tools": 254,
 			}
 		`);
 	} );

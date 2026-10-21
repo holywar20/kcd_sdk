@@ -6,7 +6,7 @@ import { NavIndex } from './NavIndex';
 import type { NavIndexResult } from './NavIndex';
 import { KCDPrimitive } from '../primitives';
 import type { SerializedArtifact } from '../primitives';
-import { KcdContext, KcdEmit, KcdValidate, KcdShapes, KcdSynth, VaultLayout } from '../core';
+import { KcdContext, KcdEdit, KcdEmit, KcdValidate, KcdShapes, KcdSynth, VaultLayout } from '../core';
 import type { ArtifactType, SynthInput } from '../core';
 import type { ToolResult } from '../server/McpServer';
 
@@ -228,20 +228,27 @@ export class VaultTools {
 
 			this.jail( filePath );
 
+			// Three ways in, one write: `content` is authored and its markup derived from the type's shape; `body` is the
+			// whole-document edit path; `section` replaces ONE named section and leaves the rest of the document alone.
+			// Supplying more than one is refused by name, not resolved by a precedence rule nobody can see.
+			const content    = raw[ 'content' ] as SynthInput | undefined;
+			const hasBody    = typeof raw[ 'body' ] === 'string' && ( raw[ 'body' ] as string ).trim() !== '';
+			const section    = raw[ 'section' ];
+			const hasSection = section !== undefined && section !== null;
+			const ways = [ content && 'content', hasBody && 'body', hasSection && 'section' ].filter( Boolean ) as string[];
+			if ( ways.length > 1 )
+				return VaultTools.error( `${ this.names.save } refused "${ filePath }": supply exactly one of "content" ( synthesized ), "body" ( whole-document passthrough ) or "section" ( single-section edit ) — this call carried ${ ways.join( ' + ' ) }.` );
+
+			// The section door reads the document fresh off disk and touches nothing else about it, so it needs
+			// neither `frontmatter` nor `type` from the caller — it branches out before either is required.
+			if ( hasSection ) return this.saveSection( filePath, section, create );
+
 			// The frontmatter object is checked before anything reads it: an absent one surfaced as an unnamed V8 error,
 			// and left `checkType` nothing to read.
 			const fm = raw[ 'frontmatter' ];
 			if ( !fm || typeof fm !== 'object' || Array.isArray( fm ) )
 				return VaultTools.error( `${ this.names.save } refused "${ filePath }": \`artifact.frontmatter\` must be an object of fields ( name, description, type, status … ), and this call carried ${ carried( fm ) }. ${ this.names.get } with \`full: true\` returns it beside \`body\` — send both.` );
 			this.checkType( filePath, raw );
-
-			// Two ways in, one write: `content` is authored and its markup derived from the type's shape; `body` is the
-			// edit path, where content must survive re-serialization through `HtmlTree`. Supplying both is refused,
-			// not resolved by a precedence rule nobody can see.
-			const content = raw[ 'content' ] as SynthInput | undefined;
-			const hasBody = typeof raw[ 'body' ] === 'string' && ( raw[ 'body' ] as string ).trim() !== '';
-			if ( content && hasBody )
-				return VaultTools.error( `${ this.names.save } refused "${ filePath }": supply either "content" ( synthesized ) or "body" ( passthrough ), not both.` );
 
 			// An absent body is a create with no content ( validation then rejects it with a helpful message,
 			// not a parse crash ).
@@ -269,6 +276,9 @@ export class VaultTools {
 				// Prose warnings ask whether what is inside the sections will read as intended; markdown markers emit
 				// as literal characters.
 				advisories.push( ...KcdSynth.proseWarnings( content ) );
+				// And structural markup the inline allowlist refused and entity-escaped silently ( BUG-134 ) —
+				// named here rather than left for a reader to discover on disk.
+				advisories.push( ...KcdSynth.escapedTagWarnings( content ) );
 			}
 
 			const artifact = { ...raw, body } as unknown as SerializedArtifact;
@@ -290,6 +300,68 @@ export class VaultTools {
 		} catch ( e ) {
 			if ( create && isExists( e ) )
 				return VaultTools.error( `${ this.names.save } refused "${ filePath }": it already exists, and \`create\` never replaces a document. Take another path — or omit \`create\` to overwrite this one on purpose.` );
+			return VaultTools.error( errorText( e ) );
+		}
+	}
+
+	/**
+	 * The point edit: replace ONE named section's prose and leave every other section, the frontmatter and the
+	 * head exactly as the document already has them. No KcdEmit rebuild — `KcdEdit.setSection` splices the one
+	 * section in place of re-synthesizing the whole body, which is what makes this cheaper than {{get}} ( full ) → mutate → {{save}}.
+	 * A section the document lacks is CREATED under `title`; an absent `title` on a missing section, or blank
+	 * `prose` on any section, is refused rather than silently doing the other thing.
+	 */
+	private saveSection( filePath: string, section: unknown, create: boolean ): ToolResult {
+		if ( create )
+			return VaultTools.error( `${ this.names.save } refused "${ filePath }": "section" edits a document that already exists; "create" files a new one — the two cannot be combined.` );
+		if ( typeof section !== 'object' || Array.isArray( section ) )
+			return VaultTools.error( `${ this.names.save } refused "${ filePath }": "artifact.section" must be an object { name, prose, title? }, and this call carried ${ carried( section ) }.` );
+
+		const { name, prose, title } = section as Record<string, unknown>;
+		const sectionName  = typeof name === 'string' ? name : '';
+		const sectionProse = typeof prose === 'string' ? prose : '';
+		const sectionTitle = typeof title === 'string' ? title : undefined;
+
+		if ( !sectionName )
+			return VaultTools.error( `${ this.names.save } refused "${ filePath }": "artifact.section.name" is required — the section to replace, e.g. "philosophy".` );
+		if ( !sectionProse.trim() )
+			return VaultTools.error( `${ this.names.save } refused "${ filePath }": "artifact.section.prose" is empty — a section with nothing in it will not save. This door replaces prose; removing a section is a different act and does not live here.` );
+
+		try {
+			const type  = this.vault.classify( filePath );
+			const shape = KcdShapes.shapeFor( type );
+			// A CLOSED type's section vocabulary is fixed ( today, only `lens` ): a stray name must fail loudly here,
+			// not be written and silently dropped by the compiler later.
+			if ( shape && !shape.open && !KcdShapes.orderFor( type ).includes( sectionName ) )
+				return VaultTools.error( `${ this.names.save } refused "${ filePath }": "${ type }" is a closed type — its sections are exactly ${ KcdShapes.orderFor( type ).map( s => `"${ s }"` ).join( ' | ' ) }; "${ sectionName }" is not one of them.` );
+
+			let existing: string;
+			try {
+				existing = this.vault.read( filePath );
+			} catch ( e ) {
+				if ( errorText( e ).includes( 'ENOENT' ) )
+					return VaultTools.error( `${ this.names.save } refused "${ filePath }": no document exists there to edit a section of. "section" edits an existing document; use "content" or "body" to create one.` );
+				throw e;
+			}
+
+			const already = KcdEdit.sectionProse( existing, sectionName );
+			if ( already === null && !sectionTitle )
+				return VaultTools.error( `${ this.names.save } refused "${ filePath }": it has no "${ sectionName }" section yet — supply "artifact.section.title" to create one under that heading.` );
+
+			const updated = KcdEdit.setSection( existing, sectionName, sectionProse, sectionTitle );
+			if ( updated === null )
+				return VaultTools.error( `${ this.names.save } refused "${ filePath }": "artifact.section.prose" could not be rendered into section content.` );
+
+			const report = KcdValidate.validate( updated, { path: filePath, docRoot: this.vault.docRoot } );
+			if ( !report.ok ) {
+				const detail = report.errors.map( e => `${ e.code } @ ${ e.where }: ${ e.msg }` ).join( '; ' );
+				return VaultTools.error( `${ this.names.save } refused "${ filePath }": section edit failed validation — ${ detail }` );
+			}
+
+			const saved   = this.vault.write( filePath, updated, { exclusive: false } );
+			const indexed = this.wrote( [ this.vault.toAbs( filePath ) ] );
+			return VaultTools.result( { saved, warnings: report.warnings, ...VaultTools.indexed( indexed ) } );
+		} catch ( e ) {
 			return VaultTools.error( errorText( e ) );
 		}
 	}
@@ -697,20 +769,39 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 			'writes NOTHING ( the write-time gate — can\'t save a malformed artifact ). On success it writes and ' +
 			'returns `{ saved, warnings }`. PathGuard jails the path and checks the target directory ACCEPTS the ' +
 			'declared type — a refusal names the accepted set, so the fix is in the error. ' +
-			'TWO WAYS IN, exactly one per call. Pass `artifact.content` to AUTHOR: give sections as prose ' +
+			'THREE WAYS IN, exactly one per call. Pass `artifact.content` to AUTHOR: give sections as prose ' +
 			'( plus rows for the record-bearing ones ) and the structure — section order, nesting, heading ' +
 			'levels, faux-tables, the whole data-kcd grammar — is DERIVED from that type\'s declared shape, so ' +
 			'you supply content and never STRUCTURAL markup — a small closed set of inline tags is honoured ' +
-			'inside a section, and `content.sections` names it. Pass `artifact.body` instead to EDIT, where existing ' +
-			'structured HTML is kept — content, structure and attributes ' +
+			'inside a section, and `content.sections` names it. Pass `artifact.body` instead to EDIT THE WHOLE ' +
+			'DOCUMENT, where existing structured HTML is kept — content, structure and attributes ' +
 			'survive, while indentation and line breaks are NORMALIZED to house format, so expect the ' +
-			'file you get back to be formatted rather than byte-identical to what you sent. Supplying both is ' +
-			'refused rather than resolved by precedence. Pass `create: true` to FILE a new document: the write ' +
-			'then refuses a `path` that already holds one, at the open itself, so two filers racing for one ' +
-			'name cannot both land. Content mode also returns advisories naming any ' +
-			'required or expected section left out, and — on a closed type — any section the compiler will not ' +
-			'read. NOTE: agent-authored body HTML is not yet sanitized here ( the render layer sanitizes on ' +
-			'display; a save-time sanitize pass is a named deferral ).',
+			'file you get back to be formatted rather than byte-identical to what you sent. Pass `artifact.section` ' +
+			'instead to edit ONE named section and leave everything else — every other section, the frontmatter, ' +
+			'the head — exactly as it already is; it needs neither `artifact.type` nor `artifact.frontmatter`, ' +
+			'since it reads the document fresh off disk and never rebuilds it. A section the document does not yet ' +
+			'carry is CREATED under `artifact.section.title`; a missing `title` on a missing section, or blank ' +
+			'`artifact.section.prose` on any section, is refused rather than silently doing the other thing — ' +
+			'this door replaces prose, and removing a section is a different act that does not live here. ' +
+			'ON A LENS, the section vocabulary is CLOSED to personality | philosophy | references, and a stray ' +
+			'name is refused rather than written and quietly dropped by the compiler later: ' +
+			'PHILOSOPHY is what the lens defends, what it refuses, how it decides — prerogatives, push-back ' +
+			'language, and what the lens does NOT do; keep it tight, because EVERY stacked lens contributes its ' +
+			'philosophy again, in full, on every turn of every agent wearing it. PERSONALITY is stance and voice, ' +
+			'and only the PRIMARY lens in a stack contributes it — a non-primary lens may still carry one, but ' +
+			'nothing in a live turn reads it, so write it only on a lens you expect to lead a stack. REFERENCES ' +
+			'is the routing table, the one section that carries row `slots` rather than prose ( see {{get}} ' +
+			'with `full: true` for its current rows ) — `artifact.section` is prose-only and is not the door for ' +
+			'it. See `lens_anatomy` and `agent-authoring-rules` for the fuller doctrine behind this split; it is ' +
+			'cited rather than restated because this description is itself billed on every turn of every agent ' +
+			'holding this tool. Supplying more than one of `content` / `body` / `section` is refused by name, ' +
+			'naming which to use, and nothing is written. ' +
+			'Pass `create: true` to FILE a new document ( `content` or `body` only — `section` edits an existing ' +
+			'one and refuses alongside `create` ): the write then refuses a `path` that already holds one, at the ' +
+			'open itself, so two filers racing for one name cannot both land. Content mode also returns advisories ' +
+			'naming any required or expected section left out, and — on a closed type — any section the compiler ' +
+			'will not read. NOTE: agent-authored body HTML is not yet sanitized here ( the render layer sanitizes ' +
+			'on display; a save-time sanitize pass is a named deferral ).',
 		inputSchema: {
 			type:       'object',
 			properties: {
@@ -721,7 +812,17 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 					properties: {
 						type:        { type: 'string', description: 'Artifact type (lens, plan, habit, reference, …) — must match the target directory.' },
 						frontmatter: { type: 'object', additionalProperties: true, description: 'Frontmatter fields (name, description, status, …) — rebuilt into the HTML header block.' },
-						body:    { type: 'string', description: 'EDIT path — body HTML, no frontmatter block. Content, structure and attributes are preserved; whitespace is reformatted to house style, so the stored file will not be byte-identical to what you send. Use for an edit — and source it from {{get}} with `full: true`, since the default lean read carries no `body` at all. Mutually exclusive with `content`.' },
+						body:    { type: 'string', description: 'WHOLE-DOCUMENT EDIT path — body HTML, no frontmatter block. Content, structure and attributes are preserved; whitespace is reformatted to house style, so the stored file will not be byte-identical to what you send. Use for an edit — and source it from {{get}} with `full: true`, since the default lean read carries no `body` at all. Mutually exclusive with `content` and `section`.' },
+						section: {
+							type:        'object',
+							description: 'SINGLE-SECTION EDIT path — replace exactly one named section and leave every other section, the frontmatter and the head as they already are. Needs neither `type` nor `frontmatter` on this call: it reads the document fresh off disk. On a lens the section name is closed to personality | philosophy | references — personality is stance/voice and reaches a live turn ONLY from the primary lens in a stack; philosophy is what the lens defends/refuses/how it decides, and every stacked lens contributes it again on every turn, so keep it tight; references is the routing table and carries row `slots`, not prose, so it is not reachable through this door. See lens_anatomy / agent-authoring-rules for the fuller doctrine. Mutually exclusive with `content` and `body`.',
+							properties: {
+								name:  { type: 'string', description: 'The section to replace, e.g. "philosophy". Required.' },
+								prose: { type: 'string', description: 'The section\'s new prose, in the same plain-text-or-HTML form `content.sections` takes. Required, and refused if blank — this door replaces prose; it does not remove a section.' },
+								title: { type: 'string', description: 'The heading to create the section under, if the document does not already have one named `name`. Omitting `title` on a missing section is refused rather than silently doing nothing.' },
+							},
+							required: [ 'name', 'prose' ],
+						},
 						content: {
 							type:        'object',
 							description: 'AUTHORING path — supply CONTENT and the structure is derived from the type\'s shape (section order, nesting, headings, faux-tables). Mutually exclusive with `body`.',
@@ -760,9 +861,10 @@ const SPECS: Record<VaultToolOp, VaultToolSpec> = {
 							},
 						},
 					},
-					required: [ 'type', 'frontmatter' ],
+					// `type` and `frontmatter` are required for the `content` / `body` doors only — a `section`
+					// edit supplies neither, since it reads the document's own frontmatter and type off disk.
 				},
-				create: { type: 'boolean', description: 'FILE rather than edit: refuse, and write nothing, when `path` already holds a document. For a name another writer may take first. Omit to edit.' },
+				create: { type: 'boolean', description: 'FILE rather than edit: refuse, and write nothing, when `path` already holds a document. For a name another writer may take first. Omit to edit — and never combine with `artifact.section`, which edits a document that must already exist.' },
 			},
 			required: [ 'path', 'artifact' ],
 		},

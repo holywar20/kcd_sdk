@@ -272,7 +272,7 @@ describe( 'VaultTools — writes report what they touched', () => {
 			artifact: { type: 'reference', frontmatter: { name: 'x', description: 'x', type: 'reference', status: 'active' }, body: '<p>x</p>', content: { sections: { why: 'x' } } },
 		} );
 		expect( r.isError ).toBe( true );
-		expect( text( r ) ).toContain( 'write refused "references/domain/x.html": supply either "content"' );
+		expect( text( r ) ).toContain( 'write refused "references/domain/x.html": supply exactly one of "content"' );
 		expect( wrote ).toEqual( [] );
 	} );
 
@@ -366,6 +366,83 @@ describe( 'VaultTools — writes report what they touched', () => {
 		expect( existsSync( join( root, '_Claude', 'references', 'patterns', 'alpha.html' ) ) ).toBe( false );
 		expect( readFileSync( join( root, '_Claude', 'references', 'patterns', 'beta.html' ), 'utf-8' ) ).not.toContain( 'alpha.html' );
 		expect( wrote[ 0 ] ).toContain( resolve( root, '_Claude', 'references', 'patterns', 'beta.html' ) );
+	} );
+
+	/** A valid lens, built through the content door so the fixture exercises the real emitter — personality
+	 *  and philosophy as prose, references as one slot row, exactly the shape a section edit must leave alone. */
+	const lensArtifact = (): Record<string, unknown> => ( {
+		type:        'lens',
+		frontmatter: { name: 'alpha-lens', description: 'A fixture lens.', type: 'lens', status: 'active' },
+		content: {
+			sections: { personality: 'Original personality.', philosophy: 'Original philosophy.' },
+			slots:    [ { section: 'references', rows: [ { what: 'alpha', where: '_Claude/references/patterns/alpha.html', why: 'the target' } ] } ],
+		},
+	} );
+	const lensFile = (): string => readFileSync( join( root, '_Claude', 'lenses', 'alpha', 'alpha.html' ), 'utf-8' );
+
+	it( 'section edit replaces only the named section — frontmatter and the references slot survive untouched', () => {
+		const path = 'lenses/alpha/alpha.html';
+		const made = tools().save( { path, create: true, artifact: lensArtifact() } );
+		expect( made.isError, text( made ) ).toBeUndefined();
+
+		const before = json( tools().get( { path, full: true } ) );
+
+		const r = tools().save( { path, artifact: { section: { name: 'philosophy', prose: 'New philosophy prose.' } } } );
+		expect( r.isError, text( r ) ).toBeUndefined();
+
+		const after = json( tools().get( { path, full: true } ) );
+		expect( after[ 'frontmatter' ] ).toEqual( before[ 'frontmatter' ] );
+
+		const raw = lensFile();
+		expect( raw ).toContain( 'New philosophy prose.' );
+		expect( raw ).not.toContain( 'Original philosophy.' );
+		expect( raw ).toContain( 'Original personality.' );                                 // untouched section
+		expect( raw ).toContain( '_Claude/references/patterns/alpha.html' );                // references slot row untouched
+	} );
+
+	it( 'refuses "section" alongside "body" by name, and writes nothing', () => {
+		const path = 'lenses/alpha/alpha.html';
+		tools().save( { path, create: true, artifact: lensArtifact() } );
+		const before = lensFile();
+
+		const r = tools().save( { path, artifact: { body: '<h1>x</h1>', section: { name: 'philosophy', prose: 'x' } } } );
+		expect( r.isError ).toBe( true );
+		expect( text( r ) ).toContain( 'supply exactly one of "content"' );
+		expect( text( r ) ).toContain( 'body + section' );
+		expect( lensFile() ).toBe( before );
+	} );
+
+	it( 'refuses a section name a closed type ( lens ) does not declare', () => {
+		const path = 'lenses/alpha/alpha.html';
+		tools().save( { path, create: true, artifact: lensArtifact() } );
+		const before = lensFile();
+
+		const r = tools().save( { path, artifact: { section: { name: 'bespoke', prose: 'x', title: 'Bespoke' } } } );
+		expect( r.isError ).toBe( true );
+		expect( text( r ) ).toContain( 'is a closed type' );
+		expect( lensFile() ).toBe( before );
+	} );
+
+	it( 'creates a section the document lacks under the supplied title, and refuses an empty one', () => {
+		const path = 'references/patterns/alpha.html';
+
+		const created = tools().save( { path, artifact: { section: { name: 'overview', prose: 'New section text.', title: 'Overview' } } } );
+		expect( created.isError, text( created ) ).toBeUndefined();
+		const afterCreate = alpha();
+		expect( afterCreate ).toContain( 'data-kcd-section="overview"' );
+		expect( afterCreate ).toContain( 'New section text.' );
+		expect( afterCreate ).toContain( 'Overview' );
+
+		const empty = tools().save( { path, artifact: { section: { name: 'overview', prose: '   ' } } } );
+		expect( empty.isError ).toBe( true );
+		expect( text( empty ) ).toContain( 'is empty' );
+		expect( alpha() ).toBe( afterCreate );
+	} );
+
+	it( 'refuses to create a missing section with no title', () => {
+		const r = tools().save( { path: 'references/patterns/alpha.html', artifact: { section: { name: 'nope', prose: 'x' } } } );
+		expect( r.isError ).toBe( true );
+		expect( text( r ) ).toContain( 'has no "nope" section yet' );
 	} );
 
 	it( 'a missing move source is a structured refusal, not a throw', () => {
@@ -494,5 +571,37 @@ describe( 'VaultTools.spec — one copy of the prose, rendered per face', () => 
 		expect( sections ).toContain( KcdSynth.inlineTagList().join( ', ' ) );
 		// The members are the constant's own keys — not a second list kept in step with it.
 		expect( KcdSynth.inlineTagList() ).toHaveLength( Object.keys( PROSE_INLINE_TAGS ).length );
+	} );
+
+	/**
+	 * BUG-134: a block tag `proseToHtml` entity-escapes used to vanish with no trace — a success reply, an
+	 * empty `warnings` array, a corrupted artifact. The table is embedded AFTER other prose rather than
+	 * opening the section, since prose that OPENS with `<table` is `BLOCK_START` — already-authored HTML,
+	 * passed through rather than escaped, and correctly so.
+	 */
+	it( 'warns, naming the section and the escaped tag, when save silently entity-escapes structural markup', () => {
+		const r = tools().save( {
+			path:     'references/domain/x.html',
+			artifact: {
+				type: 'reference', frontmatter: { name: 'x', description: 'x', type: 'reference', status: 'active' },
+				content: { sections: { oversize: 'See the data.<table><thead><tr><th>A</th></tr></thead></table>' } },
+			},
+		} );
+		expect( r.isError ).not.toBe( true );
+		const warnings = json( r )[ 'warnings' ] as string[];
+		expect( warnings.some( w => w.includes( 'oversize' ) && w.includes( 'table' ) ) ).toBe( true );
+	} );
+
+	it( 'does not warn on prose carrying only allowlisted inline tags', () => {
+		const r = tools().save( {
+			path:     'references/domain/x.html',
+			artifact: {
+				type: 'reference', frontmatter: { name: 'x', description: 'x', type: 'reference', status: 'active' },
+				content: { sections: { why: '<strong>bold</strong> and <code>code</code>' } },
+			},
+		} );
+		expect( r.isError ).not.toBe( true );
+		const warnings = json( r )[ 'warnings' ] as string[];
+		expect( warnings.some( w => w.includes( 'escaped' ) ) ).toBe( false );
 	} );
 } );

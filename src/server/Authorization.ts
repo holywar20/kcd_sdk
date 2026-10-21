@@ -1,5 +1,6 @@
 import { ACCESS_LEVELS, INJECTED_KINDS, type AccessLevel, type InjectedKind, type GrantRef } from '../session/InjectedItem';
 import { parseAccessList, type AccessEntry } from '../core/AccessPolicy';
+import { POLICIES, type Policy } from '../primitives';
 
 /**
  * What the host asserts about one turn's capability exceptions, and how both ends read it back.
@@ -82,8 +83,9 @@ export const Authorization = {
 	 *
 	 * `steps` rides here because `_meta` is client-written: a model cannot hand its own batch a verdict.
 	 *
-	 * `browseAll` is emitted only when true, since absent and false say the same. It is a single bit about the asking
-	 * holder, and it crosses as the answer rather than a key, since the callee cannot resolve a passport.
+	 * `browseAll` is emitted only off its secure default `'off'`, since absent and `'off'` say the same. It is a
+	 * single policy word about the asking holder — `'off' | 'allow' | 'ask'` — and it crosses as the answer
+	 * rather than a key, since the callee cannot resolve a passport.
 	 */
 	assertOnCall(
 		grants:     readonly GrantRef[],
@@ -91,20 +93,21 @@ export const Authorization = {
 		access?:    readonly AccessEntry[],
 		asker?:     AskerRef,
 		steps?:     readonly StepVerdict[],
-		browseAll?: boolean,
+		browseAll?: Policy,
 		commands?:  readonly string[]
 	): Record<string, unknown> | null {
 		// Identity makes an asker, not the trace: an all-null identity names nobody. An asker still counts as
 		// something to say, so an ungranted call carries who is behind it and a callee can ask a named person.
 		const named = !!( asker && ( asker.agentId || asker.agentName ) );
-		if ( grants.length === 0 && !projectId && !access && !named && !steps && !browseAll && !commands ) return null;
+		const onWeb = !!browseAll && browseAll !== 'off'
+		if ( grants.length === 0 && !projectId && !access && !named && !steps && !onWeb && !commands ) return null;
 		const own: Record<string, unknown> = {};
 		if ( grants.length ) own[ 'grants' ] = grants;
 		if ( projectId )     own[ 'projectId' ] = projectId;
 		if ( access )        own[ 'access' ] = access;
 		if ( named )         own[ 'asker' ] = asker;
 		if ( steps )         own[ 'steps' ] = steps;
-		if ( browseAll )     own[ 'browseAll' ] = true;
+		if ( onWeb )         own[ 'browseAll' ] = browseAll;
 		// Emitted whenever the caller supplied one, EMPTY INCLUDED: an empty list is the real answer "you hold none"
 		// and the sentence that answers is different from the one a missing list would get.
 		if ( commands )      own[ 'commands' ] = commands;
@@ -127,11 +130,11 @@ export const Authorization = {
 		return own.commands.filter( ( n ): n is string => typeof n === 'string' && !!n );
 	},
 
-	/** The receiving end of the holder's web release valve: TRUE only for a literal `true`. Absent, false and
-	 *  non-booleans all read as off, because the secure and absent answers are the same one. */
-	browseAllOnCall( meta?: Record<string, unknown> ): boolean {
+	/** The receiving end of the holder's web release valve — `'off' | 'allow' | 'ask'`. Absent and anything
+	 *  not a recognised policy word read as `'off'`, because the secure and absent answers are the same one. */
+	browseAllOnCall( meta?: Record<string, unknown> ): Policy {
 		const own = ( meta?.[ 'starmind' ] ?? {} ) as { browseAll?: unknown };
-		return own.browseAll === true;
+		return POLICIES.includes( own.browseAll as Policy ) ? own.browseAll as Policy : 'off';
 	},
 
 	/** The receiving end of a composite call's verdicts — NULL when the envelope carries none, which the
