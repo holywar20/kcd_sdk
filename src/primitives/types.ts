@@ -56,6 +56,10 @@ export interface TypeCheckIssue {
 export type ArtifactType =
 	| 'lens'
 	| 'plan'
+	// A PATROL, EXPORTED. Peer to `plan` in exactly the way that matters here: a patrol is a RECORD in the
+	// database and this type exists only so the document it is exported to VALIDATES and classifies. Nothing
+	// scaffolds a patrols folder and nobody authors one by hand — see the `patrols` row in `VaultLayout`.
+	| 'patrol'
 	// `reference` covers the whole knowledge store. The folder is the category; a type per folder would only restate it.
 	| 'reference'
 	| 'generator'

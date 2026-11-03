@@ -29,12 +29,16 @@ export const DEFAULT_BLACKLIST: string[] = [
 	'**/.git',
 
 	/**
-	 * THE COMMAND DECK ROSTER — the one entry here that protects an INSTRUCTION rather than a secret.
+	 * THE COMMAND ROSTER — the one entry here that protects an INSTRUCTION rather than a secret.
 	 *
-	 * WHAT IT IS. `<project vault>/dev-utilities/**​/commands.json` is the Command Deck's card roster: an
-	 * array of `{ label, icon, run, args, shell }` rows, each of which becomes a button a person clicks to
-	 * launch a script in a shell. The deck stamps origin `command-deck`, which is the ONE origin on
-	 * `ShellGate`'s allow-list, so a row in this file is a shell command waiting for a click.
+	 * WHAT IT IS. `<project vault>/dev-utilities/**​/commands.json` was the Command Deck's card roster: an
+	 * array of `{ label, icon, run, args, shell }` rows, each of which became a button a person clicked to
+	 * launch a script in a shell. The deck stamped origin `command-deck`, the ONE origin on `ShellGate`'s
+	 * allow-list, so a row in this file was a shell command waiting for a click.
+	 *
+	 * THE PANEL RETIRED AT TASK-044 ( 2026-10-22 ); THIS ENTRY DID NOT. The folder and its cards stay on
+	 * disk, inert, by ruling — no migration — and the pattern below still denies them exactly as before.
+	 * `ShellGate`'s allow-list still names `command-deck` too, unreached now that nothing stamps it.
 	 *
 	 * WHY IT IS DENIED. An agent that can write this file can plant a card, and the human's click launders
 	 * it into arbitrary execution through a gate behaving exactly as designed. Nothing is escaped and
@@ -43,9 +47,10 @@ export const DEFAULT_BLACKLIST: string[] = [
 	 * READ IS DENIED TOO, by ruling: friction here is deliberate. An agent that cannot read the roster
 	 * cannot report its shape back.
 	 *
-	 * HARDCODED DELIBERATELY, AND TEMPORARILY. `dev-utilities` is a CONVENTION ( CommandDeckDock computes
-	 * the deck folder as `<project root>/<project docRoot>/dev-utilities` and never reads it from config ),
-	 * so naming it here is exact rather than clever. It is not general: a future project could site a deck
+	 * HARDCODED DELIBERATELY, AND TEMPORARILY. `dev-utilities` is a CONVENTION — fixed at
+	 * `<project root>/<project docRoot>/dev-utilities`, never read from config — so naming it here is exact
+	 * rather than clever. ( Its one reader, the Command Deck panel, was retired at TASK-044, 2026-10-22; the
+	 * convention and this protection outlive it. ) It is not general: a future project could site a deck
 	 * elsewhere and this would not cover it. THE FIX IS NOT A BETTER GLOB — it is minting a per-project
 	 * blacklist at project-creation time, which is a separate deferred job. Do not "generalize" this line.
 	 *

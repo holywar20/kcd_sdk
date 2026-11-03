@@ -64,7 +64,13 @@ export const KcdValidate = new class KcdValidate {
 		// todo / completed are ADDRESSES, not paths ( protocol §1.1 ): a lens declares WHERE its log lives,
 		// and a vacant address is a legal state, not a defect.
 		todo:             { type: 'address' },
-		completed:        { type: 'address' }
+		completed:        { type: 'address' },
+		// subject declares WHAT this document is about — a project-root-relative path, or a package id —
+		// so a check can stale on the SUBJECT MATTER moving, not only on this document moving ( ruling in
+		// plan:83's notes ). Optional, and checked for well-formedness only, same as todo/completed: a
+		// subject that does not resolve is not a validation error, it is a finding for the ledger to
+		// surface. Occupancy is this field's caller's business, never this validator's.
+		subject:          { type: 'address' }
 	};
 
 	/**

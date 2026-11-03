@@ -1,5 +1,5 @@
 import { describe, it, expect } from 'vitest'
-import { Command, commandWords, type CommandPart } from '../Command'
+import { Command, commandWords, type CommandPart, type SerializedCommand } from '../Command'
 
 /**
  * Command — what makes one AUTHORED rather than a shell. The program is the author's, never the caller's.
@@ -396,7 +396,15 @@ describe( 'a part authored as a kind that no longer exists', () => {
 			parts:  [ { kind: 'literal' as const, text: 'npm run typecheck' } ]
 		};
 
-		expect( Command.fromSerialized( json ).serialize() ).toEqual( json );
+		// The fields THIS JSON carries survive unchanged; the button half is MINTED on the way through
+		// ( TASK-037 ) rather than absent from the round trip, so this is a subset match rather than `toEqual`.
+		const round = Command.fromSerialized( json ).serialize();
+		expect( round ).toMatchObject( json );
+		expect( round.id ).toBeTypeOf( 'string' );
+		expect( round.label ).toBe( json.name );
+		expect( round.icon ).toBe( '⚡' );
+		expect( round.folder ).toBe( '' );
+		expect( round.enabled ).toBe( true );
 		expect( Command.fromSerialized( json ).ready ).toBe( true );
 	} );
 } );
@@ -418,7 +426,9 @@ describe( 'a path hole\'s access level', () => {
 			]
 		};
 
-		expect( Command.fromSerialized( json ).serialize() ).toEqual( json );
+		// Same subset match as the plain round trip above, for the same reason ( TASK-037 ): the button half
+		// is minted rather than absent, so these fields ride along without being part of what this case judges.
+		expect( Command.fromSerialized( json ).serialize() ).toMatchObject( json );
 		expect( Command.fromSerialized( json ).ready ).toBe( true );
 	} );
 
@@ -483,5 +493,58 @@ describe( 'a path hole\'s access level', () => {
 
 		expect( c.getErrors() ).not.toContain( Command.NO_ACCESS );
 		expect( c.ready ).toBe( true );
+	} );
+} );
+
+describe( 'the button half, and OLD ROWS MUST LOAD ( TASK-037 )', () => {
+
+	it( 'defaults id, label, icon, folder and enabled when a stored row carries none of them', () => {
+		// The shape stored today — before this step, these properties did not exist on the class at all, so
+		// this case could not even compile.
+		const stored: SerializedCommand = {
+			name:    'probe',
+			intent:  'x',
+			parts:   [ fixed( 'node' ) ],
+			timeout: 30,
+			policy:  'ask'
+		};
+
+		const c = Command.fromSerialized( stored );
+
+		expect( c.id ).toBeTypeOf( 'string' );
+		expect( c.id.length ).toBeGreaterThan( 0 );
+		expect( c.label ).toBe( c.name );
+		expect( c.icon ).toBe( '⚡' );
+		expect( c.folder ).toBe( '' );
+		expect( c.enabled ).toBe( true );
+	} );
+
+	it( 'mints a DIFFERENT id for two rows that both omit one — never derived from the name', () => {
+		const row = ( name: string ): SerializedCommand => ( { name, parts: [ fixed( 'node' ) ] } );
+		const a = Command.fromSerialized( row( 'same' ) );
+		const b = Command.fromSerialized( row( 'same' ) );
+
+		expect( a.id ).not.toBe( b.id );
+	} );
+
+	it( 'accepts `never` as a CommandPolicy and survives a serialize / fromSerialized round trip', () => {
+		const c = new Command( 'probe', 'x', [ fixed( 'node' ) ], null, 'never' );
+
+		expect( c.policy ).toBe( 'never' );
+
+		const round = Command.fromSerialized( c.serialize() );
+		expect( round.policy ).toBe( 'never' );
+	} );
+
+	it( 'round-trips id, label, icon, folder and enabled through serialize / fromSerialized', () => {
+		const c = new Command( 'probe', 'x', [ fixed( 'node' ) ], null, 'allow', 'cmd-fixed-id', 'Run Probe', '🔧', 'dev', false );
+
+		const round = Command.fromSerialized( c.serialize() );
+
+		expect( round.id ).toBe( 'cmd-fixed-id' );
+		expect( round.label ).toBe( 'Run Probe' );
+		expect( round.icon ).toBe( '🔧' );
+		expect( round.folder ).toBe( 'dev' );
+		expect( round.enabled ).toBe( false );
 	} );
 } );

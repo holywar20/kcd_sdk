@@ -25,6 +25,85 @@ export type PathKind  = 'file_path' | 'folder_path' | 'res_path';
 export type ValueKind = 'int' | 'enum' | 'text';
 export type FillKind  = PathKind | ValueKind;
 
+/**
+ * WHAT A RUNNABLE IS, AND THEREFORE WHICH SHARED RULES REACH ITS VALUES ( TASK-144, plan 77 phase 6 ).
+ *
+ * `argv` is a command line handed to `spawn` with `shell: false`. `sql` is a statement whose holes are BOUND
+ * PARAMETERS — text and values on separate rails, so a binding can never become syntax.
+ *
+ * ── EVERYTHING ABOVE THE EXECUTOR IS SHARED, AND THAT IS THE POINT ──
+ * The parts array, the three part kinds, the roster's home in the locked compartment, one roster per project,
+ * the per-subject gate fanning and the rule that substitution lives in the record all belong to BOTH. A second
+ * roster or a second authoring surface would be a thing nobody owns. What forks is the executor, and the one
+ * inspection rule below that is about an executor rather than about a value.
+ */
+export type RunnableKind = 'argv' | 'sql';
+
+/**
+ * ONE ROW PER RUNNABLE KIND — the inspection rules NAMED rather than branched on.
+ *
+ * ── WHY A TABLE AND NOT AN `if` ──
+ * A `kind === 'sql'` test buried inside one monolithic validator reads as an exception, and the next person to
+ * meet it simplifies it away: an exception looks like a thing somebody forgot to clean up, where a declared row
+ * looks like a rule. The same reasoning put `PART_TYPES` below in a table rather than a switch.
+ *
+ * ── WHAT THE FORK ACTUALLY TURNED OUT TO BE, WHICH IS LESS THAN PLAN 77 EXPECTED ──
+ * The plan's guidance names TWO argv-only rules: the shell-metacharacter blacklist and `flag_like`. Only the
+ * second exists. The metacharacter list was REMOVED from `Command.inspectPart` when the typed part kinds landed,
+ * because it refused real Windows paths — `C:\Program Files (x86)` for its parentheses — and
+ * `Command.validation.test.ts` pins that removal under the heading "the type the blanket rule made impossible".
+ * So a value carrying `'` is already accepted on an argv `text` hole, and there was nothing left to fork there.
+ * Written down because the guidance, `authored-commands`'s Inspection section and this table now disagree, and a
+ * reader meeting the first two will come here expecting a second row and wonder what was missed.
+ *
+ * ── WHAT IS SHARED AND MUST STAY SHARED ──
+ * Control characters, the hard length ceiling, menu membership and a part's own pattern apply to BOTH kinds and
+ * are not expressible here, deliberately: a rule a kind cannot switch off cannot be switched off by accident.
+ * A control character is a transport fault in both worlds — it truncates an argv element at the npm shims, and a
+ * NUL truncates a string on the way into a driver — so it is a shared rule for the same reason in each.
+ */
+export interface RunnableRules {
+	kind: RunnableKind;
+	/** What an author picks it by. */
+	label: string;
+	/**
+	 * Does a leading `-` disqualify a value?
+	 *
+	 * TRUE FOR argv, and it is the injection that survives having no shell at all: `-rf` and `--config=…` change
+	 * what the binary does, because the program itself parses its own arguments.
+	 *
+	 * FALSE FOR sql, and refusing it there would be a bug rather than caution: a bound value is never parsed as
+	 * syntax by anything, so a leading dash is a NEGATIVE NUMBER. A validator that refused `-5` would make a
+	 * temperature, a balance and a delta unrepresentable for ever.
+	 */
+	flagLike: boolean;
+	/** What the author is told this kind does with the values an agent supplies. */
+	note: string;
+}
+
+export const RUNNABLE_KINDS: Readonly<Record<RunnableKind, RunnableRules>> = {
+
+	argv: {
+		kind:     'argv',
+		label:    'Command line',
+		flagLike: true,
+		note:     'The parts become an argument vector handed to the program with no shell, so shell punctuation in a value is ordinary punctuation. A value may NOT begin with `-`: nothing interprets it as syntax, but the program parses its own flags, and that is the one injection that survives having no shell.'
+	},
+
+	sql: {
+		kind:     'sql',
+		label:    'SQL statement',
+		flagLike: false,
+		note:     'The fixed parts are the statement and the holes are BOUND PARAMETERS — text and values travel separate rails, so a value can never become syntax. An apostrophe is therefore fine ( `O\'Brien` is a name ) and so is a leading `-` ( that is a negative number ). A table or column name cannot be bound by any engine, so it must be a closed choice rather than a free hole.'
+	}
+};
+
+/** Is this a runnable kind at all? The runtime half, for a record that reached here from storage without
+ *  passing a compiler. Anything else is `argv`, which is what every record authored before this field is. */
+export function isRunnableKind( value: unknown ): value is RunnableKind {
+	return value === 'argv' || value === 'sql';
+}
+
 /** Every kind a part may be: the author's own fixed text, a typed hole, or a part carried forward from a
  *  retired kind. `retired` is not authorable — see `Command.fromSerialized`. */
 export type PartKind = 'literal' | FillKind | 'retired';
@@ -108,6 +187,32 @@ interface PathHole {
 	access: PathAccess;
 	optional?: boolean;
 	prefix?: string;
+	identifier?: true;
+}
+
+/**
+ * THIS HOLE NAMES A TABLE OR A COLUMN — declared by the author, and legal ONLY as an `enum` on a `sql`
+ * runnable ( TASK-144, plan 77 ).
+ *
+ * ── WHY IT IS DECLARABLE ON EVERY HOLE WHEN IT IS LEGAL ON ONE ──
+ * So that authoring it wrongly is REPRESENTABLE and can therefore be REFUSED with a sentence saying why.
+ * Putting the field only on the `enum` member would make the mistake a type error in the editor's source and
+ * nothing at all to an author filling in a form or to a row arriving from storage — the refusal would have no
+ * case to fire on. Exactly the reasoning that makes `access` a required field rather than an inferred one.
+ *
+ * ── AND WHY IT HAS TO EXIST AT ALL ──
+ * No engine binds an identifier. `SELECT * FROM $1` is impossible in both Postgres and SQLite — a placeholder
+ * is a VALUE slot, and a table name is syntax. So the only way to vary a table or column name is to put it in
+ * the statement text, which is string concatenation; a free-text hole doing that is concatenation wearing a
+ * parameter's clothes, and it is the one way an authored query becomes as unsafe as free SQL. A closed choice
+ * is safe for the reason `enum` is always safe: the value is one the AUTHOR wrote, checked for membership and
+ * nothing else, so there is no spelling to reason about.
+ *
+ * `true` ONLY, never `false`. An absent flag and an explicit `false` would be two spellings of one fact, and
+ * `serialize` writes it only when set — see the `optional` field, which is the same shape for the same reason.
+ */
+interface ValueHole {
+	identifier?: true;
 }
 
 export type CommandPart =
@@ -125,13 +230,13 @@ export type CommandPart =
 	| ( PathHole & { kind: 'res_path' } )
 	/** A bounded integer. `min` and `max` are required and `min` may not be negative: a negative value would be
 	 *  refused as flag-like before any range check could admit it, so a negative bound is a hole nothing can fill. */
-	| { kind: 'int'; name: string; min: number; max: number; optional?: boolean; prefix?: string }
+	| ( ValueHole & { kind: 'int'; name: string; min: number; max: number; optional?: boolean; prefix?: string } )
 	/** A closed choice. The highest-value type here: a flag authored as an enum is a pick from a list the author
 	 *  wrote, rather than a string somebody has to reason about. */
-	| { kind: 'enum'; name: string; options: readonly string[]; optional?: boolean; prefix?: string }
+	| ( ValueHole & { kind: 'enum'; name: string; options: readonly string[]; optional?: boolean; prefix?: string } )
 	/** Arbitrary content, capped. The ONLY type that admits it, and admissible only under the argv property above.
 	 *  Not sanitised beyond the cap and the shared control-character check — sanitising free text is the trap. */
-	| { kind: 'text'; name: string; maxLength: number; optional?: boolean; prefix?: string }
+	| ( ValueHole & { kind: 'text'; name: string; maxLength: number; optional?: boolean; prefix?: string } )
 	| { kind: 'retired'; was: string };
 
 /** A part an agent fills — every kind that carries a `name`. Named so `fillable` can hand back something
@@ -475,6 +580,25 @@ export const FILL_KINDS: readonly FillKind[] = [ 'file_path', 'folder_path', 're
 
 /** The path half, for the surface that pairs a kind with an access level. */
 export const PATH_KINDS: readonly PathKind[] = [ 'file_path', 'folder_path', 'res_path' ];
+
+/**
+ * THE KINDS A `sql` RUNNABLE MAY DECLARE — written here, once, beside the full list it narrows.
+ *
+ * A PATH KIND IS LEFT OUT and that is not tidiness. A path hole is judged at a FILESYSTEM rung, and a
+ * statement reaches no filesystem, so offering one on a SQL template would put a control on the surface
+ * that cannot mean anything — and a reviewer reading `file_path · write` on a query would reasonably
+ * conclude something writes a file. This surface's legibility IS the security property, so a control that
+ * cannot be read correctly is worse than an absent one.
+ *
+ * `enum` FIRST, because an identifier hole must be one and it is the type a query's author reaches for
+ * most; `text` last, for the same reason it is last in `FILL_KINDS`.
+ */
+export const SQL_FILL_KINDS: readonly FillKind[] = [ 'enum', 'int', 'text' ];
+
+/** The kinds one runnable kind may declare. `argv` gets every type; `sql` gets the narrowed list above. */
+export function fillKindsFor( kind: RunnableKind ): readonly FillKind[] {
+	return kind === 'sql' ? SQL_FILL_KINDS : FILL_KINDS;
+}
 
 /** The row for a kind, or null for `literal` and `retired`, which are not fillable and have no validation
  *  of their own — a literal is the author's text and is never judged, a retired part is never run. */

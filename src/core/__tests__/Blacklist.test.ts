@@ -119,7 +119,7 @@ describe( 'case folding — the filesystem decides, not the pattern', () => {
 	} );
 } );
 
-describe( 'the Command Deck roster — the one entry protecting an instruction', () => {
+describe( 'the command roster — the one entry protecting an instruction', () => {
 
 	const deny = Blacklist.patterns();
 

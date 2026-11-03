@@ -82,6 +82,22 @@ export const SHAPES: Record<string, TypeShape> = {
 		],
 	},
 
+	// OPEN, and for the same reason `plan` above is: a patrol is a DATABASE RECORD and this shape governs only the
+	// document it EXPORTS to. Every value that travels rides in a `data-sm-*` attribute, so the required sections
+	// are the ones a reader needs to see — the import reads the attributes, never the prose.
+	patrol: {
+		purpose: 'A declared fan-out: the corpus it covers, the analyzers it runs, how it divides the work, and where it dispatches.',
+		open: true,
+		sections: [
+			{ name: 'target',    tier: 'required', hint: 'The glob list naming the corpus this patrol covers. One row per glob.' },
+			{ name: 'analyzers', tier: 'required', hint: 'The analyzers this patrol runs over each subject. One row per analyzer.' },
+			{ name: 'division',  tier: 'required', hint: 'How the corpus is divided into slices — fixed-batch( n ), one-per-subject, or by-directory.' },
+			{ name: 'dispatch',  tier: 'required', hint: 'The lane GROUP this patrol addresses. Never a lane list: membership is the group\'s.' },
+			{ name: 'brief',     tier: 'optional', hint: 'The patrol\'s own half of a slice\'s brief, composed at mint with the analyzer\'s default.' },
+			{ name: 'notes',     tier: 'optional', hint: 'Anything a later reader needs that the fields do not carry.' },
+		],
+	},
+
 	habit: {
 		purpose: 'One atomic behaviour: the trigger it fires on, what to do, and why.',
 		open: true,
@@ -139,6 +155,19 @@ export const SHAPES: Record<string, TypeShape> = {
 			{ name: 'parameters',   tier: 'required', hint: 'The typed inputs it takes — param rows, four cells each.' },
 			{ name: 'do',           tier: 'required', nests: 'phase-*', hint: 'The ordered steps it executes.' },
 			{ name: 'report-shape', tier: 'expected', hint: 'The shape of the one report it writes.' },
+			// THE DEFAULT TASK BRIEF A PATROL STARTS FROM ( plan 86, TASK-2544 ). Declared here so the shape
+			// KNOWS the section — synthesis emits it in this order rather than trailing it as an undeclared
+			// name, `describe()` tells an author it exists, and a refusal can quote its hint.
+			//
+			// `optional`, AND THE TIER IS THE WHOLE MIGRATION QUESTION. `expected` would put a warning on every
+			// analyzer already on disk that has never heard of a patrol, which is a corpus-wide regression
+			// bought for nothing: a patrol composes a slice's brief from its own half plus this one, and an
+			// analyzer with no brief contributes nothing rather than failing. Bryan's own framing — an analyzer
+			// without this section is LEGAL and the section may be placeholder text.
+			//
+			// It sits LAST because it is the one section addressed to somebody else: `know` through
+			// `report-shape` describe the analyzer to a reader, and this is what it hands a worker.
+			{ name: 'task-brief', tier: 'optional', hint: 'The default task brief a patrol built on this analyzer starts from, composed at mint with the patrol\'s own half. Optional, and placeholder text is legal.' },
 		],
 	},
 

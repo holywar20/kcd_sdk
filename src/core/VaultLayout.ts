@@ -88,6 +88,15 @@ const LAYOUT: readonly LayoutEntry[] = [
 		dir: 'plans', type: 'plan', layer: 'data', indexed: true, scaffold: false,
 		purpose: 'Where a plan is EXPORTED to, on demand — not a planning surface. A plan lives in the database and is written in the Plan Studio; this folder holds the documents it exports to, and is created when the first one lands.'
 	},
+	{
+		// NOT SCAFFOLDED, for exactly the reason `plans` above is not, and the row exists for the same one. A patrol
+		// is a RECORD in the database — a KCD patrol document is only ever what a patrol is EXPORTED to — so a fresh
+		// vault has nothing to put here, and an empty folder would read as an instruction to author patrols as
+		// documents. The row survives because export still has to produce a document that VALIDATES: classification
+		// is what types it `patrol` and what keeps a patrol body out of compiled context when something links one.
+		dir: 'patrols', type: 'patrol', layer: 'data', indexed: true, scaffold: false,
+		purpose: 'Where a patrol is EXPORTED to, on demand — not an authoring surface. A patrol lives in the database; this folder holds the snapshots it travels as, and is created when the first one lands.'
+	},
 	// THE TWO ARCHIVAL PLAN BUCKETS STOOD HERE — `plans/plans_complete` and `plans/plans_deferred` — and they were
 	// the ONLY rows the `archival` flag ever marked. They held plan documents from the era when a plan WAS a
 	// document: completing or retiring one filed its file into a bucket, and the bucket was its status. A plan is a

@@ -733,6 +733,13 @@ export function projectSig( text: string ): SigProjection {
  * `pages` rides on the empty case too, because the page count is what proves the file was READ — "0 pages"
  * and "12 pages, none of them text" are different diagnoses, and only one of them suggests OCR.
  *
+ * THE PAGE IMAGES ARE NOT IN HERE, and that is deliberate: whether a page was rasterised is the RASTERISER's
+ * answer, not extraction's, so it rides as `framePdf`'s own `PdfPageImages` argument instead of as a field
+ * this type's only producer could not fill. One consequence is worth knowing at the type: `no-text-layer` is
+ * no longer always a dead end. A scan has no text and photographs perfectly, so that arm plus a full set of
+ * page images is a SUCCESS wearing a failure's name — which is why the frame, and not this type, decides what
+ * the model is told.
+ *
  * THE FAILURE IS `unopenable` AND NOT `unreadable` for one local reason: `unreadable` is already a TurnEntry
  * KIND in this same file, meaning a transcript row this build could not interpret. Two unrelated senses of
  * one word a few hundred lines apart is a cost paid by every future reader, and the word was cheaper to
@@ -744,7 +751,112 @@ export type PdfExtract =
 	| { ok: false; why: 'unopenable';    reason: string };
 
 /**
- * A PDF, FRAMED for the wire as EXTRACTED TEXT — the PDF-shaped declaration ( Bryan: "extract
+ * HOW MANY PAGES OF A PDF MAY RIDE AS IMAGES — the cap, and it lives HERE rather than in main for the reason
+ * `FOLDER_FILE_CAP` and the preview floors do: the frame STATES the number to the model and the rasteriser
+ * OBEYS it, and two copies would be two numbers free to disagree about what the model was told.
+ *
+ * THIRTY ( Bryan, 2026-10-26 ): raised from ten so a 25-page planning document rides whole rather than truncating
+ * at page ten. The first number was a deliberately low starting point ( Bryan, 2026-10-24 ), and the cost of this
+ * one is the figure to hold in view: each page is about 1,600 tokens at the 1.2 MP budget below, so a full set of
+ * thirty is about 48,000 tokens, roughly a quarter of a 200k context window. Pages past the cap ride as extracted
+ * text only, and the frame says so. Raising it again is a one-line change here and nothing else needs to know.
+ */
+export const PDF_PAGE_IMAGE_CAP = 30;
+
+/**
+ * HOW BIG ONE RENDERED PAGE IS — a PIXEL BUDGET, not a DPI, and it lives beside the cap for the identical
+ * reason: the rasteriser OBEYS this number and the token gauge PRICES by it, and two copies would be two
+ * numbers free to disagree about what a page costs.
+ *
+ * WHY AN AREA AND NOT A DPI. Anthropic prices an image at pixel area ÷ 750, so the thing that has to be
+ * held steady is AREA. A DPI does not hold it steady: letter, A4 and legal are three different page sizes,
+ * so one DPI is three different costs, and a slide deck in landscape is a fourth. Scaling each page to land
+ * near a fixed area makes a page cost the same wherever it came from — which is what lets the gauge price
+ * ten pages without opening one of them.
+ *
+ * 1.2 MEGAPIXELS, which is about 1,600 tokens a page and 16,000 for a full ten-page set. The number is
+ * chosen against what a model needs to READ A TABLE, which is the whole point of sending the page at all:
+ * a letter page at 1.2 MP is roughly 125 DPI, where body text is comfortably legible. Print resolution
+ * ( 300 DPI, ~8 MP ) is about SEVEN TIMES the cost for nothing a model can use — it does not see sharper
+ * than the page it is shown, and the provider downscales a large image before pricing it anyway. Going the
+ * other way, under about 1 MP small table text starts to smear and the feature silently stops working,
+ * which is the more expensive failure of the two.
+ */
+export const PDF_PAGE_IMAGE_PIXELS = 1_200_000;
+
+/**
+ * WHAT A RENDERED PAGE IS, as a media type — stated HERE rather than at the rasteriser because the
+ * PROJECTION is what has to put it on the wire, and the projection has no other way to know. A PDF entry's
+ * own `mediaType` is `application/pdf`, which is true of the file and wrong for every block cut out of it.
+ *
+ * PNG, because a page is line art and text: lossless at a smaller size than JPEG for this content, and
+ * without the ringing around glyph edges that is exactly where a model reads a table from.
+ */
+export const PDF_PAGE_IMAGE_MEDIA_TYPE = 'image/png';
+
+/**
+ * WHICH PAGES ACTUALLY ARRIVED AS IMAGES — the rasteriser's half of the story, handed to `framePdf` BESIDE
+ * the extract rather than folded into it.
+ *
+ * WHY NOT A FIELD ON `PdfExtract`. The two halves are produced by different code at different moments:
+ * extraction knows the page count and the text and cannot know whether anything was rasterised, and the
+ * rasteriser knows which pages it rendered and nothing about the text. A field on the extract would have to
+ * be filled in by a producer that cannot answer it — which in practice means filled in with a lie, or left
+ * optional and forgotten. Two arguments, each supplied by whoever actually holds the answer, cannot drift.
+ *
+ * `imaged` IS PAGE NUMBERS AND NOT A COUNT, 1-based, because the frame has to tell the model WHICH pages it
+ * is looking at. "10 of 40 pages arrived" leaves the model to assume the first ten; "pages 1-10 arrived" is
+ * the same sentence with the assumption removed, and the rasteriser is free to choose pages that are not a
+ * prefix without the frame becoming wrong.
+ *
+ * `failed` IS NOT MODELLED AS SUCCESS. A page the rasteriser was asked for and could not produce is named,
+ * so a partial render cannot pass as a complete one.
+ */
+export type PdfPageImages = {
+	/** Pages that rode as images, 1-based. Order and duplicates do not matter; the frame normalizes them. */
+	imaged:  readonly number[];
+	/** Pages asked for and not produced, 1-based. Omit when nothing failed. */
+	failed?: readonly number[];
+};
+
+/** Normalized page numbers: deduped, ascending, and nonsense dropped — the frame must never print `page 0`
+ *  or `page -3` at a model and invite it to go looking. */
+function _pageSet( ns: readonly number[] | undefined ): number[] {
+	return [ ...new Set( ( ns ?? [] ).filter( ( n ) => Number.isInteger( n ) && n > 0 ) ) ].sort( ( a, b ) => a - b );
+}
+
+/** `1-10`, `1-3, 7`, `2` — contiguous runs collapsed, because "pages 1-10" is one token of attention where
+ *  "1, 2, 3, 4, 5, 6, 7, 8, 9, 10" is ten of them, and this string rides in context every time a PDF does. */
+function _pageRuns( pages: readonly number[] ): string {
+	if( pages.length === 0 ) return 'none';
+
+	const runs: string[] = [];
+	let start = pages[ 0 ];
+	let prev  = pages[ 0 ];
+	for( const n of pages.slice( 1 ) ) {
+		if( n === prev + 1 ) { prev = n; continue; }
+		runs.push( start === prev ? `${ start }` : `${ start }-${ prev }` );
+		start = n;
+		prev  = n;
+	}
+	runs.push( start === prev ? `${ start }` : `${ start }-${ prev }` );
+	return runs.join( ', ' );
+}
+
+/**
+ * THE OPERATIVE SENTENCE WHEN PAGES ARE MISSING ( Bryan, 2026-10-24: "ensure too that we are informing the
+ * agent when we do a truncation of the file, so that the agent can inform the user of an issue" ).
+ *
+ * It is an INSTRUCTION and not a disclaimer, in the register the no-text-layer arm already set with "Ask the
+ * person what it says, or for a text version". A model told only that something is missing answers anyway
+ * from what it has; a model told what to DO about the gap passes it on. That hand-off to the person is the
+ * entire point of knowing the cap bound, so the sentence is a named constant rather than three paraphrases.
+ */
+const PDF_SAY_SO = 'If your answer would depend on a page that did not arrive, SAY SO to the person and ask '
+	+ 'for that page rather than answering as though you had seen it.';
+
+/**
+ * A PDF, FRAMED for the wire — as extracted text, as page images, or as both ( Bryan: "extract
  * text, pass text as if it was a prompt but with a pdf shaped declaration so the agent knows it's a pdf" ).
  *
  * WHY A FRAME AND NOT JUST THE TEXT. Extraction returns something that is not the file: no figures, no
@@ -754,24 +866,78 @@ export type PdfExtract =
  * extracted rather than the document, how many pages it came from, and where the file is. The path is there
  * for `framePointer`'s reason: a reader that wants the real thing has somewhere to go.
  *
- * FAILURE IS LOUD AND NEVER EMPTY. Both failure arms return a frame SAYING SO, and neither ever falls back
- * to the raw bytes — a PDF's bytes through a UTF-8 decode are mojibake, which is worse than nothing because
- * it looks like content. The no-text-layer arm names the cause in words a model can act on ( it is a scan;
- * ask the person ) rather than leaving it to infer one from silence.
+ * AND WHY IT HAD TO LEARN ABOUT IMAGES. "Figures, tables and layout are not here and their absence says
+ * nothing about the file" is exactly right for text alone and becomes a LIE the moment page images ride
+ * beside it — a lie in the worst direction, because it tells the model to disregard the one thing it can now
+ * see. So the clause is spoken only when it is true, and the three states are spelled out instead: nothing
+ * rode, everything rode, or SOME rode and the cap bound. The partial case carries `PDF_SAY_SO`, because that
+ * is the case where the model holds a document it half cannot see and must say so rather than guess.
+ *
+ * FAILURE IS LOUD AND NEVER EMPTY. Both failure arms survive and neither ever falls back to the raw bytes —
+ * a PDF's bytes through a UTF-8 decode are mojibake, which is worse than nothing because it looks like
+ * content. `no-text-layer` stops being a dead end once pages ride: a scan has no text and photographs
+ * perfectly, so that arm now has a SUCCESS reading, and the one thing it must not do is keep saying "nothing
+ * of its contents is in context" while ten page images are sitting in front of the model.
  */
-export function framePdf( name: string, seen: PdfExtract ): string {
+export function framePdf( name: string, seen: PdfExtract, shown?: PdfPageImages ): string {
+	const imaged = _pageSet( shown?.imaged );
+	const failed = _pageSet( shown?.failed );
+	const lost   = failed.length ? ` Page( s ) ${ _pageRuns( failed ) } could not be rendered at all.` : '';
+	// EVERY page, and nothing failed. A render that lost a page is a PARTIAL render however many arrived —
+	// folding it into "every page" is precisely the claim this widening exists to stop. A function of the
+	// total rather than a constant, because the total lives on two different arms of the extract.
+	const every  = ( total: number ): boolean => imaged.length >= total && imaged.length > 0 && failed.length === 0;
+
 	if( !seen.ok ) {
+		// Unopenable on its own: there is no page count and no text, so no page image can exist either.
 		if( seen.why === 'unopenable' ) {
 			return `[PDF — ${ name } — COULD NOT BE READ: ${ seen.reason }. No text was extracted; nothing of this `
 				+ 'document is in context. Tell the person it could not be opened.]';
 		}
-		return `[PDF — ${ name } — ${ seen.pages } page( s ) and NO TEXT LAYER: this is almost certainly a scan or `
-			+ 'images, so there is no text to extract and nothing of its contents is in context. Do not treat it as an '
-			+ 'empty document. Ask the person what it says, or for a text version.]';
+
+		// NO TEXT LAYER — a scan. Three readings, and only the first is the dead end it used to be.
+		const total = seen.pages;
+		if( imaged.length === 0 ) {
+			return `[PDF — ${ name } — ${ total } page( s ) and NO TEXT LAYER: this is almost certainly a scan or `
+				+ 'images, so there is no text to extract and nothing of its contents is in context. Do not treat it as an '
+				+ `empty document. Ask the person what it says, or for a text version.${ lost }]`;
+		}
+		if( every( total ) ) {
+			return `[PDF — ${ name } — ${ total } page( s ), NO TEXT LAYER, EVERY PAGE AS AN IMAGE: there is no text to `
+				+ 'extract — it is a scan — but every page is here as an image, so read the document off the pages. '
+				+ 'Nothing is missing and there is no need to ask for a text version.]';
+		}
+		return `[PDF — ${ name } — ${ total } page( s ), NO TEXT LAYER, ONLY PAGE( S ) ${ _pageRuns( imaged ) } AS `
+			+ `IMAGES: there is no text to extract — it is a scan — so the ${ total - imaged.length } page( s ) that did `
+			+ `not arrive as images are not in context in ANY form.${ lost } ${ PDF_SAY_SO }]`;
 	}
-	return `[PDF — ${ name } — ${ seen.pages } page( s ), EXTRACTED TEXT: this is text pulled out of a PDF, not the `
-		+ 'document itself. Figures, tables and layout are not here and their absence says nothing about the file.]\n'
-		+ seen.text;
+
+	const total = seen.pages;
+	const body  = `\n${ seen.text }`;
+
+	if( every( total ) ) {
+		return `[PDF — ${ name } — ${ total } page( s ), EXTRACTED TEXT AND EVERY PAGE AS AN IMAGE: the text is pulled `
+			+ 'out of the PDF and is not the document itself, but every page is also in front of you as an image. '
+			+ 'Figures, tables and layout ARE here — read them off the pages, and use the text for exact wording.]'
+			+ body;
+	}
+	if( imaged.length ) {
+		// WHY the rest are missing, and ONLY when it is true. Over the cap is the ordinary reason; a failed
+		// render is the other, and `lost` names that one. Announcing the cap on a five-page document whose
+		// render half failed would be a lie of exactly the kind this frame exists to prevent.
+		const capped = total > PDF_PAGE_IMAGE_CAP
+			? ` At most ${ PDF_PAGE_IMAGE_CAP } pages can ride as images and this document is over that cap.`
+			: '';
+		return `[PDF — ${ name } — ${ total } page( s ), EXTRACTED TEXT AND ${ imaged.length } PAGE IMAGE( S ): page( s ) `
+			+ `${ _pageRuns( imaged ) } are here as images, with their figures, tables and layout visible. The other `
+			+ `${ total - imaged.length } of ${ total } page( s ) are EXTRACTED TEXT ONLY, so THEIR figures, tables and `
+			+ `layout did not arrive.${ capped }${ lost } ${ PDF_SAY_SO }]`
+			+ body;
+	}
+	return `[PDF — ${ name } — ${ total } page( s ), EXTRACTED TEXT: this is text pulled out of a PDF, not the `
+		+ 'document itself. Figures, tables and layout are not here and their absence says nothing about the file.'
+		+ `${ lost }]`
+		+ body;
 }
 
 /**
@@ -1363,7 +1529,33 @@ export class Transcript {
 					// compaction pass drops it for real. Honouring it here would rewrite a prior turn to save a
 					// pointer and re-prefill everything downstream — the trade backwards, and the reason removal
 					// was deferred in the first place. What the user sees change is the gutter and the itinerary.
-					case 'injected-file':
+					case 'injected-file': {
+						this._appendBlock( messages, 'user', { type: 'text', text: Transcript._grantText( entry, isLiveTurn ) } );
+						// A PDF'S PAGES, AS IMAGES, AFTER ITS FRAMED TEXT — the one reason this kind no longer shares
+						// a case with the folder and the tool. A table does not exist inside a PDF ( glyphs at
+						// coordinates, and the grid is in the reader's eye ), so extraction cannot recover one in
+						// principle; a model LOOKING at the page recovers it immediately. The frame above has already
+						// told the model which pages it is about to see and what did not arrive.
+						//
+						// THE SAME THREE GATES THE TOOL-RESULT IMAGES RIDE UNDER, and for the same reasons. LIVE TURN:
+						// the bytes ARE the payload, so there is no cheap form to decay to, and carrying ten pages
+						// forever would displace the context they were fetched to add. `imagesAsText`: a tier whose
+						// wire cannot carry a block gets the text alone rather than a block it will quietly discard —
+						// and main does not render for an eyeless model at all, so the frame above will already say
+						// text-only. AN INDEX WITH NO BYTES IS SKIPPED rather than sent empty, because a page that
+						// failed to render is named in the frame and an empty block is a 400.
+						//
+						// ORDER IS LOAD-BEARING: text first, pages after. The frame is what stops the model believing
+						// it holds the whole document, and a caption read after the thing it qualifies is a caption
+						// that did not work. `_appendBlock` batches these into the one user message.
+						if ( isLiveTurn && !opts?.imagesAsText ) {
+							for ( const data of entry.imageData ?? [] ) {
+								if ( !data ) continue;
+								this._appendBlock( messages, 'user', { type: 'image', mediaType: PDF_PAGE_IMAGE_MEDIA_TYPE, data } );
+							}
+						}
+						break;
+					}
 					// A folder and a tool ride the same rule and the same reader. Neither carries a whole form
 					// YET — the listing and the schema are compiled by their backing tool, which is a later
 					// phase — so both currently project their reference line on every turn including the live
@@ -1657,7 +1849,20 @@ export class Transcript {
 			// it at zero the moment the user asked would report a saving that has not happened yet.
 			if ( !isLive ) return KCDPrimitive._estimateTokens( Transcript._grantReference( entry ) );
 			if ( entry.kind === 'image' ) return estimateImageTokens( entry.width, entry.height );
-			if ( entry.kind === 'injected-file' ) return Math.ceil( entry.bytes / 4 );
+			// A PDF CARRYING PAGE IMAGES IS NOT PRICED BY ITS TEXT. Ten rendered pages are roughly 16,000 tokens
+			// and the document's own bytes say nothing about them — a two-page scan is a large file with almost
+			// no text, and a dense twelve-page report is a small one. An unpriced page image reads as FREE, which
+			// is the one kind of error that makes a budget readout worse than no readout at all.
+			//
+			// PRICED BY THE DECLARED PAGE AREA rather than by measuring the bytes: `PDF_PAGE_IMAGE_PIXELS` is the
+			// size the rasteriser was told to hit, so the arithmetic is the same pixel-area formula every other
+			// image on the wire pays, through the same constant. `imageData` is only ever present on a hydrated
+			// live turn, so nothing here opens a file or prices a page that is not actually riding.
+			if ( entry.kind === 'injected-file' ) {
+				const pages = ( entry.imageData ?? [] ).filter( ( d ) => !!d ).length;
+				return Math.ceil( entry.bytes / 4 )
+					+ Math.round( pages * PDF_PAGE_IMAGE_PIXELS * IMAGE_TOKENS_PER_PIXEL );
+			}
 			// A folder's listing and a tool's schema are compiled by their backing tool, which has not landed.
 			// Until it does the live form IS the reference form, and pricing it as anything else would be the
 			// gauge reporting a cost nobody pays.

@@ -15,6 +15,7 @@ const PROJECT_ROOT = path.resolve( __dirname, '../../../..' )   // kcd_sdk/src/c
 const HOMES: Record<string, string> = {
 	lens:        '_Claude/lenses/some-lens/some-lens.html',
 	plan:        '_Claude/plans/some-plan.html',
+	patrol:      '_Claude/patrols/some-patrol.html',
 	reference:   '_Claude/references/domain/some-note.html',
 	framework:   '_Claude/kcd_framework.html',
 	template:    '_Claude/templates/_some_template.html',

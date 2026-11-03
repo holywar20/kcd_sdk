@@ -17,7 +17,7 @@ export const KcdAddress = new class KcdAddress {
 	// ── The closed sets ( protocol §2, §4 ) ──────────────────────────────────────
 	/** Removing a type from this list is the sharp edge: a root type absent here makes `KcdParse.parse` THROW
 	 *  (`unknown-type`), so retire one only once no document still declares it. */
-	TYPES        = [ 'lens', 'plan', 'reference', 'framework', 'template', 'prompt-partial', 'nav-index', 'habit', 'contract', 'generator', 'analyzer', 'bug-report' ];
+	TYPES        = [ 'lens', 'plan', 'patrol', 'reference', 'framework', 'template', 'prompt-partial', 'nav-index', 'habit', 'contract', 'generator', 'analyzer', 'bug-report' ];
 	STATUSES     = [ 'draft', 'active', 'observation', 'composed', 'disabled', 'deployed', 'complete', 'retired', 'paused' ];
 	AUDIENCES    = [ 'human', 'agent', 'both' ];
 	MERGES       = [ 'additive', 'declarative', 'union' ];

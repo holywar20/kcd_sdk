@@ -9,7 +9,7 @@ import { NameMatch } from '../core/NameMatch'
 import { Noise } from '../core/Noise'
 import { Blacklist } from '../core/Blacklist'
 import { EsCsv } from '../core/EsCsv'
-import type { FileEntry, FileStat, FileRoots, GrepRow, GrepCount, GrepScan, GrepSkip, GrepCapped } from '../core/FileTypes'
+import type { FileEntry, FileStat, FileRoots, GlobScan, GlobCapped, GrepRow, GrepCount, GrepScan, GrepSkip, GrepCapped } from '../core/FileTypes'
 import { higherLevel, operationsFor, verbFor, type AccessEntry } from '../core/AccessPolicy'
 import { accessRank, type AccessLevel } from '../session/InjectedItem'
 import type { GrantRef } from '../session/InjectedItem'
@@ -56,6 +56,23 @@ export const GREP_READ_COST     = 10
 const LINK_HOPS = 40
 /** Where a path that cannot be resolved lands — a spelling no root can contain, so it is refused. */
 const UNREACHABLE = '\0unreachable'
+
+/** How to walk for a pattern. `glob` imposes no authorization of its own — the caller admits the root before
+ *  calling and filters protected matches out of the result, which is why there is no `deny` here: unlike the
+ *  grep walk, this one opens nothing, so a protected path is dropped by the caller rather than never entered. */
+export type GlobScanOptions = {
+	/** Skip build output, dependency trees and generated files ( see `Noise` ). Default TRUE, as on the grep walk and
+	 *  for the reason `Noise`'s own header gives: every walk is capped, and an unpruned walk of a project tree spends
+	 *  its cap inside `node_modules` and reports nothing for a file that is there ( DEFECT-046 ). A pattern that names
+	 *  a pruned directory outright is honoured regardless, so this cannot hide a path somebody explicitly asked for.
+	 *
+	 *  RULED BY BRYAN, 2026-10-22, on DEFECT-046: pruning stays. That also SETTLES the glob/grep disagreement BUG-138's
+	 *  notes recorded as open — in grep's favour — so a reader who goes looking for that asymmetry will not find it. */
+	skipNoise?: boolean
+	/** Directory entries to visit before the walk gives up. Default GLOB_WALK_CAP. Lower it for a cheap bounded probe —
+	 *  the result says `cappedBy: 'walk'` either way, so a caller can always tell a finished walk from a stopped one. */
+	walkCap?:   number
+}
 
 /** How to search file contents. `grepText` imposes no authorization of its own: the caller admits the root
  *  before calling and passes its own `deny` patterns down. */
@@ -194,12 +211,42 @@ export class SdkFileAccess {
 		}
 	}
 
-	/** Entries under `root` matching a glob, via the shared Glob matcher so results agree with Vault's. Every directory is walked
-	 *  whether or not it matched. Bounded by GLOB_CAP matches and GLOB_WALK_CAP visited entries; a denied subtree is a skip and a warn. */
-	glob( root: string, pattern: string ): FileEntry[] {
+	/**
+	 * Entries under `root` matching a glob, via the shared Glob matcher so results agree with Vault's. Bounded by GLOB_CAP
+	 * matches and GLOB_WALK_CAP visited entries, and WHICH of the two fired travels in the result — see `GlobCapped`.
+	 *
+	 * IT REPORTS THE WALK CAP RATHER THAN LETTING THE CALLER INFER IT ( DEFECT-046 ). This returned a bare array, so the one
+	 * caller computed its disclosure from the match count: a walk that spent all 50,000 visits and matched NOTHING came back
+	 * empty and claimed completeness, and `sm_file__glob` printed a flat "No match" for a file that was on disk. An empty
+	 * answer is the case where the false conclusion is total rather than partial, so it is the case that most needs the fact.
+	 *
+	 * NOISE DIRECTORIES ARE PRUNED, as `grepText` already prunes them and for the identical reason its own header gives: an
+	 * unpruned walk of a project tree spends its cap inside `node_modules` and reports nothing for a file that is there. That
+	 * was this defect's actual cause — `**\/Glob.ts` at the repository root found nothing while the same pattern one level
+	 * down found it instantly. Pruning is what makes the cap reachable only by trees that are genuinely too large, rather
+	 * than by every project with dependencies installed. `skipNoise: false` turns it off for a caller that means to look
+	 * inside build output ( ruled by Bryan 2026-10-22 — the pruning stays, and the glob/grep asymmetry BUG-138's notes
+	 * recorded as an open question is settled in grep's favour ), and a pattern naming a noise directory outright is
+	 * honoured rather than pruned ( below ), so
+	 * `**\/node_modules\/exa*\/**` still works and this cannot become a new way to hide a file from an agent.
+	 */
+	glob( root: string, pattern: string, opts: GlobScanOptions = {} ): GlobScan {
 		const out:   FileEntry[] = []
 		const stack: string[]    = [ root ]
 		let   visited            = 0
+
+		// Taken from the options with the constant as the floor, the same shape `grepText` already uses for every
+		// one of its ceilings. A caller wanting a cheap bounded probe sets it low; nothing else passes it.
+		const walkCap = opts.walkCap ?? GLOB_WALK_CAP
+
+		// A pattern that NAMES a pruned directory means it: pruning it would answer an explicit request with
+		// silence, which is the same false absence this repair exists to remove. Read off the pattern text only,
+		// never the disk, so it discloses nothing.
+		const noise  = opts.skipNoise !== false
+		const asked  = ( name: string ): boolean => pattern.includes( name )
+
+		const done = ( cappedBy: GlobCapped ): GlobScan =>
+			( { entries: out, visited, capped: cappedBy !== null, cappedBy } )
 
 		while( stack.length > 0 ) {
 			const dir = stack.pop() as string
@@ -214,9 +261,9 @@ export class SdkFileAccess {
 
 			for( const d of dirents ) {
 				visited += 1
-				if( visited > GLOB_WALK_CAP ) {
-					this._warn( 'glob_walk_capped', { root, pattern, cap: GLOB_WALK_CAP } )
-					return out
+				if( visited > walkCap ) {
+					this._warn( 'glob_walk_capped', { root, pattern, cap: walkCap } )
+					return done( 'walk' )
 				}
 
 				const full = join( dir, d.name )
@@ -229,17 +276,19 @@ export class SdkFileAccess {
 					}
 					if( out.length >= GLOB_CAP ) {
 						this._warn( 'glob_truncated', { root, pattern, cap: GLOB_CAP } )
-						return out
+						return done( 'matches' )
 					}
 				}
 
 				if( d.isDir ) {
+					// Pruned, not filtered: the subtree is never entered. Same order and same reasoning as the grep walk.
+					if( noise && Noise.skipsDir( d.name ) && !asked( d.name ) ) continue
 					stack.push( full )
 				}
 			}
 		}
 
-		return out
+		return done( null )
 	}
 
 	/** Entries whose NAME contains `query` (case-insensitive, via NameMatch). `roots` is one folder, or [] for the whole computer.
@@ -746,8 +795,8 @@ export class SdkFileAccess {
 	/** The deny-list refusal, worded once for both doors. It is not a reach problem, so asking or relocating will not fix it. */
 	static blacklistLine(): string {
 		// Names the rule and its reference: a listed file cannot be opened to learn why it was refused, so this line is the only route.
-		return 'It matches a protected pattern ( credentials, keys and repository internals, plus the Command '
-			+ 'Deck command roster and a skill\'s `SKILL.md`, which are authored instruction rather than data ) — the deny-list\'s '
+		return 'It matches a protected pattern ( credentials, keys and repository internals, plus the Runbook\'s '
+			+ 'command roster and a skill\'s `SKILL.md`, which are authored instruction rather than data ) — the deny-list\'s '
 			+ 'defaults hold unconditionally and no configuration can switch one off. This is not something a '
 			+ 'retry, a different path or a granted file will fix. What each pattern protects, and the roster\'s '
 			+ 'shape if a user needs to edit it themselves, is in '

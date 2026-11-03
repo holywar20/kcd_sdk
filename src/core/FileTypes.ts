@@ -16,6 +16,27 @@ export type FileEntry = {
 	mtime: number
 }
 
+/** WHICH ceiling stopped a pattern walk, and the two are NOT one fact ( DEFECT-046 ). `matches` is the
+ *  match budget: a thousand were found and more exist, so the LIST is partial and narrowing the pattern is
+ *  the fix. `walk` is the visited-entry ceiling: the walk gave up before it had seen the whole tree, so the
+ *  SEARCH is partial and a deeper root is the fix. Null means the walk finished.
+ *
+ *  Keeping them apart is the whole defect. A walk that spends its visit cap and matches NOTHING returns an
+ *  empty list, and an empty list inferred from a match count reads as `capped: false` — a complete,
+ *  authoritative "not there" for a file that is. "This list is partial" and "this search did not finish"
+ *  are different sentences and only the second can be true of an empty answer. */
+export type GlobCapped = 'matches' | 'walk' | null
+
+/** What a pattern walk returns. `entries` is what matched; `visited` is how many directory entries were
+ *  looked at, so an empty answer is interpretable rather than bare — the same reason `GrepScan` carries
+ *  `searched`. `capped` says a ceiling fired at all and `cappedBy` says which. */
+export type GlobScan = {
+	entries:  FileEntry[]
+	visited:  number
+	capped:   boolean
+	cappedBy: GlobCapped
+}
+
 /** One entry's metadata, when you stat a single path. */
 export type FileStat = {
 	isDir: boolean

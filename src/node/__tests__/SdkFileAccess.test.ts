@@ -1,6 +1,6 @@
 import { describe, it, expect, afterEach } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'fs'
-import { join, basename } from 'path'
+import { join, basename, resolve } from 'path'
 import { tmpdir } from 'os'
 import { SdkFileAccess, SEARCH_MATCH_CAP, SEARCH_YIELD_EVERY, type SearchToken } from '../SdkFileAccess'
 import type { FileEntry } from '../../core/FileTypes'
@@ -478,3 +478,108 @@ describe( 'SdkFileAccess._esLive', () => {
 		expect( SdkFileAccess._esLive( [ row( a ), row( b ) ] )?.map( ( e ) => e.path ) ).toEqual( [ a, b ] )
 	} )
 } )
+
+/**
+ * glob — the pattern walk, and the two ceilings it has to keep apart ( DEFECT-046 ).
+ *
+ * The reported symptom: `**\/Glob.ts` at a repository root answered "No match" for a file that was on disk,
+ * while the identical pattern one level down returned it instantly. Two causes, and both are fixed here —
+ * the walk spent its visit budget inside `node_modules` before reaching the file, and the result had no way
+ * to SAY so, because it was a bare array and the one caller inferred its disclosure from the match count.
+ *
+ * An empty answer is exactly where that inference does the most damage: an agent is told the tree does not
+ * hold the file, with no hint that the search stopped early, so the false conclusion is total rather than
+ * partial. Every case below is about an empty or short answer carrying the reason it is short.
+ */
+describe( 'glob — a stopped walk is distinguishable from an exhausted one', () => {
+
+	/** A tree with a noise directory that holds the only match, plus a real one, so pruning is observable. */
+	function planted(): string {
+		const root = tmpDir()
+		mkdirSync( join( root, 'src', 'core' ), { recursive: true } )
+		mkdirSync( join( root, 'node_modules', 'dep' ), { recursive: true } )
+		mkdirSync( join( root, 'dist' ), { recursive: true } )
+		writeFileSync( join( root, 'src', 'core', 'Glob.ts' ), 'export const g = 1' )
+		writeFileSync( join( root, 'node_modules', 'dep', 'Glob.ts' ), 'vendored' )
+		writeFileSync( join( root, 'dist', 'Glob.ts' ), 'built' )
+		return root
+	}
+
+	it( 'reports a FINISHED walk as finished, with nothing capped', () => {
+		// The baseline the other cases are read against: `capped: false` has to keep meaning "this is all of them".
+		const scan = new SdkFileAccess().glob( planted(), '**/Glob.ts' )
+
+		expect( scan.cappedBy ).toBeNull()
+		expect( scan.capped ).toBe( false )
+		expect( scan.visited ).toBeGreaterThan( 0 )
+	} )
+
+	it( 'says `walk` when it ran out of visits, even though the list is EMPTY', () => {
+		// THE DEFECT ITSELF. One visited entry is not enough to reach anything, so this returns nothing —
+		// and the whole point is that it must not look like a tree with nothing in it.
+		const scan = new SdkFileAccess().glob( planted(), '**/nothing-matches-this.xyz', { walkCap: 1 } )
+
+		expect( scan.entries ).toHaveLength( 0 )
+		expect( scan.cappedBy ).toBe( 'walk' )
+		expect( scan.capped ).toBe( true )
+	} )
+
+	it( 'says `walk` on a NON-EMPTY list too — a short list is as misleading as an empty one', () => {
+		const root = tmpDir()
+		mkdirSync( join( root, 'a' ), { recursive: true } )
+		for( const n of [ 'one', 'two', 'three', 'four', 'five', 'six' ] ) writeFileSync( join( root, 'a', `${ n }.ts` ), '' )
+
+		const scan = new SdkFileAccess().glob( root, '**/*.ts', { walkCap: 3 } )
+
+		expect( scan.cappedBy ).toBe( 'walk' )
+		expect( scan.entries.length ).toBeLessThan( 6 )
+	} )
+
+	it( 'PRUNES noise directories, which is what let the root-level case fail at all', () => {
+		// `grepText` already prunes these, and `Noise`'s own header says why: every walk is capped, so an
+		// unpruned walk spends its cap inside `node_modules`. This walk was the one that never got the rule.
+		const found = new SdkFileAccess().glob( planted(), '**/Glob.ts' ).entries.map( ( e ) => e.path.replace( /\\/g, '/' ) )
+
+		expect( found.some( ( p ) => p.endsWith( 'src/core/Glob.ts' ) ) ).toBe( true )
+		expect( found.some( ( p ) => p.includes( 'node_modules' ) ) ).toBe( false )
+		expect( found.some( ( p ) => p.includes( '/dist/' ) ) ).toBe( false )
+	} )
+
+	it( 'HONOURS a pattern that names a pruned directory outright', () => {
+		// Pruning must not become a new way to hide a file from somebody who asked for it by name — that would
+		// be the same false absence this repair exists to remove, wearing different clothes.
+		const found = new SdkFileAccess().glob( planted(), '**/node_modules/**/Glob.ts' ).entries
+
+		expect( found ).toHaveLength( 1 )
+		expect( found[ 0 ]!.path.replace( /\\/g, '/' ) ).toContain( 'node_modules/dep/Glob.ts' )
+	} )
+
+	it( 'lets a caller turn pruning off wholesale', () => {
+		const found = new SdkFileAccess().glob( planted(), '**/Glob.ts', { skipNoise: false } ).entries
+
+		expect( found ).toHaveLength( 3 )
+	} )
+
+	/**
+	 * THE REPORTED REPRODUCTION, against the real repository tree ( DEFECT-046 ). The bug report's own words:
+	 * `**\/Glob.ts` on the workspace root answered "No match", while the identical pattern rooted one level
+	 * down returned the file instantly. This is that exact call.
+	 *
+	 * It walks real disk and the root is derived rather than written down — `cwd` is the sub-project, so its
+	 * parent is the workspace. The file it looks for is this walker's own matcher, which cannot move without
+	 * this file moving with it; if it ever does, fix the path rather than deleting the case, because this is
+	 * the only test here that proves the symptom and not just the mechanism.
+	 */
+	it( 'finds a source file from the WORKSPACE ROOT, which is the call that reported this defect', () => {
+		const workspace = resolve( process.cwd(), '..' )
+
+		const scan  = new SdkFileAccess().glob( workspace, '**/Glob.ts' )
+		const found = scan.entries.map( ( e ) => e.path.replace( /\\/g, '/' ) )
+
+		expect( found.some( ( p ) => p.endsWith( 'kcd_sdk/src/core/Glob.ts' ) ) ).toBe( true )
+		// And it got there without exhausting itself, which is the half that makes the answer trustworthy:
+		// a found file plus a capped walk would still mean "there may be more I never reached".
+		expect( scan.cappedBy ).toBeNull()
+	} )
+} )
+

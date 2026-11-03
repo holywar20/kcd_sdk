@@ -15,6 +15,8 @@ export * from './AccessPolicy';
 export * from './VaultLayout';
 export * from './InstallManifest';
 export * from './FileTypes';
+export * from './FileParcel';
+export * from './FileTransport';
 export * from './TextTypes';
 export * from './Glob';
 export * from './PathText';

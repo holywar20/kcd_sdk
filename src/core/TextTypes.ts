@@ -17,6 +17,12 @@ export const TextTypes = {
 		'jsonl', 'ndjson',
 		// insight documents — JSON under our own extension ( the SIG / starmind_insight substrate )
 		'sig',
+		// temporal graphs — the same thing again, JSON under the Temporal Graph studio's own extension. Omitted
+		// when that plug-in shipped, and the cost was total: the renderer's whole file-read lane reads with
+		// `preview: true`, which refuses anything absent from this table, so a `.tgraph` could not be opened by
+		// a double-click, by the studio's own opener, or by the dev rig — only an unsaved scratch graph ever
+		// drew ( TASK-2525 ). A plug-in shipping a file format wants its extension here in the same commit.
+		'tgraph',
 		// web / scripts
 		'js', 'mjs', 'cjs', 'jsx', 'ts', 'mts', 'cts', 'tsx', 'vue', 'svelte',
 		'html', 'htm', 'xml', 'svg', 'css', 'scss', 'sass', 'less',
