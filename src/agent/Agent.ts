@@ -294,6 +294,55 @@ export type ContributionSettings = {
 	params?:  Record<string, unknown>;
 };
 
+/**
+ * ONE REFERENCE DOCUMENT COMPOSED ONTO A RUN RATHER THAN DECLARED ON THE AGENT ( TASK-2699, plan 90 phase 2 ).
+ *
+ * A unit of work can name the knowledge it needs, and the lane resolves those names and composes the bodies
+ * into the session that works it. The agent's RECORD is untouched: this arrives through `bindEnv` like every
+ * other live layer, is never persisted, and returns to empty the moment the lane binds an empty list.
+ *
+ * `path` is carried beside the text and is load-bearing twice: it is what lets `compiledContext` drop a
+ * document the lens stack ALREADY loads ( otherwise the same body rides twice ), and it is what files the
+ * block under its own artifact in the breakdown, so an injected reference is priced and labelled exactly as
+ * a stacked `load`-mode one is.
+ */
+export type InjectedReference = {
+	/** The name the unit of work declared, kept for the record and for a thread line. */
+	name: string;
+	/** The resolved vault path of the document the name was resolved to. */
+	path: string;
+	/** The document's loaded body, already read — this object holds no disk. */
+	text: string;
+};
+
+/**
+ * ONE SKILL COMPOSED ONTO A RUN RATHER THAN ATTACHED TO THE AGENT ( TASK-2701, plan 90 phase 3 ).
+ *
+ * A unit of work can name a skill, and the lane resolves it off the shelf and composes its INSTRUCTIONS into
+ * the session that works it. The agent's `skills` list — the slugs a person attached — is untouched, which is
+ * what keeps the agent manifest's `attached` half meaning what it says.
+ *
+ * ███ IT IS CONTEXT AND NOTHING ELSE. NOTHING BUNDLED EXECUTES, ON ANY PATH. ███
+ * A Skill in the standard format bundles resources, and in some ecosystems a bundled resource is executable.
+ * This object carries TEXT: the instructions, already read. It holds no path a run is told to execute, no
+ * command, no tool identity and no `allowed-tools` list — the resolver drops that field rather than carrying
+ * it, because an injection may inform or narrow and may NEVER widen what a run may reach. A skill that could
+ * grant a capability would let a card approve its own permissions, which is the one thing this axis is
+ * forbidden to do.
+ */
+export type InjectedSkill = {
+	/** The shelf slug the unit of work named. */
+	slug: string;
+	/** The skill's own declared name. */
+	name: string;
+	/** The trigger description, WHOLE — never truncated, the same rule the spine label keeps. */
+	description: string;
+	/** The skill folder's path, for the breakdown and for de-duplication. NOT an instruction to read it. */
+	path: string;
+	/** The `SKILL.md` instructions, already read. The whole of what an injected skill contributes. */
+	text: string;
+};
+
 export type AgentEnvironment = {
 	hostPrompt?:     string;
 	/** What the host says about the INSTALLATION this agent is running in — see `Agent.hostEnvironment`. */
@@ -313,6 +362,51 @@ export type AgentEnvironment = {
 	hostManagedTools?: boolean;
 	contributions?:  Contribution[];
 	attachments?:    string;
+	/**
+	 * THE REFERENCE DOCUMENTS THIS RUN'S UNIT OF WORK NAMED, resolved and read by the host — see
+	 * `InjectedReference`. `[]` is the off value and leaves nothing on the wire, which is what makes a bind
+	 * per handoff flush-and-fill rather than cumulative: a card naming none returns the run to the agent's
+	 * own base.
+	 */
+	references?:     readonly InjectedReference[];
+	/**
+	 * THE LENSES THIS RUN'S UNIT OF WORK NAMED, resolved and loaded by the host ( TASK-2700, plan 90 phase 2 ).
+	 *
+	 * A lens is a BUNDLE where a reference is a document: philosophy plus a whole routing table, which is why
+	 * it arrives as a `LensObject` rather than as text — it has to go through the same dredge and the same slot
+	 * resolution the agent's own stack goes through, or injected doctrine and stacked doctrine would be
+	 * assembled by two different paths and could drift.
+	 *
+	 * IT IS APPENDED AND NEVER PREPENDED — see `Agent.stack`. `[]` is the off value, which is what makes a
+	 * bind per handoff flush-and-fill rather than cumulative.
+	 */
+	lenses?:         readonly LensObject[];
+	/**
+	 * THE SKILLS THIS RUN'S UNIT OF WORK NAMED, resolved off the shelf and READ by the host — see
+	 * `InjectedSkill`. `[]` is the off value, which is what makes a bind per handoff flush-and-fill.
+	 *
+	 * NOT `skills`, which is the SPINE LABEL layer for what the AGENT holds. The two are deliberately
+	 * separate: `skills` says "this agent can reach these, go and open one", and this says "here is what this
+	 * one says, you did not have to go and get it". Folding them would make an agent's own manifest claim a
+	 * skill the card brought, and `attached` would stop meaning attached.
+	 */
+	injectedSkills?: readonly InjectedSkill[];
+	/**
+	 * WHAT THE RUN'S UNIT OF WORK NAMED AND THE HOST COULD NOT GIVE IT ( TASK-2704, plan 90 phase 4 ).
+	 *
+	 * ███ THESE TWO REACH THE RECORD AND NEVER THE MODEL. ███ Nothing composes them, no block carries them,
+	 * and `compiledContext` does not read them — they exist so `injectionReport` can say what was ASKED FOR
+	 * AND ABSENT, which is the one fact the three layers above structurally cannot carry: a name the vault
+	 * could not supply never became a document, so by the time anything is composed there is nothing left to
+	 * notice. An agent that did not read what its card named is otherwise indistinguishable from one that
+	 * read it and ignored it.
+	 *
+	 * `skipped` is a name nothing answered to. `refused` is a bundled resource DECLINED on purpose, which did
+	 * not prevent its skill riding. Two lists because they are two events, and a reader has to be able to
+	 * tell a thing that was missing from a thing that was turned down.
+	 */
+	injectedSkipped?: readonly string[];
+	injectedRefused?: readonly string[];
 	/**
 	 * THE SPINE LABEL for every skill attached to this agent — a name and a WHOLE description each, already
 	 * resolved against the library by the host, because this object holds no disk and no library.
@@ -342,7 +436,67 @@ export type AgentEnvironment = {
  */
 export type EnvReaderFn = () => AgentEnvironment;
 
+/**
+ * WHAT ONE UNIT OF WORK'S CONTEXT COST THE TURN THAT SERVED IT ( TASK-2704, plan 90 phase 4 ).
+ *
+ * An invisible input is a debugging dead end: a turn that behaves oddly because a lane quietly changed what
+ * it knew has a cause nobody can see. So a handoff that injected anything records all four facts — what rode,
+ * what the agent already held, what the lane skipped, and what the addition weighed.
+ *
+ * `held` IS NOT A FAILURE AND NOT A SKIP. It is the cheap, common and desirable case: a document the agent's
+ * own stack already loads was named, found already there, and not composed again. It is reported because a
+ * reader asking "why did naming this cost nothing" needs the answer on the record rather than in a comment.
+ *
+ * WHAT WAS SKIPPED IS HERE AND IS NOT SOMETHING THE COMPOSITION KNOWS. A name the vault could not supply
+ * never became a document, so nothing in the composed context could ever notice it was asked for — which
+ * makes it the one fact that has to be CARRIED to this object rather than derived from it. It arrives on the
+ * bound environment ( `injectedSkipped` / `injectedRefused` ), reaches the record, and is composed nowhere:
+ * an agent that did not receive what its card named is otherwise indistinguishable from one that received it
+ * and ignored it, and that is the harder of the two to debug.
+ */
+export interface InjectionReport {
+	/** The references that actually rode, by the name the unit of work declared. Post-de-duplication. */
+	references: string[];
+	/** The lenses appended to the stack, by name. One the agent already stacks is in `held` instead. */
+	lenses:     string[];
+	/** The skills composed as instructions, by slug. */
+	skills:     string[];
+	/** Named by the unit of work and ALREADY THERE, so not composed again — references and lenses together. */
+	held:       string[];
+	/** Named and NOT SUPPLIED — the vault or the shelf could not answer. The fourth fact a record owes, and
+	 *  the one no composed block could carry, since an unresolvable name never became a document. */
+	skipped:    string[];
+	/** Named, found, and DECLINED on purpose — a bundled resource that would execute. Its skill still rode,
+	 *  so this is never the reason a context is short. A different event from `skipped`, deliberately. */
+	refused:    string[];
+	/** What the addition weighs on the wire, by the one house estimator. `null` where it cannot be measured
+	 *  honestly rather than a figure nobody should trust — see `Agent.injectionReport`. */
+	tokens:     number | null;
+	/** The published ceiling this was measured against, carried so a record is readable without the constant. */
+	budget:     number;
+	/** Over the published budget. A FACT ON THE RECORD AND NEVER A VETO — nothing branches on it. */
+	overBudget: boolean;
+}
+
 export class Agent {
+
+	/**
+	 * ███ THE PUBLISHED TOKEN BUDGET FOR EVERYTHING ONE UNIT OF WORK INJECTS ███ ( TASK-2704, plan 90 )
+	 *
+	 * REPORTED, NEVER ENFORCED. Nothing in this codebase branches on it: a card over it is composed, sent and
+	 * worked exactly as one under it, and the only consequence is a line on the record saying so. The brake on
+	 * this axis is the per-kind COUNT CAP at authoring time, which is a moment somebody is present for;
+	 * refusing at the handoff would halt a lane over a ceiling whoever authored the card was never shown.
+	 *
+	 * ── WHERE THE NUMBER COMES FROM, SO THE NEXT PERSON CAN ARGUE WITH IT ──
+	 * Measured, not guessed. A whole real composition reads about 11,400 tokens ( Lincoln, one lens ). One
+	 * `load`-mode reference on a real agent reads about 2,900. The four authored skills read 697, 749, 623 and
+	 * 676, so a full skill complement is about 2,745. 6,000 therefore passes the cases this axis was built
+	 * for — a couple of heavy references, or every skill, or a lens plus a reference — and trips on the case
+	 * it was built to make visible: four heavy references, about 11,600, which would roughly DOUBLE what the
+	 * turn already carries while the agent that authored the card pays none of it.
+	 */
+	static readonly INJECTION_BUDGET = 6000;
 
 	readonly id: string;
 	/** The workspace this agent belongs to. READONLY: its lens paths are vault-relative, so moving projects is a
@@ -447,6 +601,70 @@ export class Agent {
 	/** The bound session's PREFILL attachments, already composed to a string. An agent reaching into `session/`
 	 *  for the entry array would invert the layering: a session is a run of an agent, not the reverse. */
 	get attachments(): string { return this._layer( 'attachments' ) ?? ''; }
+	/** The reference documents the run's unit of work named, resolved and read by the host. `[]` until bound,
+	 *  and `[]` again the moment a handoff binds nothing — see `AgentEnvironment.references`. */
+	get injectedReferences(): readonly InjectedReference[] { return this._layer( 'references' ) ?? []; }
+	/**
+	 * THE LENSES THE RUN'S UNIT OF WORK NAMED, minus any this agent already stacks — see
+	 * `AgentEnvironment.lenses`. `[]` until bound, and `[]` again the moment a handoff binds nothing.
+	 *
+	 * THE DE-DUPLICATION IS HERE RATHER THAN AT THE CALLER, so no reader of `stack` can forget it and no
+	 * second caller can get it wrong. Compared by PATH, slash-blind and case-blind, against `this.lenses`
+	 * ALONE — which is the whole subtlety, and it is easy to get backwards:
+	 *
+	 * A LENS CARRIED ONLY AS A ROUTING ROW IN ANOTHER LENS'S REFERENCES COUNTS AS NOT STACKED. That row is a
+	 * POINTER and not the text: it tells the agent the lens exists and where to find it, and contributes
+	 * neither philosophy nor the lens's own routing table. So it is composed, and composing it is exactly the
+	 * "read without spending a turn" this whole feature is for. Comparing against `getNodes()` or
+	 * `getPolicy()` instead would silently skip precisely the case worth injecting.
+	 */
+	get injectedLenses(): readonly LensObject[] {
+		const bound = this._layer( 'lenses' ) ?? [];
+		if ( !bound.length ) return [];
+		const norm  = ( s: string ): string => s.replace( /\\/g, '/' ).toLowerCase();
+		const held  = new Set( this.lenses.map( ( l ) => norm( l.getPath() ?? '' ) ) );
+		const out: LensObject[] = [];
+		for ( const lens of bound ) {
+			const key = norm( lens.getPath() ?? '' );
+			// A lens with no path cannot be told apart from another, so it rides rather than being guessed at.
+			if ( key && held.has( key ) ) continue;
+			if ( key ) held.add( key );
+			out.push( lens );
+		}
+		return out;
+	}
+
+	/** The skills the run's unit of work named, resolved and read by the host — see
+	 *  `AgentEnvironment.injectedSkills`. `[]` until bound, and `[]` again the moment a handoff binds nothing.
+	 *  NOT `skillLabels`, which is what the AGENT holds; see that field on why the two never merge. */
+	get injectedSkills(): readonly InjectedSkill[] { return this._layer( 'injectedSkills' ) ?? []; }
+
+	/** What the run's unit of work named and the host could not supply, and what it declined — see
+	 *  `AgentEnvironment.injectedSkipped`. FOR THE RECORD ONLY: nothing composes these and no block carries
+	 *  them, so neither can reach the model. */
+	get injectedSkipped(): readonly string[] { return this._layer( 'injectedSkipped' ) ?? []; }
+	get injectedRefused(): readonly string[] { return this._layer( 'injectedRefused' ) ?? []; }
+
+	/**
+	 * THE LENS STACK THIS RUN ACTUALLY COMPOSES — the agent's own lenses, then whatever its unit of work named.
+	 *
+	 * ███ INJECTED LENSES ARE APPENDED. POSITION 0 IS NOT ANYBODY'S TO TOUCH. ███
+	 * Position 0 is the PRIMARY, and only the primary is marked as such and read for the agent's identity
+	 * ( `firstLens`, `getPath`, `getFrontmatter`, `getSections`, and the `( Primary )` label `buildCareBands`
+	 * writes ). Insert an injected lens at the front and a card silently replaces its agent's voice, stance
+	 * and refusals when all it meant to do was add some doctrine — a failure nothing downstream would catch,
+	 * because the turn would look perfectly well-formed. So this concatenation's ORDER is load-bearing, and
+	 * the suite asserts the primary is identical across a handoff rather than trusting this comment.
+	 *
+	 * THE IDENTITY READS DELIBERATELY DO NOT COME THROUGH HERE. `firstLens`, `getPath`, `isDraft`,
+	 * `getFrontmatter` and `getSections` stay on `this.lenses`, so a card cannot rename an agent, cannot give
+	 * a draft a path, and cannot make a draft runnable. What comes through here is CONTEXT: nodes, policy,
+	 * contributors, blocks, care bands, the manifest's own file rows and the composition breakdown.
+	 */
+	get stack(): LensObject[] {
+		const injected = this.injectedLenses;
+		return injected.length ? [ ...this.lenses, ...injected ] : this.lenses;
+	}
 	/** The spine labels for this agent's attached skills — see `AgentEnvironment.skills`. NOT `this.skills`,
 	 *  which is the record's slug list: the record says WHICH, the bound layer says what each one IS. */
 	get skillLabels(): readonly CompileSkill[] { return this._layer( 'skills' ) ?? []; }
@@ -701,6 +919,11 @@ export class Agent {
 	 * No tools come out of a lens: tools belong to the agent.
 	 */
 	compose(): void {
+		// `this.lenses` AND NOT `stack`, deliberately. `composed{X}` is a statement about the AGENT — what its
+		// authored stack materializes to — and `effective{X}` is read as the agent's own holdings. A lens a
+		// single unit of work named is not one of the agent's holdings, and folding it in here would make the
+		// record's own derived tier report a card's context as the agent's, which is the one thing plan 90
+		// promised not to do. Injected doctrine reaches the turn through `stack`, which is context, not record.
 		const nodes = this.lenses.flatMap( ( l ) => l.getNodes() );
 		this.composedReferences = _pathsOfType( nodes, 'reference' );
 		this.composedPlans      = _pathsOfType( nodes, 'plan' );
@@ -798,7 +1021,7 @@ export class Agent {
 			rowWeight.set( norm( r.where ), weigh( r.text ) );
 
 		const root = this.firstLens;
-		const rel  = ( abs: string ): string => norm( ( root ?? this.lenses[ 0 ] )?.vaultRelative( abs ) ?? abs );
+		const rel  = ( abs: string ): string => norm( ( root ?? this.stack[ 0 ] )?.vaultRelative( abs ) ?? abs );
 
 		// A displaced habit puts nothing on the wire, so the chart must not price it: chart and compile are one
 		// plan projected twice, and must agree.
@@ -812,7 +1035,9 @@ export class Agent {
 		const out: CompositionRow[] = [];
 		const seen = new Set<string>();
 
-		for ( const lens of this.lenses ) {
+		// `stack`, so an injected lens and everything it declares is PRICED. A row the breakdown omits is a cost
+		// a reader cannot see, and the chart and the compile are one plan projected twice: they have to agree.
+		for ( const lens of this.stack ) {
 			const lp = norm( lens.getPath() ?? '' );
 			seen.add( lp );
 			out.push( {
@@ -877,9 +1102,11 @@ export class Agent {
 
 	// ── The lens read surface, aggregated across every composed lens (null-safe) ──
 
-	getNodes(): KCDPrimitive[]        { return this.lenses.flatMap( ( l ) => l.getNodes() ); }
-	getPolicy(): PolicyEntry[]        { return this.lenses.flatMap( ( l ) => l.getPolicy() ); }
-	getContributors(): KCDPrimitive[] { return this.lenses.flatMap( ( l ) => l.getContributors() ); }
+	// READ THROUGH `stack`, so a lens the unit of work named contributes its nodes, its modes and its
+	// contributors exactly as a stacked one does. The two identity reads below stay on `this.lenses`.
+	getNodes(): KCDPrimitive[]        { return this.stack.flatMap( ( l ) => l.getNodes() ); }
+	getPolicy(): PolicyEntry[]        { return this.stack.flatMap( ( l ) => l.getPolicy() ); }
+	getContributors(): KCDPrimitive[] { return this.stack.flatMap( ( l ) => l.getContributors() ); }
 	getFrontmatter(): Record<string, unknown> { return this.firstLens?.getFrontmatter() ?? {}; }
 	getSections(): Record<string, string>      { return this.firstLens?.getSections() ?? {}; }
 
@@ -894,7 +1121,9 @@ export class Agent {
 		// contributes once. Claimed per lens, not per block: a flat block list cannot tell one artifact's regions from a copy.
 		const claimed: Set<string> = new Set();
 		const lensBlocks: TaggedBlock[] = [];
-		for ( const lens of this.lenses ) {
+		// STACK ORDER, AND INJECTED LENSES ARE LAST IN IT — so a reference the agent's own stack already claims
+		// stays claimed by the lens a person authored, and an injected lens adds rather than displaces.
+		for ( const lens of this.stack ) {
 			const blocks = lens.getContextBlocks();
 			for ( const b of blocks ) if ( !claimed.has( b.path ) ) lensBlocks.push( b );
 			// Claimed after the lens drains: claiming as we go would let an artifact's second region collide with its first.
@@ -921,12 +1150,31 @@ export class Agent {
 		return blocks.filter( b => SlotResolver.rank( b.sourceLayer ) === best.get( b.path ) );
 	}
 
+	/** One injected thing per PATH, first declaration winning, compared slash-blind — two names can resolve to
+	 *  one document, or two spellings of a slug to one skill folder, and the per-kind cap counts names. Order
+	 *  is preserved.
+	 *
+	 *  GENERIC over anything carrying a `path`, so the reference kind and the skill kind share this one rule
+	 *  rather than each getting a copy of it that could drift. */
+	static dedupeByPath<T extends { path: string }>( refs: readonly T[] ): T[] {
+		const norm = ( s: string ): string => s.replace( /\\/g, '/' ).toLowerCase();
+		const seen = new Set<string>();
+		const out: T[] = [];
+		for ( const ref of refs ) {
+			const key = norm( ref.path );
+			if ( seen.has( key ) ) continue;
+			seen.add( key );
+			out.push( ref );
+		}
+		return out;
+	}
+
 	/**
 	 * `getContextBlocks()` run through `SlotResolver` and `ContextAssembler`, as one source-blind string.
 	 * A draft contributes nothing; the `systemPrompt` is not prepended here, since `wireSystem` folds it in.
 	 */
 	contribute(): string {
-		if ( !this.lenses.length ) return '';
+		if ( !this.stack.length ) return '';
 		return SlotResolver.compile( this.getContextBlocks(), Agent.SYSTEM_SEP );
 	}
 
@@ -949,7 +1197,7 @@ export class Agent {
 		const contributed = extras.contributed ?? [];
 		// `sections` joins the block list, not the bracket: a manifest-tagged block fuses with the lens's own rows for that section.
 		const sections = extras.sections ?? [];
-		if ( !this.lenses.length ) return Agent.joinSegments( [ before, contributed, sections, after ] );
+		if ( !this.stack.length ) return Agent.joinSegments( [ before, contributed, sections, after ] );
 		const blocks  = [ ...SlotResolver.compilePlan( this.getContextBlocks() ).survivors, ...contributed, ...sections ];
 		const inIndex = ( b: TaggedBlock ): boolean => b.sourceLayer !== 'injected' && b.section !== null && Agent.INDEX_SECTIONS.has( b.section );
 		// The body is everything that ISN'T an index table and isn't the legacy Available-on-request stub.
@@ -978,7 +1226,7 @@ export class Agent {
 	/** Documents the lenses are still waiting on; always empty in main, whose reader is disk. */
 	pending(): string[] {
 		const out: string[] = [];
-		for ( const lens of this.lenses ) out.push( ...lens.pending() );
+		for ( const lens of this.stack ) out.push( ...lens.pending() );
 		return out;
 	}
 
@@ -999,7 +1247,24 @@ export class Agent {
 			? [ Agent.sectionBlock( 'grants', this.grantRows.map( ( r ) => KcdContext.renderRow( r ) ).join( '\n' ), this.grantRows ) ]
 			: [];
 		return this.compiledBlocks( {
-			sections: grants,
+			// Injected references ride `sections` rather than the brackets, so they land in the BODY and tier
+			// into `# Knowledge` beside the references the lens stack loads. Two drops, in this order:
+			//
+			// ONE — ALREADY LOADED. A document the stack declares at `load` contributes its body through the
+			// dredge, so composing it again would put the same text in twice. `off` and `on` contribute no
+			// body, which is what makes those two cases a genuine upgrade to loaded rather than an addition.
+			//
+			// TWO — DECLARED TWICE. Two different names can resolve to one document, and the caps are per
+			// name, so the de-duplication cannot be left to whatever counted the names.
+			//
+			// THE THIRD KIND RIDES THE SAME SLOT. An injected skill's instructions land in the BODY beside the
+			// injected references, through this one `sections` bag, because there is exactly one composition
+			// path for card-carried context and a second one would drift from this one unseen. Deduped by
+			// path for the same reason the references are: two spellings of a slug are one skill on the shelf.
+			sections: [ ...grants, ...Agent.dedupeByPath( this.injectedReferences )
+				.filter( ( r ) => this.lensMode( r.path ) !== 'load' )
+				.map( ( r ) => Agent.referenceBlock( r.path, r.text ) ),
+			...Agent.dedupeByPath( this.injectedSkills ).map( ( s ) => Agent.skillBlock( s ) ) ],
 			before: Agent.joinSegments( [
 				// Host prompt leads: the most-shared layer, identical across agents, so it sits where nothing above can invalidate it.
 				this.hostPrompt   ? [ Agent.extraBlock( 'host-prompt',   this.hostPrompt   ) ] : [],
@@ -1100,6 +1365,103 @@ export class Agent {
 	/** Whole-context token estimate over `wireSystem()`. Deliberately loose; only the wire `usage` is exact. */
 	estimateTokens(): number {
 		return KCDPrimitive._estimateTokens( this.wireSystem() );
+	}
+
+	/**
+	 * ███ WHAT THIS UNIT OF WORK'S CONTEXT COST THE TURN ███ ( TASK-2704, plan 90 phase 4 )
+	 *
+	 * `null` WHEN NOTHING WAS INJECTED, and that is a requirement rather than a convenience: the overwhelming
+	 * majority of cards declare no context, and a turn handed nothing must record nothing — no empty section,
+	 * no "nothing was injected" line, not one token spent saying nothing happened.
+	 *
+	 * ── THE FIGURE IS A DELTA ON THE WIRE, NOT A SUM OF PARTS ──
+	 * `estimateTokens()` with the three injected layers bound, minus the same agent with them blank. That is
+	 * the only definition that answers "what did this ADD", because it accounts for the de-duplication for
+	 * free: a reference the stack already loads at `load` is dropped by `compiledContext`, contributes nothing
+	 * to the wire, and therefore contributes nothing here. Summing the resolved blocks instead would bill a
+	 * document that never rode, which is the exact error this figure exists to make visible.
+	 *
+	 * ── ONE ESTIMATOR, AND IT IS THE HOUSE ONE ──
+	 * `KCDPrimitive._estimateTokens` through `estimateTokens()`, which is what `inspect_agent` prices a whole
+	 * composition with. Two estimators would give two answers to one question and no reader could tell which
+	 * was wrong.
+	 *
+	 * ── `tokens: null` RATHER THAN A FIGURE WE CANNOT STAND BEHIND ──
+	 * The base reading swaps `this._bound`'s three injected keys, synchronously and restored in a `finally`.
+	 * An env READER wins per key over anything bound ( see `_layer` ), so where one is installed the swap
+	 * cannot blank those layers and the delta would silently read 0. Main BINDS rather than reads, so the
+	 * dispatch path always gets a number; a reader-backed agent gets `null`, which is an honest absence rather
+	 * than a wrong number. Never an adjective, never a guess.
+	 *
+	 * ── OVER BUDGET IS REPORTED AND NEVER REFUSED ──
+	 * `overBudget` is a fact on the record, not a veto. Nothing anywhere branches on it: the card is worked.
+	 * The brake on this axis is the per-kind count cap at authoring time, which is a person's or an authoring
+	 * agent's moment; by the time a turn is being composed the work has already been assigned and refusing it
+	 * would halt a lane over a budget nobody was warned about.
+	 */
+	injectionReport(): InjectionReport | null {
+		// THE GUARD READS WHAT THE LANE BOUND, NEVER WHAT SURVIVED THE FILTERS. A card can name one lens the
+		// agent already stacks and nothing else: the effective lists are then empty, and guarding on those
+		// would answer `null` for a handoff that named something — the one case where "it cost nothing" is
+		// the whole of what a reader wants told. Nothing injected means the lane bound nothing.
+		const refs    = this.injectedReferences;
+		const bound   = this._layer( 'lenses' ) ?? [];
+		const skills  = this.injectedSkills;
+		const skipped = this.injectedSkipped;
+		const refused = this.injectedRefused;
+		// A CARD WHOSE EVERY NAME FAILED TO RESOLVE STILL GETS A RECORD, which is why the absences are in
+		// this guard. That handoff composed nothing and cost nothing, and it is the single most important
+		// case on this subject: an agent that silently did not receive what its card named.
+		if ( !refs.length && !bound.length && !skills.length && !skipped.length && !refused.length ) return null;
+
+		const lenses = this.injectedLenses;
+		const norm   = ( s: string ): string => s.replace( /\\/g, '/' ).toLowerCase();
+
+		// WHAT ACTUALLY RODE vs WHAT WAS ALREADY THERE — read through the same two rules `compiledContext`
+		// composes by, rather than a second judgement that could disagree with it.
+		const deduped = Agent.dedupeByPath( refs );
+		const added   = deduped.filter( ( r ) => this.lensMode( r.path ) !== 'load' );
+		const heldRefs = deduped.filter( ( r ) => this.lensMode( r.path ) === 'load' );
+		// A LENS THE AGENT ALREADY STACKS is dropped by `injectedLenses` itself, so the held half is read by
+		// difference against what was bound — the only place that information still exists.
+		const kept = new Set( lenses.map( ( l ) => norm( l.getPath() ?? '' ) ) );
+		const heldLenses = bound.filter( ( l ) => !kept.has( norm( l.getPath() ?? '' ) ) );
+
+		const tokens = this._injectionTokens();
+
+		return {
+			references: added.map( ( r ) => r.name ),
+			lenses:     lenses.map( ( l ) => l.getName() ),
+			skills:     skills.map( ( s ) => s.slug ),
+			held:       [ ...heldRefs.map( ( r ) => r.name ), ...heldLenses.map( ( l ) => l.getName() ) ],
+			skipped:    [ ...skipped ],
+			refused:    [ ...refused ],
+			tokens,
+			budget:     Agent.INJECTION_BUDGET,
+			overBudget: tokens !== null && tokens > Agent.INJECTION_BUDGET
+		};
+	}
+
+	/**
+	 * THE DELTA THE THREE INJECTED LAYERS ADD TO THE WIRE, or `null` where it cannot be measured honestly.
+	 *
+	 * Synchronous throughout and restored in a `finally`, so no other reader can observe the blanked state —
+	 * there is no await between the swap and the restore, by construction. See `injectionReport` for why a
+	 * reader-backed agent answers `null` instead of a figure.
+	 */
+	private _injectionTokens(): number | null {
+		const reader = this._env?.();
+		if ( reader && ( reader.references !== undefined || reader.lenses !== undefined || reader.injectedSkills !== undefined ) ) return null;
+
+		const bound = this._bound;
+		try {
+			this._bound = { ...bound, references: [], lenses: [], injectedSkills: [] };
+			const bare = this.estimateTokens();
+			this._bound = bound;
+			return this.estimateTokens() - bare;
+		} finally {
+			this._bound = bound;
+		}
 	}
 
 	/**
@@ -1257,6 +1619,33 @@ export class Agent {
 		return { region: 'know', section, mergeKey: null, text, sourceLayer: 'agent', path: '', artifactType: 'unknown', habitClass: null };
 	}
 
+	/**
+	 * ONE INJECTED REFERENCE AS A BLOCK — tagged with the document's REAL path and artifact type, not as a
+	 * synthetic extra, which is the whole reason this is not `extraBlock`. `segmentKey` falls through to
+	 * `{ source: artifactType, label: basename( path ) }` and `bucketOf` to `lenses`, so the breakdown and
+	 * the budget treat a reference composed onto the run exactly as one the lens stack loads. A reader
+	 * comparing two turns should not be able to tell which door a document came through.
+	 */
+	static referenceBlock( path: string, text: string ): TaggedBlock {
+		return { region: 'know', section: 'injected-reference', mergeKey: null, text, sourceLayer: 'agent', path, artifactType: 'reference', habitClass: null };
+	}
+
+	/**
+	 * ONE INJECTED SKILL AS A BLOCK — its name, its whole trigger description, and its instructions.
+	 *
+	 * The heading rides IN THE TEXT, so a reader can tell an injected skill from the lens prose around it and
+	 * so the block says where it came from: a skill the unit of work named is not something the agent holds,
+	 * and a model that could not tell the difference would report it as one of its own.
+	 *
+	 * `region: 'know'` because it is knowledge rather than identity, and `path` is the skill folder so the
+	 * breakdown prices it under its own name and `dedupeByPath` can drop a slug named twice. The path is
+	 * CARRIED AND NEVER ACTED ON — nothing anywhere reads from it, and nothing executes out of it.
+	 */
+	static skillBlock( skill: InjectedSkill ): TaggedBlock {
+		const text = `## ${ skill.name } ( a skill this unit of work named )\n\n${ skill.description }\n\n${ skill.text }`;
+		return { region: 'know', section: 'injected-skill', mergeKey: null, text, sourceLayer: 'agent', path: skill.path, artifactType: 'unknown', habitClass: null };
+	}
+
 	/** Sections that price as SYSTEM, not lens identity. `attachments`, `frame` and `mode-line` are parked here: a fourth bucket is probably right, deferred. */
 	private static readonly SYSTEM_SECTIONS = new Set<string>( [ 'host-prompt', 'host-environment', 'agent-name', 'system-prompt', 'root-context', 'attachments', 'frame', 'mode-line' ] );
 	/** The compiled sections that price as TOOLS — the surface, not the identity that may reach for it.
@@ -1320,7 +1709,10 @@ export class Agent {
 	 */
 	buildCareBands( careBlocks: TaggedBlock[] ): TaggedBlock[] {
 		const norm     = ( s: string ): string => s.replace( /\\/g, '/' );
-		const ordered  = this.lenses;
+		// `stack`, so an injected lens's philosophy rides under ITS OWN `## name` heading rather than falling
+		// into the `## Injected` orphan bucket below, which exists for care prose whose lens is gone.
+		// `ordered[ 0 ]` is therefore still the agent's own primary, which is what the `( Primary )` mark reads.
+		const ordered  = this.stack;
 		const allPaths = new Set( ordered.map( l => norm( l.getPath() ?? '' ) ) );
 
 		const title     = ( k: string ): string => k ? k.charAt( 0 ).toUpperCase() + k.slice( 1 ) : 'Care';
@@ -1383,7 +1775,7 @@ export class Agent {
 	 */
 	displacedHabitPaths(): Set<string> {
 		const norm = ( s: string ): string => s.replace( /\\/g, '/' );
-		const root = this.firstLens ?? this.lenses[ 0 ] ?? null;
+		const root = this.firstLens ?? this.stack[ 0 ] ?? null;
 		const href = ( abs: string ): string => norm( root?.vaultRelative( abs ) ?? abs );
 
 		const best = new Map<string, { path: string; rank: number }>();
@@ -1399,7 +1791,9 @@ export class Agent {
 		};
 
 		for ( const n of this.baseHabitNodes ) consider( n, 0 );
-		this.lenses.forEach( ( lens, i ) => { for ( const n of lens.getNodes() ) consider( n, 1 + i ); } );
+		// `stack`: an injected lens's habits contend for their slot like any other, and rank LAST because they
+		// sit last — a tie keeps the incumbent, so a card cannot displace a habit a person authored.
+		this.stack.forEach( ( lens, i ) => { for ( const n of lens.getNodes() ) consider( n, 1 + i ); } );
 
 		const out = new Set<string>();
 		for ( const c of all ) if ( best.get( c.cls )!.path !== c.path ) out.add( c.path );
@@ -1423,7 +1817,9 @@ export class Agent {
 		const root = this.firstLens;
 		const out: TaggedBlock[] = [];
 
-		const fileRows = this.lenses.map( l => KcdContext.renderRow( {
+		// `stack`, so the Files table names every lens whose doctrine actually rode — the manifest is what tells
+		// the model which lenses it is wearing, and one missing from it is one the model cannot account for.
+		const fileRows = this.stack.map( l => KcdContext.renderRow( {
 			what:  l.getName(),
 			where: ( root ?? l ).vaultRelative( l.getPath() ?? '' ),
 			why:   String( l.getFrontmatter()[ 'description' ] ?? '' )
@@ -1477,7 +1873,7 @@ ${ c.text }`,
 	 * so it cannot show a winner the compiled text does not carry.
 	 */
 	slots(): SlotResolution[] {
-		if ( !this.lenses.length ) return [];
+		if ( !this.stack.length ) return [];
 		return SlotResolver.describe( this.getContextBlocks() );
 	}
 

@@ -35,7 +35,26 @@ export type GlobScan = {
 	visited:  number
 	capped:   boolean
 	cappedBy: GlobCapped
+	/** Directories the walk PRUNED and never entered, as paths relative to the root — see `PrunedDirs`. */
+	pruned:   PrunedDirs
+	/** How many were pruned in total, which `pruned` itself cannot say once it is capped. */
+	prunedTotal: number
 }
+
+/** Directories a walk refused to enter, so the answer can say what it did not look at ( DEFECT-2893 ).
+ *
+ *  A cap already says "this list is partial" and a prune said nothing at all, which is the more dangerous of the
+ *  two: a capped list is visibly short, while a pruned subtree makes a complete-looking search over a tree it
+ *  never fully walked. `grep` rooted at `starmind/scripts` reported "No match ... in 41 file( s )" for a string
+ *  sitting in `scripts/build`, and nothing in that sentence was false except the completeness it implied.
+ *
+ *  Relative paths, not bare names: `build` is useless to a caller that does not know WHICH `build`, and the path
+ *  is also the root it can re-run the search against, since a prune never applies to the root itself.
+ *
+ *  CAPPED AT `PRUNE_REPORT_CAP` names. A walk of a monorepo prunes a `node_modules` per package, and a hundred
+ *  of them in a tool reply is the kind of noise that gets the whole disclosure ignored. The count is carried
+ *  separately so the reply can say how many it is not naming. */
+export type PrunedDirs = string[]
 
 /** One entry's metadata, when you stat a single path. */
 export type FileStat = {
@@ -77,8 +96,16 @@ export type GrepSkip = 'noise' | 'nontext' | 'protected' | 'empty' | 'oversized'
  *  one word for all of them sends a caller at the wrong dial. `rows` is the budget across the whole walk —
  *  raising it is the fix. `file` is the per-file match ceiling, hit while the row budget still had room, so
  *  there is nothing left to narrow and `maxPerFile` is the only dial that moves it. `walk` is the directory
- *  entry ceiling: the tree is too large and the root is what wants narrowing. Null means nothing was cut. */
-export type GrepCapped = 'rows' | 'file' | 'walk' | null
+ *  entry ceiling: the tree is too large and the root is what wants narrowing.
+ *
+ *  `time` IS THE CEILING THAT EXISTED NOWHERE ( DEFECT-2904 ). Every other cap here bounds a PAYLOAD, and a walk
+ *  can run long without approaching any of them. The walk had no clock, so the only thing ending a long one was a
+ *  wall OUTSIDE it — the keystone's routed budget, or the transport's idle timeout — and both KILL the call rather
+ *  than letting it answer. A caller got an abort with no output where every other ceiling hands back a partial
+ *  list that names itself. No dial a caller owns relieves it; a narrower root does.
+ *
+ *  Null means nothing was cut. */
+export type GrepCapped = 'rows' | 'file' | 'walk' | 'time' | null
 
 /** What a content search returns. `searched` counts files actually opened: nothing found across 0 files
  *  is meaningless. `capped` (more exist) and `cancelled` (stopped on request) both mark the list partial. */
@@ -107,4 +134,9 @@ export type GrepScan = {
 	 *  reasons and one cause could not honestly stand for them. Null therefore means "no single file was
 	 *  refused", never "refused for an unknown reason". */
 	fileSkip: GrepSkip | null
+	/** Directories the walk PRUNED and never entered, as paths relative to the root — see `PrunedDirs`. Filled on
+	 *  the directory-walk path only; a file root enters no directory and reports `[]`. */
+	pruned: PrunedDirs
+	/** How many were pruned in total, which `pruned` itself cannot say once it is capped. */
+	prunedTotal: number
 }

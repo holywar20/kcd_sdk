@@ -6,7 +6,8 @@
 
 import { Transcript, type Turn, type TurnEntry, type WireMessage, type WireOptions, type TranscriptTurn, type CompactionPolicy, type ReasoningPolicy, type ToolsPolicy, type ChatPolicy, type LimitsPolicy, type SessionPolicies, type SessionCompaction, type Grant, isGrant, grantSubject, grantKind, grantLevel, frameToolResultStub, frameFork, KEEP_TOOL_RESULT_TURNS } from './TurnEntry';
 import { type GrantRef } from './InjectedItem';
-import type { Agent } from '../agent/Agent';
+import type { Agent, InjectedReference, InjectedSkill } from '../agent/Agent';
+import type { LensObject } from '../primitives/framework/LensObject';
 import type { SlotRow } from '../core/html/KcdContext';
 
 /**
@@ -208,6 +209,72 @@ export class Session {
 	 * born null. Marked only while on screen AND focused; marking on mount would make every opened session read caught-up forever.
 	 */
 	readAt: number | null = null;
+
+	/**
+	 * THE REFERENCE DOCUMENTS THE UNIT OF WORK THIS SESSION IS CURRENTLY SERVING NAMED — already resolved and
+	 * read off disk by whoever handed the work over ( TASK-2699, plan 90 phase 2 ).
+	 *
+	 * RUNTIME ONLY, like `frame` and `projectNotice`. It is never serialized and never persisted, for the same
+	 * reason no composition is: the documents behind it are files a person can edit or rename out of band, so a
+	 * stored copy would quietly go stale and claim the run carried something it did not.
+	 *
+	 * FLUSH-AND-FILL, AND THAT IS THE WHOLE CONTRACT. Whoever hands work over writes this WHOLE LIST at every
+	 * handoff, including writing `[]` for work that names nothing — the field is replaced, never appended to.
+	 * `[]` is therefore a real and common value meaning "this session carries its agent's own base and nothing
+	 * else", which is what keeps the second unit of work on a long-lived session from being shaped by the
+	 * first, and what stops the cost climbing across a session.
+	 *
+	 * RESOLVED ALREADY, SO AN UNRESOLVABLE NAME NEVER REACHES HERE. A name the vault cannot supply is dropped
+	 * by the resolver with a line on the record; it is not represented here as an empty body, because a
+	 * document that failed to load and one that is genuinely blank must not share a value.
+	 */
+	cardContext: readonly InjectedReference[] = [];
+
+	/**
+	 * THE LENSES THE UNIT OF WORK THIS SESSION IS CURRENTLY SERVING NAMED — already resolved and loaded off
+	 * disk by whoever handed the work over ( TASK-2700, plan 90 phase 2 ).
+	 *
+	 * Every sentence on `cardContext` above applies here unchanged: runtime only, never serialized, never
+	 * persisted, written WHOLE at every handoff including as `[]`, and an unresolvable name never reaches it.
+	 * The two fields are the same contract over two different grains — a reference is one document, a lens is
+	 * a bundle of philosophy plus a routing table — which is why they are separate fields and not one.
+	 *
+	 * THEY ARE APPENDED TO THE AGENT'S STACK AND NEVER PREPENDED. Position 0 is the primary, and the primary
+	 * is where an agent's voice, stance and refusals come from; see `Agent.stack`.
+	 */
+	cardLenses: readonly LensObject[] = [];
+
+	/**
+	 * THE SKILLS THE UNIT OF WORK THIS SESSION IS CURRENTLY SERVING NAMED — already resolved off the shelf and
+	 * READ by whoever handed the work over ( TASK-2701, plan 90 phase 3 ).
+	 *
+	 * Same contract as the two fields above: runtime only, never serialized, never persisted, written WHOLE at
+	 * every handoff including as `[]`, and a slug the shelf cannot supply never reaches it.
+	 *
+	 * CONTEXT ONLY. These are instructions as TEXT. Nothing here is executed, nothing bundled beside them is
+	 * executed, and no tool, command or gate is reachable through one — see `InjectedSkill`.
+	 */
+	cardSkills: readonly InjectedSkill[] = [];
+
+	/**
+	 * WHAT THE UNIT OF WORK NAMED AND THE HANDOFF COULD NOT GIVE IT ( TASK-2704, plan 90 phase 4 ).
+	 *
+	 * The fourth fact a turn's record owes, and the one the three fields above structurally cannot carry: a
+	 * name the vault could not supply was dropped by the resolver and never became a document, so nothing
+	 * downstream would ever know it had been asked for. An invisible input is a debugging dead end, and so is
+	 * an invisible ABSENT input — an agent that did not read what its card named looks identical to one that
+	 * read it and ignored it.
+	 *
+	 * TWO LISTS BECAUSE THEY ARE TWO EVENTS, exactly as the card's own thread lines are: `cardSkipped` is a
+	 * name nothing answered to, and `cardRefused` is a bundled resource DECLINED on purpose, which did not
+	 * prevent its skill riding. A reader has to be able to tell a thing that was missing from a thing that
+	 * was turned down.
+	 *
+	 * Same contract as the three above: runtime only, never serialized, never persisted, written WHOLE at
+	 * every handoff including as `[]`, so one card's misses can never be read as the next card's.
+	 */
+	cardSkipped: readonly string[] = [];
+	cardRefused: readonly string[] = [];
 
 	/** WHO THIS SESSION RUNS AS, bound not held. A resolver, not an Agent: an Agent is rebuilt on reload, so a held one goes stale. */
 	private _resolveAgent: ( () => Agent | null ) | null = null;

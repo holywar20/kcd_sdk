@@ -1,4 +1,4 @@
-import { describe, it, expect, afterEach } from 'vitest'
+import { describe, it, expect, afterEach, vi } from 'vitest'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, symlinkSync, realpathSync } from 'fs'
 import { join, basename, resolve } from 'path'
 import { tmpdir } from 'os'
@@ -493,12 +493,18 @@ describe( 'SdkFileAccess._esLive', () => {
  */
 describe( 'glob — a stopped walk is distinguishable from an exhausted one', () => {
 
-	/** A tree with a noise directory that holds the only match, plus a real one, so pruning is observable. */
+	/** A tree with a noise directory that holds the only match, plus a real one, so pruning is observable.
+	 *
+	 *  THE `package.json` IS LOAD-BEARING ( DEFECT-2893 ). `dist` is one of the four generically-named directories
+	 *  that mean machine output beside a project manifest and mean source anywhere else, so it is pruned only where
+	 *  a manifest says this is a project root. Without the manifest this fixture would describe a tree nobody has,
+	 *  and the prune it is asserting would not fire. */
 	function planted(): string {
 		const root = tmpDir()
 		mkdirSync( join( root, 'src', 'core' ), { recursive: true } )
 		mkdirSync( join( root, 'node_modules', 'dep' ), { recursive: true } )
 		mkdirSync( join( root, 'dist' ), { recursive: true } )
+		writeFileSync( join( root, 'package.json' ), '{}' )
 		writeFileSync( join( root, 'src', 'core', 'Glob.ts' ), 'export const g = 1' )
 		writeFileSync( join( root, 'node_modules', 'dep', 'Glob.ts' ), 'vendored' )
 		writeFileSync( join( root, 'dist', 'Glob.ts' ), 'built' )
@@ -561,6 +567,77 @@ describe( 'glob — a stopped walk is distinguishable from an exhausted one', ()
 	} )
 
 	/**
+	 * THE PRUNE IS NARROWED, AND IT REPORTS ITSELF ( DEFECT-2893 / BUG-229 / BUG-231 ).
+	 *
+	 * `build` sat on the prune list beside `node_modules`, so this repository's own `starmind/scripts/build` —
+	 * tracked source holding the whole build pipeline — was dropped from every recursive walk in silence. The
+	 * reported symptom: `grep` rooted at `scripts` answered "No match ... in 41 file( s )" for a string inside it,
+	 * and this walk listed the `build` DIRECTORY and then none of its fifteen children while every sibling's
+	 * children were listed.
+	 *
+	 * Two halves, and the second is the one that generalises: the four generic names are pruned only beside a
+	 * project manifest, AND every prune is now named in the result, so a wrong one is visible rather than reading
+	 * as absence. The heuristic can still be wrong; a silent prune cannot be caught at all.
+	 */
+	describe( 'glob — a generically-named directory is only output where a manifest says so', () => {
+
+		/** `scripts/build` with no manifest above it — tracked source — beside a real `dist` at a project root. */
+		function mixed(): string {
+			const root = tmpDir()
+			mkdirSync( join( root, 'scripts', 'build' ), { recursive: true } )
+			mkdirSync( join( root, 'dist' ), { recursive: true } )
+			writeFileSync( join( root, 'package.json' ), '{}' )
+			writeFileSync( join( root, 'scripts', 'build', 'promote-mcp.ts' ), 'export const stampPlugin = 1' )
+			writeFileSync( join( root, 'dist', 'promote-mcp.ts' ), 'built' )
+			return root
+		}
+
+		it( 'walks `scripts/build`, which is the reported case', () => {
+			const found = new SdkFileAccess().glob( mixed(), '**/*' ).entries.map( ( e ) => e.path.replace( /\\/g, '/' ) )
+
+			// The children, not merely the directory — listing the folder and none of its contents is the symptom.
+			expect( found.some( ( p ) => p.endsWith( 'scripts/build/promote-mcp.ts' ) ) ).toBe( true )
+		} )
+
+		it( 'still prunes a `dist` that sits beside a manifest', () => {
+			// The narrowing must not become a licence to walk real build output: that is DEFECT-046's cost,
+			// and Bryan ruled on 2026-10-22 that the pruning stays.
+			const found = new SdkFileAccess().glob( mixed(), '**/*' ).entries.map( ( e ) => e.path.replace( /\\/g, '/' ) )
+
+			expect( found.some( ( p ) => p.includes( '/dist/promote-mcp.ts' ) ) ).toBe( false )
+		} )
+
+		it( 'NAMES what it pruned, so a wrong prune cannot read as absence', () => {
+			// The half that does not depend on the heuristic being right. A walk that skipped something and said
+			// nothing is the whole severity of this defect; `pruned` is what makes the omission readable.
+			const scan = new SdkFileAccess().glob( mixed(), '**/*' )
+
+			expect( scan.prunedTotal ).toBe( 1 )
+			expect( scan.pruned ).toEqual( [ 'dist' ] )
+		} )
+
+		it( 'reports NOTHING pruned when the walk was complete, so the claim means something', () => {
+			// An empty `pruned` is the completeness claim. If it were filled on every answer it would say nothing.
+			const root = tmpDir()
+			mkdirSync( join( root, 'src' ), { recursive: true } )
+			writeFileSync( join( root, 'src', 'a.ts' ), '' )
+
+			const scan = new SdkFileAccess().glob( root, '**/*' )
+
+			expect( scan.prunedTotal ).toBe( 0 )
+			expect( scan.pruned ).toEqual( [] )
+		} )
+
+		it( 'does not count a directory the PATTERN asked for as pruned', () => {
+			// It was walked, so saying it was skipped would be a false disclosure — the opposite error, and one
+			// that trains a reader to ignore the sentence.
+			const scan = new SdkFileAccess().glob( mixed(), '**/dist/**' )
+
+			expect( scan.prunedTotal ).toBe( 0 )
+		} )
+	} )
+
+	/**
 	 * THE REPORTED REPRODUCTION, against the real repository tree ( DEFECT-046 ). The bug report's own words:
 	 * `**\/Glob.ts` on the workspace root answered "No match", while the identical pattern rooted one level
 	 * down returned the file instantly. This is that exact call.
@@ -582,4 +659,201 @@ describe( 'glob — a stopped walk is distinguishable from an exhausted one', ()
 		expect( scan.cappedBy ).toBeNull()
 	} )
 } )
+
+/**
+ * grepText — the same prune, the same narrowing, the same disclosure ( DEFECT-2893 / BUG-231 ).
+ *
+ * This is the walk the defect was REPORTED against: `grep` rooted at `starmind/scripts` answered
+ * "No match for stampPlugin ... in 41 file( s )" while the same search one directory down, on
+ * `scripts/build/promote-mcp.ts`, answered three matches. Nothing in that sentence was false except the
+ * completeness it implied, and a count of 41 searched files is what made it read as thorough.
+ *
+ * Both tools share one prune list, so both get both halves: `build` is source unless a manifest says
+ * otherwise, and whatever is pruned is named in the result.
+ */
+describe( 'grepText — a pruned directory is narrowed, and never silent', () => {
+
+	/** The reported shape: tracked source under `scripts/build`, real output under a manifest's `dist`. */
+	function mixed(): string {
+		const root = tmpDir()
+		mkdirSync( join( root, 'scripts', 'build' ), { recursive: true } )
+		mkdirSync( join( root, 'dist' ), { recursive: true } )
+		writeFileSync( join( root, 'package.json' ), '{}' )
+		writeFileSync( join( root, 'scripts', 'build', 'promote-mcp.ts' ), 'export const stampPlugin = 1' )
+		writeFileSync( join( root, 'dist', 'bundle.ts' ), 'const stampPlugin = 1' )
+		return root
+	}
+
+	it( 'finds a string in `scripts/build` from the PARENT root, which is the reported call', async () => {
+		const root = mixed()
+
+		const scan = await new SdkFileAccess().grepText( join( root, 'scripts' ), 'stampPlugin' )
+
+		expect( scan.rows.length ).toBeGreaterThan( 0 )
+		expect( scan.rows[ 0 ]!.path.replace( /\\/g, '/' ) ).toContain( 'scripts/build/promote-mcp.ts' )
+	} )
+
+	it( 'still refuses to open a `dist` that sits beside a manifest', async () => {
+		const scan = await new SdkFileAccess().grepText( mixed(), 'stampPlugin' )
+
+		expect( scan.rows.some( ( r ) => r.path.replace( /\\/g, '/' ).includes( '/dist/' ) ) ).toBe( false )
+	} )
+
+	it( 'NAMES the pruned directory, so "no match in N files" can never imply a whole-tree search', async () => {
+		// The half that holds whatever the heuristic gets wrong. A count of searched files reads as thorough,
+		// and it was the sentence an agent acted on.
+		const scan = await new SdkFileAccess().grepText( mixed(), 'nothing-is-here' )
+
+		expect( scan.rows ).toHaveLength( 0 )
+		expect( scan.prunedTotal ).toBe( 1 )
+		expect( scan.pruned ).toEqual( [ 'dist' ] )
+	} )
+
+	it( 'reports nothing pruned when the walk was complete', async () => {
+		const scan = await new SdkFileAccess().grepText( join( mixed(), 'scripts' ), 'stampPlugin' )
+
+		expect( scan.prunedTotal ).toBe( 0 )
+		expect( scan.pruned ).toEqual( [] )
+	} )
+
+	it( 'does NOT name a protected directory it refused, which the noise list is free to disclose', async () => {
+		// The one asymmetry: the blacklist exists to conceal a path, so naming it would confirm it is there.
+		// Noise conceals nothing, which is exactly why it can be reported.
+		const root = tmpDir()
+		mkdirSync( join( root, 'private' ), { recursive: true } )
+		writeFileSync( join( root, 'private', 'keys.md' ), 'stampPlugin' )
+
+		const scan = await new SdkFileAccess().grepText( root, 'stampPlugin', { deny: [ '**/private/**' ] } )
+
+		expect( scan.rows ).toHaveLength( 0 )
+		expect( scan.prunedTotal ).toBe( 0 )
+	} )
+
+	it( 'reports no prune for a FILE root, which enters no directory at all', async () => {
+		const root = mixed()
+
+		const scan = await new SdkFileAccess().grepText( join( root, 'scripts', 'build', 'promote-mcp.ts' ), 'stampPlugin' )
+
+		expect( scan.rootIsFile ).toBe( true )
+		expect( scan.prunedTotal ).toBe( 0 )
+	} )
+} )
+
+/**
+ * grepText — THE WALK'S OWN CLOCK ( DEFECT-2904 ).
+ *
+ * The reported symptom was an absence of output: `grep { path: "starmind/src", query: "Files.glob" }` died with
+ * "MCP server sm_file tool grep sent no response or progress for 30s; aborting", and the identical call succeeded
+ * on retry. Every ceiling in this walk bounded a PAYLOAD — rows, per-file rows, bytes, visited entries — and none
+ * bounded TIME, so the only thing that ended a slow walk was a wall outside it: a caller's routed budget or the
+ * transport's idle timeout. Both kill the call, so the one case that produced no partial list at all was the one
+ * case with no ceiling inside the walk to name it.
+ *
+ * TIME IS FAKED, NOT WAITED FOR. `Date.now` is stubbed to jump, so the deadline fires at a chosen checkpoint and
+ * the test is deterministic and instant. Sleeping twenty seconds to prove a branch would be the slowest test in
+ * the repository, and a real clock would make which checkpoint fired a race.
+ */
+describe( 'grepText — a walk that runs out of time stops and says so', () => {
+
+	afterEach( () => vi.restoreAllMocks() )
+
+	/** One directory, several matching files, so the walk has somewhere to be interrupted part-way. */
+	function many(): string {
+		const root = tmpDir()
+		for( const n of [ 'one', 'two', 'three', 'four', 'five', 'six' ] ) {
+			writeFileSync( join( root, `${ n }.md` ), 'NEEDLE here\n' )
+		}
+		return root
+	}
+
+	/** `Date.now` jumping far past the deadline from its Nth call on. Call 1 is the walk computing its own
+	 *  deadline, so `after: 1` trips the first checkpoint and a larger number lets real work happen first. */
+	function clockJumpsAfter( calls: number ): void {
+		let seen = 0
+		vi.spyOn( Date, 'now' ).mockImplementation( () => {
+			seen += 1
+			return 1_000_000 + ( seen > calls ? 10_000_000 : 0 )
+		} )
+	}
+
+	it( 'reports `cappedBy: time` rather than returning nothing at all', async () => {
+		// THE DEFECT ITSELF, in the one assertion that matters: there IS a result, and it names the cause.
+		// Before this the caller held an abort with no output and no reason.
+		const root = many()
+		clockJumpsAfter( 1 )
+
+		const scan = await new SdkFileAccess().grepText( root, 'NEEDLE' )
+
+		expect( scan.cappedBy ).toBe( 'time' )
+		expect( scan.capped ).toBe( true )
+		// Not a cancel: a cancel is nobody's ceiling and leaves `cappedBy` null, so the two must not merge.
+		expect( scan.cancelled ).toBe( false )
+	} )
+
+	it( 'keeps the rows it had already collected — a partial answer, not a discarded one', async () => {
+		// The whole value of an internal deadline over an external wall. A wall outside the walk throws the
+		// work away; this hands it back and labels it.
+		const root = many()
+		clockJumpsAfter( 3 )
+
+		const scan = await new SdkFileAccess().grepText( root, 'NEEDLE' )
+
+		expect( scan.cappedBy ).toBe( 'time' )
+		expect( scan.rows.length ).toBeGreaterThan( 0 )
+		expect( scan.searched ).toBeGreaterThan( 0 )
+		// And it stopped: a walk that got through all six was not interrupted and proves nothing here.
+		expect( scan.searched ).toBeLessThan( 6 )
+	} )
+
+	it( 'leaves `cappedBy` null when the walk finished inside its deadline', async () => {
+		// So `time` means something when it appears. The default is twenty seconds and this tree is six small
+		// files, which makes this the one case here that uses the real clock — deliberately, since the
+		// assertion is that the clock does NOT fire.
+		const scan = await new SdkFileAccess().grepText( many(), 'NEEDLE' )
+
+		expect( scan.cappedBy ).toBeNull()
+		expect( scan.capped ).toBe( false )
+		expect( scan.searched ).toBe( 6 )
+	} )
+
+	it( 'honours a deadline the CALLER sets, which is how a caller stays inside its own wall', async () => {
+		// The parameter exists for exactly one reason: whoever holds a wall knows where the rung below it goes.
+		const root  = many()
+		let   given = 0
+		vi.spyOn( Date, 'now' ).mockImplementation( () => {
+			given += 1
+			return 1_000_000 + ( given > 1 ? 3_000 : 0 )
+		} )
+
+		// Three seconds elapse at the first checkpoint: inside the default of twenty, outside a caller-set one.
+		const tight = await new SdkFileAccess().grepText( root, 'NEEDLE', { deadlineMs: 1_000 } )
+
+		expect( tight.cappedBy ).toBe( 'time' )
+	} )
+
+	it( 'turns the clock OFF at `deadlineMs: 0`, for a caller that has a wall of its own', async () => {
+		const root = many()
+		clockJumpsAfter( 1 )
+
+		const scan = await new SdkFileAccess().grepText( root, 'NEEDLE', { deadlineMs: 0 } )
+
+		// The jump is enormous and nothing stops: with no clock, elapsed time is not a fact the walk reads.
+		expect( scan.cappedBy ).toBeNull()
+		expect( scan.searched ).toBe( 6 )
+	} )
+
+	it( 'does not fold the time stop into the WALK-ENTRY cap, which takes a different remedy', async () => {
+		// `walk` says the tree is too large and a deeper root fixes it; `time` says the walk was too slow, which
+		// a narrower `glob` also fixes. One word for both would send a caller at the wrong one.
+		const root = many()
+		clockJumpsAfter( 1 )
+
+		const scan = await new SdkFileAccess().grepText( root, 'NEEDLE' )
+
+		expect( scan.cappedBy ).not.toBe( 'walk' )
+		expect( scan.cappedBy ).toBe( 'time' )
+	} )
+} )
+
+
 

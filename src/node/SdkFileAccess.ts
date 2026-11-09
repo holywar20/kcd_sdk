@@ -52,6 +52,27 @@ export const GREP_WALK_CAP      = 200_000
 export const GREP_YIELD_BUDGET  = 200
 export const GREP_READ_COST     = 10
 
+/**
+ * How long a content walk may run before it stops and SAYS it stopped ( DEFECT-2904 ).
+ *
+ * The one ceiling this walk never had. Every other cap above bounds a payload — rows, bytes, entries — and a walk
+ * can run long without approaching any of them, so the only thing that ended a slow one was a wall outside the
+ * walk: the calling keystone's routed budget, or the transport's own idle timeout. Both KILL the call, so the
+ * caller got an abort with no output, which is precisely the shape every other ceiling here exists to avoid.
+ *
+ * TWENTY SECONDS, AND THE NUMBER IS CHOSEN AGAINST THE WALLS ABOVE IT rather than from how long a search feels
+ * acceptable. The reported abort was a 30-second keystone budget racing a 30-second transport timeout — two walls
+ * of the SAME length, so which one fired was a coin toss and neither could produce output. This sits below both
+ * with room to spare, so the walk's own stop is reached FIRST and the answer comes back partial and labelled.
+ * Raising it past a caller's wall puts the coin toss back.
+ */
+export const GREP_DEADLINE_MS = 20_000
+
+/** How many pruned directories a walk NAMES before it stops listing them ( DEFECT-2893 ). A monorepo walk prunes a
+ *  `node_modules` per package, and a hundred names in a tool reply is the kind of noise that gets the whole
+ *  disclosure skipped. `prunedTotal` carries the real figure, so the reply can say what it is not naming. */
+export const PRUNE_REPORT_CAP = 25
+
 /** Hops `real` follows before it calls a link chain a loop; the OS's own limit is of this order. */
 const LINK_HOPS = 40
 /** Where a path that cannot be resolved lands — a spelling no root can contain, so it is refused. */
@@ -88,6 +109,10 @@ export type GrepScanOptions = {
 	/** Only open files whose path, relative to the root, matches this glob. Narrows which files open, never which
 	 *  directories are walked: the directory holding a match is unknown until the walk reaches it. Ignored when the root is a file. */
 	glob?:            string
+	/** How long the walk may run before it stops and reports `cappedBy: 'time'`. Default GREP_DEADLINE_MS; `0`
+	 *  turns the clock off, which only a caller with a wall of its own should do. A deadline is read at the
+	 *  points the walk already pauses at — see `grepText` — so the overshoot is one file read, not unbounded. */
+	deadlineMs?:      number
 	/** Largest file to open, in bytes. Default GREP_READ_BYTES. */
 	maxBytes?:        number
 	/** Matching lines to collect before the walk stops. Default GREP_ROW_CAP. */
@@ -235,6 +260,12 @@ export class SdkFileAccess {
 		const stack: string[]    = [ root ]
 		let   visited            = 0
 
+		// WHAT THE WALK DID NOT LOOK AT ( DEFECT-2893 ). A prune used to be silent, which made an answer over a
+		// partly-walked tree indistinguishable from one over the whole of it — the exact shape of "no match in 41
+		// file( s )" for a string sitting in a pruned `scripts/build`. Recorded here and reported by the caller.
+		const pruned: string[] = []
+		let   prunedTotal      = 0
+
 		// Taken from the options with the constant as the floor, the same shape `grepText` already uses for every
 		// one of its ceilings. A caller wanting a cheap bounded probe sets it low; nothing else passes it.
 		const walkCap = opts.walkCap ?? GLOB_WALK_CAP
@@ -246,7 +277,7 @@ export class SdkFileAccess {
 		const asked  = ( name: string ): boolean => pattern.includes( name )
 
 		const done = ( cappedBy: GlobCapped ): GlobScan =>
-			( { entries: out, visited, capped: cappedBy !== null, cappedBy } )
+			( { entries: out, visited, capped: cappedBy !== null, cappedBy, pruned, prunedTotal } )
 
 		while( stack.length > 0 ) {
 			const dir = stack.pop() as string
@@ -258,6 +289,10 @@ export class SdkFileAccess {
 				this._warn( 'glob_walk_failed', { dir, message: this._msg( err ) } )
 				continue
 			}
+
+			// Taken once per directory, not once per entry: this is the sibling list `Noise.skipsDir` needs to tell a
+			// toolchain's `out` from a source directory of the same name, and the readdir above already paid for it.
+			const siblings = dirents.map( ( d ) => d.name )
 
 			for( const d of dirents ) {
 				visited += 1
@@ -282,7 +317,11 @@ export class SdkFileAccess {
 
 				if( d.isDir ) {
 					// Pruned, not filtered: the subtree is never entered. Same order and same reasoning as the grep walk.
-					if( noise && Noise.skipsDir( d.name ) && !asked( d.name ) ) continue
+					if( noise && Noise.skipsDir( d.name, siblings ) && !asked( d.name ) ) {
+						prunedTotal += 1
+						if( pruned.length < PRUNE_REPORT_CAP ) pruned.push( rel )
+						continue
+					}
 					stack.push( full )
 				}
 			}
@@ -354,11 +393,17 @@ export class SdkFileAccess {
 	 * Literal content search under one root: walk, open, match, report matching lines with their context. A file root is searched
 	 * directly. Noise directories are PRUNED, not filtered: an unpruned walk of a project spends its cap inside node_modules and
 	 * reports "no matches" for a string that is there. The walk yields to the event loop, so a cancelled token stops it.
+	 *
+	 * AND IT HAS A CLOCK ( DEFECT-2904 ). Every other ceiling here bounds a payload, so a walk could run long without
+	 * approaching any of them and the only thing that ended it was a wall OUTSIDE the walk — a caller's routed budget, or a
+	 * transport timeout. Both kill the call, so the answer was an abort with no output rather than the partial, self-naming
+	 * list every other cap produces. `deadlineMs` is read at the three points this walk already pauses at, and trips
+	 * `cappedBy: 'time'`.
 	 */
 	async grepText( root: string, query: string, opts: GrepScanOptions = {}, token: SearchToken = { cancelled: false } ): Promise<GrepScan> {
 		const rows:   GrepRow[]   = []
 		const counts: GrepCount[] = []
-		if( !query || token.cancelled ) return { rows, searched: 0, capped: false, cappedBy: null, cancelled: token.cancelled, counts, candidates: 0, nearMisses: 0, rootIsFile: false, fileSkip: null }
+		if( !query || token.cancelled ) return { rows, searched: 0, capped: false, cappedBy: null, cancelled: token.cancelled, counts, candidates: 0, nearMisses: 0, rootIsFile: false, fileSkip: null, pruned: [], prunedTotal: 0 }
 
 		const fold     = opts.caseInsensitive === true
 		const needle   = fold ? query.toLowerCase() : query
@@ -395,6 +440,26 @@ export class SdkFileAccess {
 
 		// Weighted yield budget: a file open costs GREP_READ_COST against a directory entry's 1, or the walk blocks once reads begin.
 		let budget = 0
+
+		// THE WALK'S OWN CLOCK ( DEFECT-2904 ). Read at the points below where the walk already pauses — once per
+		// directory popped, after each file scanned, and at each yield — rather than per directory ENTRY. Those are
+		// the three places the expensive units end, so the overshoot past the deadline is one file read or one
+		// directory's dirents, and a 200,000-entry walk does not pay for a clock read per entry to get it.
+		//
+		// `0` turns it off, which is the one thing a caller with a wall of its own might want. It is not the default:
+		// a walk with no clock is what produced an abort with no output, and absence of failure lines from a call
+		// that was killed looks exactly like a clean search.
+		const deadline = ( opts.deadlineMs ?? GREP_DEADLINE_MS ) > 0
+			? Date.now() + ( opts.deadlineMs ?? GREP_DEADLINE_MS )
+			: Number.POSITIVE_INFINITY
+		const overtime = (): boolean => Date.now() >= deadline
+
+		// WHAT THE WALK DID NOT LOOK AT ( DEFECT-2893 ). Separate from every cap above, and the more dangerous fact of
+		// the two: a cap makes a visibly short list, while a silent prune makes a COMPLETE-looking answer over a tree
+		// that was never fully walked — "No match for X in 41 file( s )" with the string sitting in a pruned
+		// `scripts/build`. Carried on every directory-walk return so no exit can drop it.
+		const pruned: string[] = []
+		let   prunedTotal      = 0
 
 		// WHY one file was skipped, written by `scanFile` and read ONLY on the single-file path below. The walk
 		// overwrites it freely and that is harmless: the walk's returns all carry null, because one cause cannot
@@ -470,12 +535,24 @@ export class SdkFileAccess {
 				: !TextTypes.isText( root )                    ? 'nontext'
 				: Blacklist.excludes( root, deny )             ? 'protected'
 				: null
-			if( refused ) return { rows, searched: 0, capped: false, cappedBy: null, cancelled: false, counts, candidates: 0, nearMisses: 0, rootIsFile: true, fileSkip: refused }
+			// A file root enters no directory, so there is nothing it could have pruned — `[]` here is a fact, not a default.
+			if( refused ) return { rows, searched: 0, capped: false, cappedBy: null, cancelled: false, counts, candidates: 0, nearMisses: 0, rootIsFile: true, fileSkip: refused, pruned: [], prunedTotal: 0 }
 			const read = scanFile( root )
-			return { rows, searched: read ? 1 : 0, capped, cappedBy, cancelled: false, counts, candidates: 1, nearMisses: 0, rootIsFile: true, fileSkip: read ? null : skip }
+			return { rows, searched: read ? 1 : 0, capped, cappedBy, cancelled: false, counts, candidates: 1, nearMisses: 0, rootIsFile: true, fileSkip: read ? null : skip, pruned: [], prunedTotal: 0 }
+		}
+
+		/** Out of time, with what it has. One expression so the three checkpoints below cannot disagree about the
+		 *  verdict they write, and `_capAt` is not used: this did not cut a payload, it ended the walk. */
+		const outOfTime = (): GrepScan => {
+			this._warn( 'grep_deadline', { root, query, searched, visited } )
+			return { rows, searched, capped: true, cappedBy: 'time', cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null, pruned, prunedTotal }
 		}
 
 		while( stack.length > 0 ) {
+			// CHECKPOINT ONE, before the readdir rather than after it: a directory is the unit this loop cannot
+			// interrupt, so the cheapest honest place to stop is before entering another one.
+			if( overtime() ) return outOfTime()
+
 			const dir = stack.pop() as string
 
 			let dirents: { name: string; isDir: boolean; isLink: boolean }[]
@@ -486,19 +563,29 @@ export class SdkFileAccess {
 				continue
 			}
 
+			// Taken once per directory, not once per entry: this is the sibling list `Noise.skipsDir` needs to tell a
+			// toolchain's `out` from a source directory of the same name, and the readdir above already paid for it.
+			const siblings = dirents.map( ( d ) => d.name )
+
 			for( const d of dirents ) {
 				visited += 1
 				budget  += 1
 				if( visited > GREP_WALK_CAP ) {
 					this._warn( 'grep_walk_capped', { root, query, cap: GREP_WALK_CAP } )
-					return { rows, searched, capped: true, cappedBy: 'walk', cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
+					return { rows, searched, capped: true, cappedBy: 'walk', cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null, pruned, prunedTotal }
 				}
 
 				const full = join( dir, d.name )
 
 				if( d.isDir ) {
-					// Pruned, not filtered: the subtree is never entered.
-					if( noise && Noise.skipsDir( d.name ) ) continue
+					// Pruned, not filtered: the subtree is never entered — and now RECORDED, so the answer can name it.
+					if( noise && Noise.skipsDir( d.name, siblings ) ) {
+						prunedTotal += 1
+						if( pruned.length < PRUNE_REPORT_CAP ) pruned.push( relative( root, full ).split( sep ).join( '/' ) )
+						continue
+					}
+					// A protected subtree is NOT reported: naming it would confirm that a path the blacklist exists to
+					// conceal is there. The noise list protects nothing, which is why it can be disclosed.
 					if( Blacklist.excludes( full, deny ) ) continue
 					stack.push( full )
 					continue
@@ -524,21 +611,28 @@ export class SdkFileAccess {
 				searched += 1
 				budget   += GREP_READ_COST
 
+				// CHECKPOINT TWO. A file read is the single most expensive thing this walk does, so the deadline is
+				// read once per read — that is what bounds the overshoot to one file rather than to one directory.
+				if( overtime() ) return outOfTime()
+
 				// The budget ends the walk, not just this file: a partial answer gains nothing from more opens.
 				if( spent() ) {
 					this._warn( 'grep_truncated', { root, query, cap: maxRows, mode } )
-					return { rows, searched, capped: true, cappedBy: 'rows', cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
+					return { rows, searched, capped: true, cappedBy: 'rows', cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null, pruned, prunedTotal }
 				}
 
 				if( budget >= GREP_YIELD_BUDGET ) {
 					budget = 0
 					await _tick()
-					if( token.cancelled ) return { rows, searched, capped, cappedBy, cancelled: true, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
+					if( token.cancelled ) return { rows, searched, capped, cappedBy, cancelled: true, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null, pruned, prunedTotal }
+					// CHECKPOINT THREE, beside the cancel and AFTER the tick. Time spent suspended is still time the
+					// caller waited, and a loop that only ever checked before yielding would not count it.
+					if( overtime() ) return outOfTime()
 				}
 			}
 		}
 
-		return { rows, searched, capped, cappedBy, cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null }
+		return { rows, searched, capped, cappedBy, cancelled: false, counts, candidates, nearMisses, rootIsFile: false, fileSkip: null, pruned, prunedTotal }
 	}
 
 	/** Asks a live Everything instance instead of walking. Returns `null`, never throws, on any failure, which search() reads

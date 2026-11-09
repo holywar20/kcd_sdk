@@ -106,7 +106,12 @@ export interface ServerManifest {
 
 	// ── Lifecycle (system-stamped) ──────────────────────────────────────────────
 	installed:     boolean;               // has been installed into the active app
-	exposed:       boolean;               // the user's toggle for the tool surface exposed to the model; NOT a power switch
+	// RETIRED AS AN ACTIVATION SIGNAL, 2026-11-08 ( Starmind TASK-2746 ). The field is still parsed, so an
+	// existing manifest is valid and no bundle has to be re-authored, and Starmind READS IT NOWHERE. It was
+	// one boolean on one file applying to the whole application, and whether a tool source is in play is a
+	// decision a PROJECT makes: Starmind keeps that as a row per project and server, outside the folder.
+	// Do not reintroduce a reader for it — two answers to one question disagree, silently and app-wide.
+	exposed:       boolean;               // IGNORED. See above; carried only so an older manifest still parses.
 	promoted_at?:     string;             // ISO 8601 — set at promotion; the drift signal
 	build?:           string;             // content stamp: <promoted timestamp>+<sha8 of dist/index.js> — changes whenever the bundle does
 	installed_at?:    string;             // ISO 8601 — set at installation
